@@ -25,6 +25,14 @@ def labor_rows_for_contract(ctx: PlanningContext, contract_id: str) -> list[tupl
     return rows
 
 
+def labor_payment_cap_per_pm(lp: ContractLaborPlan, multiplier: float) -> float:
+    """Макс. сумма выплат на строку в месяце при заданном чел.-мес.: multiplier × средняя."""
+    avg = lp.avg_monthly_labor_cost or 0.0
+    if avg <= 0 or multiplier <= 0:
+        return 0.0
+    return multiplier * avg
+
+
 def planned_labor_amount(lp: ContractLaborPlan) -> float:
     """Плановая сумма по строке: чел.-мес. × средняя зарплата."""
     avg = lp.avg_monthly_labor_cost or 0.0
@@ -169,6 +177,7 @@ __all__ = [
     "goz_allowed_positions",
     "is_goz_contract",
     "labor_average_balance_gap",
+    "labor_payment_cap_per_pm",
     "labor_payment_terms_for_row",
     "labor_pm_terms_for_row",
     "labor_row_id",

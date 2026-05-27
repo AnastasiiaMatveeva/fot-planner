@@ -190,6 +190,8 @@ class SalaryStabilityRules:
     min_fot_months_for_salary_reserve: int = 6
     # Допуск ±% по чел.-мес. и сумме строки трудоёмкости (все типы договоров)
     goz_labor_tolerance: float = 0.05
+    # Верхняя граница отнесённой суммы на строку в месяце: multiplier × средняя × чел.-мес.
+    labor_pm_payment_multiplier: float = 5.0
 
 
 @dataclass

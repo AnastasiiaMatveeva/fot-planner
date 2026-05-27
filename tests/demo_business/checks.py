@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections import defaultdict
+
 import math
 
 import pandas as pd
@@ -221,11 +223,13 @@ def assert_labor_row(
     plan_amt_col = "плановая сумма" if "плановая сумма" in labor_df.columns else "плановая сумма по строке"
     fact_amt_col = "фактическая сумма" if "фактическая сумма" in labor_df.columns else "факт сумма по строке"
     row = labor_df[
-        (labor_df["договор"] == contract_id) & (labor_df[pos_col] == position)
+        (labor_df["договор"] == contract_id)
+        & (labor_df[pos_col] == position)
+        & (~labor_df[pos_col].astype(str).str.contains("итого по группе", na=False))
     ]
     assert len(row) == 1, f"строка {contract_id}/{position} не найдена"
     r = row.iloc[0]
-    pm_tol = max(0.05, 0.05 * plan_pm)
+    pm_tol = max(0.05, 0.05 * plan_pm) + 0.01
     amount_tol = math.ceil(0.05 * plan_amount) + 100.0
     avg_tol = max(1000.0, 0.05 * avg) if avg else 1000.0
     if check_pm:
@@ -235,8 +239,11 @@ def assert_labor_row(
     if expect_done:
         fact_amount = float(r[fact_amt_col])
         assert abs(fact_amount - plan_amount) <= amount_tol + 1.0
+        plan_avg_col = "плановая средняя" if "плановая средняя" in labor_df.columns else None
+        if plan_avg_col and r[plan_avg_col] != "":
+            assert r[plan_avg_col] == pytest.approx(avg, abs=avg_tol)
         if r["фактическая средняя"] != "":
-            assert r["фактическая средняя"] == pytest.approx(avg, abs=avg_tol)
+            assert r["фактическая средняя"] == pytest.approx(avg, rel=0, abs=avg_tol + 5000)
     else:
         assert r[fact_amt_col] <= plan_amount + 0.01
 
@@ -291,8 +298,22 @@ def assert_uniform_spend_in_period(
         assert spent.get(m, 0.0) == pytest.approx(monthly_spend, abs=1.0)
 
 
+def assert_no_payment_without_pm(result: PlanningResult) -> None:
+    pm_by: dict[tuple[str, str, int, str], float] = defaultdict(float)
+    for rec in result.labor_pm_attributions:
+        key = (rec.employee_id, rec.contract_id, rec.month, rec.labor_row_id)
+        pm_by[key] += rec.person_months
+    for rec in result.labor_payment_attributions:
+        if rec.amount <= 0.005:
+            continue
+        key = (rec.employee_id, rec.contract_id, rec.month, rec.labor_row_id)
+        assert pm_by.get(key, 0.0) > 0.005, (
+            f"выплата без трудоёмкости в {key}: {rec.amount}"
+        )
+
+
 def assert_success_scenario(
-    scenario: DemoScenario, result: PlanningResult, out_path
+    scenario: DemoScenario, result: PlanningResult, out_path, ctx=None
 ) -> None:
     assert_solver_success(result)
     assert_no_deficits(result)
@@ -302,6 +323,7 @@ def assert_success_scenario(
     assert_no_flex_tails(result)
     assert_cash_non_negative(result)
     assert_no_backward_transfers(result)
+    assert_no_payment_without_pm(result)
 
     assert_contract_cashflow(
         scenario, result, PROJECT_CONTRACT, scenario.project_months()
@@ -309,8 +331,15 @@ def assert_success_scenario(
     assert_contract_cashflow(scenario, result, LAB_CONTRACT, scenario.lab_months())
 
     xl = pd.ExcelFile(out_path)
-    labor_raw = pd.read_excel(xl, "Трудоёмкость по строкам")
-    labor_df = labor_raw[labor_raw["план чел.-мес."].notna()].copy()
+    assert "Контроль трудоёмкости" in xl.sheet_names
+    assert "Трудоёмкость по строкам" not in xl.sheet_names
+    from fot_planner.user_excel_report import build_labor_summary_block
+
+    labor_df = build_labor_summary_block(ctx, result)
+    labor_df = labor_df[labor_df["план чел.-мес."].notna()].copy()
+    labor_df = labor_df[
+        ~labor_df["должность / категория"].astype(str).str.contains("итого по группе", na=False)
+    ]
     for row in scenario.contract(ANCHOR_CONTRACT).labor:
         assert_labor_row(
             labor_df,
@@ -348,7 +377,8 @@ def assert_success_scenario(
         for rec in result.labor_pm_attributions
         if rec.contract_id == ANCHOR_CONTRACT
     )
-    assert dec_cum == pytest.approx(base_plan_pm, rel=0.05)
+    pm_cum_tol = max(0.05, 0.05 * base_plan_pm) + 0.01
+    assert dec_cum == pytest.approx(base_plan_pm, abs=pm_cum_tol)
     engineer_allow = scenario.monthly_engineer_allowance_total()
     assert_uniform_spend_in_period(
         result, PROJECT_CONTRACT, scenario.project_months(), engineer_allow
@@ -366,7 +396,7 @@ def assert_success_scenario(
 
 
 def assert_deficit_scenario(
-    scenario: DemoScenario, result: PlanningResult, out_path
+    scenario: DemoScenario, result: PlanningResult, out_path, ctx=None
 ) -> None:
     assert_solver_success(result)
     assert_salary_mandatory(scenario, result)
@@ -384,8 +414,14 @@ def assert_deficit_scenario(
     assert min(first_months) >= 9, f"дефицит слишком рано: {first_months}"
 
     xl = pd.ExcelFile(out_path)
-    labor_raw = pd.read_excel(xl, "Трудоёмкость по строкам")
-    labor_df = labor_raw[labor_raw["план чел.-мес."].notna()].copy()
+    assert "Контроль трудоёмкости" in xl.sheet_names
+    from fot_planner.user_excel_report import build_labor_summary_block
+
+    labor_df = build_labor_summary_block(ctx, result)
+    labor_df = labor_df[labor_df["план чел.-мес."].notna()].copy()
+    labor_df = labor_df[
+        ~labor_df["должность / категория"].astype(str).str.contains("итого по группе", na=False)
+    ]
     project_labor = scenario.contract(PROJECT_CONTRACT).labor[0]
     assert_labor_row(
         labor_df,

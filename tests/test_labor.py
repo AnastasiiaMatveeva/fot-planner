@@ -3,6 +3,8 @@
 from datetime import date
 from pathlib import Path
 
+from collections import defaultdict
+
 import pandas as pd
 import pytest
 
@@ -115,6 +117,21 @@ def test_allowance_paid_when_funds(tmp_path: Path):
     assert sum(a.amount for a in result.allocations) > 0
 
 
+def _assert_no_payment_without_pm(result) -> None:
+    """Выплата на строку трудоёмкости в месяце m требует pm > 0 в том же месяце."""
+    pm_by: dict[tuple[str, str, int, str], float] = defaultdict(float)
+    for rec in result.labor_pm_attributions:
+        key = (rec.employee_id, rec.contract_id, rec.month, rec.labor_row_id)
+        pm_by[key] += rec.person_months
+    for rec in result.labor_payment_attributions:
+        if rec.amount <= 0.005:
+            continue
+        key = (rec.employee_id, rec.contract_id, rec.month, rec.labor_row_id)
+        assert pm_by.get(key, 0.0) > 0.005, (
+            f"выплата без трудоёмкости: {key}, сумма={rec.amount}"
+        )
+
+
 def test_labor_payment_equals_allocation_on_labor_contracts(tmp_path: Path):
     """Вся выплата с договора с contract_labor относится на строки трудоёмкости (=, не <=)."""
     inp = tmp_path / "in.xlsx"
@@ -136,3 +153,5 @@ def test_labor_payment_equals_allocation_on_labor_contracts(tmp_path: Path):
         assert attributed.get(key, 0.0) == pytest.approx(alloc.amount, abs=0.02), (
             f"{key}: выплачено {alloc.amount}, отнесено на трудоёмкость {attributed.get(key, 0.0)}"
         )
+
+    _assert_no_payment_without_pm(result)

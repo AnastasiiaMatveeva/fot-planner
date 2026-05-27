@@ -13,8 +13,7 @@ from fot_planner.user_excel_report import (
     SHEET_DEFICITS,
     SHEET_EMPLOYEE_PAYMENTS,
     SHEET_ISSUES,
-    SHEET_LABOR,
-    SHEET_LABOR_BREAKDOWN,
+    SHEET_LABOR_CONTROL,
     SHEET_LABOR_PAYMENTS,
     SHEET_PLAN,
     SHEET_POSITION,
@@ -123,11 +122,11 @@ def format_user_workbook(path: Path) -> None:
             for row in range(2, ws.max_row + 1):
                 cell = ws.cell(row=row, column=col)
                 val = str(cell.value or "").lower()
-                if val in ("выполнено", "ок", "да"):
+                if val in ("выполнено", "ок", "да") or val.startswith("выполнено по группе"):
                     cell.fill = ok_fill
-                elif val in ("предупреждение", "warning", "отклонение"):
+                elif val.startswith("отклонение") or val in ("предупреждение", "warning"):
                     cell.fill = warn_fill
-                elif val in ("ошибка", "error", "дефицит", "нет"):
+                elif val in ("ошибка", "error", "дефицит", "нет") or "ошибка" in val:
                     cell.fill = err_fill
 
         if ws.title == SHEET_SUMMARY:
@@ -136,7 +135,8 @@ def format_user_workbook(path: Path) -> None:
             ws.sheet_properties.tabColor = "FFC000"
         elif ws.title in (SHEET_EMPLOYEE_PAYMENTS, SHEET_CONTRACT_PAYMENTS):
             ws.sheet_properties.tabColor = "5B9BD5"
-        elif ws.title == SHEET_LABOR_BREAKDOWN:
-            ws.sheet_properties.tabColor = "A9D08E"
+        elif ws.title == SHEET_LABOR_CONTROL:
+            ws.sheet_properties.tabColor = "70AD47"
+            ws.freeze_panes = "B2"
 
     wb.save(path)

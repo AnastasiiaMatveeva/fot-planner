@@ -29,8 +29,11 @@ def success_workbook(tmp_path_factory) -> Path:
 def test_demo_business_scenario_success(success_workbook: Path, tmp_path: Path):
     out = tmp_path / "success_result.xlsx"
     scenario = build_demo_scenario(allow_deficit=False)
+    from fot_planner.excel_io import load_context
+
+    ctx = load_context(success_workbook)
     result = run_planning(success_workbook, out, time_limit_sec=SOLVE_SEC)
-    assert_success_scenario(scenario, result, out)
+    assert_success_scenario(scenario, result, out, ctx)
 
 
 def test_demo_business_scenario_deficit_goes_to_end(tmp_path: Path):
@@ -41,8 +44,11 @@ def test_demo_business_scenario_deficit_goes_to_end(tmp_path: Path):
     out = tmp_path / "deficit_result.xlsx"
     write_demo_workbook(deficit_scenario, inp)
 
+    from fot_planner.excel_io import load_context
+
+    ctx = load_context(inp)
     result = run_planning(inp, out, time_limit_sec=SOLVE_SEC)
-    assert_deficit_scenario(deficit_scenario, result, out)
+    assert_deficit_scenario(deficit_scenario, result, out, ctx)
 
 
 def test_no_backward_money(tmp_path: Path):

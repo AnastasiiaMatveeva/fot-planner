@@ -14,6 +14,7 @@ from fot_planner.labor_rules import (
     contract_has_labor_plan,
     employee_compatible_with_contract_labor,
     employee_compatible_with_labor_row,
+    labor_payment_cap_per_pm,
     labor_payment_terms_for_row,
     labor_average_balance_gap,
     labor_pm_terms_for_row,
@@ -889,6 +890,32 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                 model.cons.add(_sum_terms(pay_terms) == alloc[key])
             else:
                 model.cons.add(_sum_terms(pay_terms) <= alloc[key])
+
+        pm_payment_multiplier = ctx.salary_stability.labor_pm_payment_multiplier
+        pm_pay_row_keys = {
+            (e_id, c_id, m, lp_idx)
+            for (e_id, c_id, m, lp_idx) in labor_pm_key_set
+        } | {
+            (e_id, c_id, m, lp_idx)
+            for (e_id, c_id, m, _kind, lp_idx) in labor_payment_key_set
+        }
+        for e_id, c_id, m, lp_idx in sorted(pm_pay_row_keys):
+            lp = ctx.labor_plans[lp_idx]
+            cap_per_pm = labor_payment_cap_per_pm(lp, pm_payment_multiplier)
+            if cap_per_pm <= 0:
+                continue
+            pay_terms = [
+                labor_pay[(e_id, c_id, m, kind, lp_idx)]
+                for kind in PAYMENT_KINDS
+                if (e_id, c_id, m, kind, lp_idx) in labor_payment_key_set
+            ]
+            if not pay_terms:
+                continue
+            pm_key = (e_id, c_id, m, lp_idx)
+            if pm_key not in labor_pm_key_set:
+                model.cons.add(_sum_terms(pay_terms) == 0)
+                continue
+            model.cons.add(_sum_terms(pay_terms) <= cap_per_pm * labor_pm[pm_key])
 
     for e in ctx.employees:
         total_due = _monthly_total_due(e)

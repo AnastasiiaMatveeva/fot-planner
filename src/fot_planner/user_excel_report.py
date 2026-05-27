@@ -66,8 +66,9 @@ SHEET_EMPLOYEE_PAYMENTS = "Выплаты по сотрудникам"
 SHEET_CONTRACT_PAYMENTS = "Выплаты по договорам"
 SHEET_BALANCES = "Остатки по договорам"
 SHEET_SPEND_PLAN = "Освоение план-факт"
-SHEET_LABOR = "Трудоёмкость по строкам"
-SHEET_LABOR_BREAKDOWN = "Расшифровка трудоёмкости"
+SHEET_LABOR_CONTROL = "Контроль трудоёмкости"
+SHEET_LABOR = "Трудоёмкость по строкам"  # legacy, не экспортируется
+SHEET_LABOR_BREAKDOWN = "Расшифровка трудоёмкости"  # legacy, не экспортируется
 SHEET_PLAN = "План выплат"
 SHEET_LABOR_PAYMENTS = "Выплаты в трудоёмкость"
 SHEET_POSITION = "Контроль должностей"
@@ -171,11 +172,7 @@ def build_readme_sheet() -> pd.DataFrame:
         {"раздел": "2", "описание": "Проблемы и предупреждения — все ошибки и предупреждения в одном месте."},
         {"раздел": "3", "описание": "Выплаты по сотрудникам — кто с каких договоров получает выплаты по месяцам."},
         {"раздел": "4", "описание": "Остатки по договорам — хватает ли денег по договорам."},
-        {"раздел": "5", "описание": "Трудоёмкость по строкам — итог по договорной строке (план vs факт)."},
-        {
-            "раздел": "5a",
-            "описание": "Расшифровка трудоёмкости — кто и в каком месяце закрыл чел.-мес. и какие суммы отнесены.",
-        },
+        {"раздел": "5", "описание": "Контроль трудоёмкости — главный лист: план/факт по договорам, месяцам и сотрудникам."},
         {"раздел": "6", "описание": "Дефициты — кому, когда и сколько не хватило, если дефицит разрешён."},
         {"раздел": "", "описание": ""},
         {"раздел": "Термины", "описание": ""},
@@ -197,7 +194,7 @@ def build_readme_sheet() -> pd.DataFrame:
         },
         {
             "раздел": "Трудоёмкость по строке",
-            "описание": "Проверка плановых/фактических чел.-мес., сумм и средней по строке договора.",
+            "описание": "Плановая и фактическая средняя = сумма / чел.-мес. Статус «выполнено по группе» — отклонение компенсировано внутри группы взаимозаменяемости.",
         },
         {
             "раздел": "Административная сложность",
@@ -205,6 +202,80 @@ def build_readme_sheet() -> pd.DataFrame:
         },
     ]
     return pd.DataFrame(rows)
+
+
+PAYMENT_WITHOUT_PM_MSG = "Есть выплата без трудоёмкости в этом месяце"
+
+
+def _payment_on_labor_row(
+    result: PlanningResult,
+    employee_id: str,
+    contract_id: str,
+    month: int,
+    row_id: str,
+) -> float:
+    return sum(
+        rec.amount
+        for rec in result.labor_payment_attributions
+        if rec.employee_id == employee_id
+        and rec.contract_id == contract_id
+        and rec.month == month
+        and rec.labor_row_id == row_id
+    )
+
+
+def _pm_on_labor_row(
+    result: PlanningResult,
+    employee_id: str,
+    contract_id: str,
+    month: int,
+    row_id: str,
+) -> float:
+    return sum(
+        rec.person_months
+        for rec in result.labor_pm_attributions
+        if rec.employee_id == employee_id
+        and rec.contract_id == contract_id
+        and rec.month == month
+        and rec.labor_row_id == row_id
+    )
+
+
+def _labor_payment_without_pm_issues(ctx: PlanningContext, result: PlanningResult) -> list[dict]:
+    employees = {e.id: e for e in ctx.employees}
+    seen: set[tuple[str, str, str, int, str]] = set()
+    issues: list[dict] = []
+    for rec in result.labor_payment_attributions:
+        if rec.amount <= 0.005:
+            continue
+        key = (rec.employee_id, rec.contract_id, rec.labor_row_id, rec.month, rec.position or "")
+        if key in seen:
+            continue
+        pm = _pm_on_labor_row(
+            result, rec.employee_id, rec.contract_id, rec.month, rec.labor_row_id
+        )
+        if pm > 0.005:
+            continue
+        seen.add(key)
+        total = _payment_on_labor_row(
+            result, rec.employee_id, rec.contract_id, rec.month, rec.labor_row_id
+        )
+        if total <= 0.005:
+            continue
+        emp = employees.get(rec.employee_id)
+        issues.append(
+            {
+                "уровень": "Ошибка",
+                "раздел": "Трудоёмкость",
+                "объект": f"{rec.contract_id} / {rec.position or rec.labor_row_id} / {emp.full_name if emp else rec.employee_id}",
+                "месяц": RU_MONTHS[rec.month],
+                "описание проблемы": PAYMENT_WITHOUT_PM_MSG,
+                "отклонение / сумма": round(total, 2),
+                "куда смотреть": SHEET_LABOR_CONTROL,
+                "рекомендация": "Связать выплату и чел.-мес. в одном месяце по строке договора",
+            }
+        )
+    return issues
 
 
 def _labor_attribution_gaps(ctx: PlanningContext, result: PlanningResult) -> list[dict]:
@@ -232,7 +303,7 @@ def _labor_attribution_gaps(ctx: PlanningContext, result: PlanningResult) -> lis
                     "месяц": RU_MONTHS[a.month],
                     "описание проблемы": "Выплата не полностью отнесена на строку трудоёмкости",
                     "отклонение / сумма": round(a.amount - attr, 2),
-                    "куда смотреть": SHEET_LABOR_BREAKDOWN,
+                    "куда смотреть": SHEET_LABOR_CONTROL,
                     "рекомендация": "Проверить совместимость должности и строки договора",
                 }
             )
@@ -240,30 +311,26 @@ def _labor_attribution_gaps(ctx: PlanningContext, result: PlanningResult) -> lis
 
 
 def _labor_row_issues(ctx: PlanningContext, result: PlanningResult) -> list[dict]:
-    from fot_planner.excel_io import _labor_by_row_dataframe
-
     issues: list[dict] = []
-    df = _labor_by_row_dataframe(ctx, result)
     tol = ctx.salary_stability.goz_labor_tolerance
     contracts = {c.id: c for c in ctx.contracts}
-    for _, r in df.iterrows():
-        if r["статус"] == "выполнено":
+    for row in _build_labor_summary_rows(ctx, result):
+        if GROUP_ROW_SUFFIX in str(row["должность / категория"]):
             continue
-        plan_pm = float(r["план чел.-мес."] or 0)
-        plan_amt = float(r["плановая сумма по строке"] or 0)
-        pm_dev = abs(float(r["отклонение чел.-мес."] or 0))
-        amt_dev = abs(float(r["отклонение суммы"] or 0)) if r["отклонение суммы"] != "" else 0
+        if row["статус"] in ("выполнено", "выполнено по группе"):
+            continue
+        plan_amt = float(row["плановая сумма"] or 0)
+        amt_dev = abs(float(row["отклонение суммы"] or 0))
         level = "Ошибка" if plan_amt > 0 and amt_dev > tol * plan_amt + 1 else "Предупреждение"
-        cname = contracts.get(r["договор"], None)
         issues.append(
             {
                 "уровень": level,
                 "раздел": "Трудоёмкость",
-                "объект": f"{r['договор']} / {r['должность']}",
+                "объект": f"{row['договор']} / {row['должность / категория']}",
                 "месяц": "год",
                 "описание проблемы": "Отклонение по строке трудоёмкости",
-                "отклонение / сумма": round(float(r["отклонение суммы"] or 0), 2),
-                "куда смотреть": SHEET_LABOR,
+                "отклонение / сумма": round(float(row["отклонение суммы"] or 0), 2),
+                "куда смотреть": SHEET_LABOR_CONTROL,
                 "рекомендация": "Проверить ФОТ договора или распределение выплат",
             }
         )
@@ -395,6 +462,7 @@ def collect_issues(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame
     rows.extend(_deficit_issues(ctx, result))
     rows.extend(_cash_issues(result, contracts))
     rows.extend(_labor_attribution_gaps(ctx, result))
+    rows.extend(_labor_payment_without_pm_issues(ctx, result))
     rows.extend(_labor_row_issues(ctx, result))
     rows.extend(_split_payment_issues(ctx, result))
 
@@ -427,10 +495,13 @@ def build_summary_sheet(
     emp_with_def = len({d.employee_id for d in result.deficits if d.amount > 0.005})
     cash_problems = sum(1 for b in result.contract_balances if b.closing_balance < -0.01)
 
-    from fot_planner.excel_io import _labor_by_row_dataframe
-
-    labor_df = _labor_by_row_dataframe(ctx, result)
-    labor_deviations = sum(1 for _, r in labor_df.iterrows() if r["статус"] != "выполнено")
+    labor_rows = _build_labor_summary_rows(ctx, result)
+    labor_deviations = sum(
+        1
+        for row in labor_rows
+        if GROUP_ROW_SUFFIX not in str(row["должность / категория"])
+        and row["статус"] not in ("выполнено", "выполнено по группе")
+    )
 
     split_issues = _split_payment_issues(ctx, result)
     scheme_rows = build_scheme_changes_sheet(ctx, result)
@@ -496,7 +567,7 @@ def build_summary_sheet(
             "Строк трудоёмкости с отклонением",
             labor_deviations,
             "Предупреждение" if labor_deviations else "Выполнено",
-            "Смотреть лист «Трудоёмкость по строкам»" if labor_deviations else "",
+            "Смотреть лист «Контроль трудоёмкости»" if labor_deviations else "",
         ),
         row(
             "Дроблений переменных выплат",
@@ -665,77 +736,266 @@ def build_spend_plan_matrix(ctx: PlanningContext, result: PlanningResult) -> pd.
     return pd.DataFrame(rows)[cols]
 
 
-def build_labor_summary_block(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
+LABOR_SUMMARY_COLUMNS = [
+    "договор",
+    "название договора",
+    "должность / категория",
+    "группа взаимозаменяемости",
+    "план чел.-мес.",
+    "факт чел.-мес.",
+    "отклонение чел.-мес.",
+    "плановая средняя",
+    "плановая сумма",
+    "фактическая сумма",
+    "отклонение суммы",
+    "фактическая средняя",
+    "статус",
+    "комментарий",
+]
+
+LABOR_BREAKDOWN_COLUMNS = [
+    "договор",
+    "название договора",
+    "должность / категория строки",
+    "группа строки",
+    "месяц",
+    "табельный номер",
+    "ФИО",
+    "должность сотрудника",
+    "группа сотрудника",
+    "ставка сотрудника",
+    "закрыто чел.-мес.",
+    "оклад с договора",
+    "надбавка с договора",
+    "стимулирующая с договора",
+    "всего отнесено на строку",
+    "плановая средняя",
+    "фактическая средняя",
+    "статус",
+    "комментарий",
+]
+
+GROUP_ROW_SUFFIX = " (итого по группе)"
+GROUP_DONE_COMMENT = (
+    "По строке есть отклонение, но оно компенсировано другой строкой той же группы"
+)
+
+
+def _labor_avg_value(amount: float, pm: float) -> float | None:
+    return amount / pm if pm > 0.01 else None
+
+
+def _round_avg(value: float | None) -> float | str:
+    return round(value, 2) if value is not None else ""
+
+
+def _labor_row_checks(
+    plan_pm: float,
+    plan_amt: float,
+    fact_pm: float,
+    fact_amt: float,
+    tol: float,
+) -> dict:
+    pm_dev = fact_pm - plan_pm
+    amt_dev = fact_amt - plan_amt
+    plan_avg = _labor_avg_value(plan_amt, plan_pm)
+    fact_avg = _labor_avg_value(fact_amt, fact_pm)
+    pm_ok = plan_pm <= 0 or abs(pm_dev) <= tol * plan_pm
+    amount_ok = plan_amt <= 0 or abs(amt_dev) <= tol * plan_amt
+    avg_ok = (
+        plan_avg is None
+        or fact_avg is None
+        or plan_avg <= 0
+        or abs(fact_avg - plan_avg) <= tol * plan_avg
+    )
+    return {
+        "plan_pm": plan_pm,
+        "fact_pm": fact_pm,
+        "plan_amt": plan_amt,
+        "fact_amt": fact_amt,
+        "pm_dev": pm_dev,
+        "amt_dev": amt_dev,
+        "plan_avg": plan_avg,
+        "fact_avg": fact_avg,
+        "pm_ok": pm_ok,
+        "amount_ok": amount_ok,
+        "avg_ok": avg_ok,
+        "row_ok": pm_ok and amount_ok and avg_ok,
+    }
+
+
+def _labor_status_from_checks(
+    checks: dict,
+    *,
+    group_ok: bool = False,
+) -> tuple[str, str]:
+    if checks["row_ok"]:
+        return "выполнено", "Выполнено"
+    if group_ok:
+        return "выполнено по группе", GROUP_DONE_COMMENT
+    if checks["pm_ok"] and not checks["amount_ok"]:
+        return "отклонение", "Чел.-мес. закрыты, но денег по строке не хватает"
+    if not checks["pm_ok"] and checks["amount_ok"]:
+        return "отклонение", "Деньги потрачены, но чел.-мес. не закрыты"
+    if not checks["avg_ok"]:
+        return "отклонение", "Фактическая средняя отличается от плановой"
+    return "отклонение", "Отклонение по строке"
+
+
+def _labor_summary_row_dict(
+    *,
+    contract_id: str,
+    contract_name: str,
+    position: str,
+    group: str,
+    checks: dict,
+    status: str,
+    comment: str,
+) -> dict:
+    return {
+        "договор": contract_id,
+        "название договора": contract_name,
+        "должность / категория": position,
+        "группа взаимозаменяемости": group,
+        "план чел.-мес.": round(checks["plan_pm"], 4),
+        "факт чел.-мес.": round(checks["fact_pm"], 4),
+        "отклонение чел.-мес.": round(checks["pm_dev"], 4),
+        "плановая средняя": _round_avg(checks["plan_avg"]),
+        "плановая сумма": round(checks["plan_amt"], 2) if checks["plan_amt"] else "",
+        "фактическая сумма": round(checks["fact_amt"], 2),
+        "отклонение суммы": round(checks["amt_dev"], 2) if checks["plan_amt"] else "",
+        "фактическая средняя": _round_avg(checks["fact_avg"]),
+        "статус": status,
+        "комментарий": comment,
+    }
+
+
+def _build_labor_summary_rows(ctx: PlanningContext, result: PlanningResult) -> list[dict]:
     from fot_planner.excel_io import _labor_by_row_dataframe
 
     df = _labor_by_row_dataframe(ctx, result)
     if df.empty:
-        return pd.DataFrame(
-            columns=[
-                "договор",
-                "название договора",
-                "должность / категория",
-                "группа взаимозаменяемости",
-                "план чел.-мес.",
-                "факт чел.-мес.",
-                "отклонение чел.-мес.",
-                "средняя стоимость выполнения работ в месяц",
-                "плановая сумма",
-                "фактическая сумма",
-                "отклонение суммы",
-                "фактическая средняя",
-                "статус",
-                "комментарий",
-            ]
-        )
+        return []
 
     contracts = {c.id: c for c in ctx.contracts}
     tol = ctx.salary_stability.goz_labor_tolerance
-    rows: list[dict] = []
-    for _, r in df.iterrows():
+    row_records: list[dict] = []
+    group_members: dict[tuple[str, str], list[int]] = defaultdict(list)
+
+    for idx, r in df.iterrows():
         plan_pm = float(r["план чел.-мес."] or 0)
         plan_amt = float(r["плановая сумма по строке"] or 0)
-        pm_dev = float(r["отклонение чел.-мес."] or 0)
-        amt_dev = float(r["отклонение суммы"] or 0) if r["отклонение суммы"] != "" else 0
-        pm_ok = plan_pm <= 0 or abs(pm_dev) <= tol * plan_pm
-        amount_ok = plan_amt <= 0 or abs(amt_dev) <= tol * plan_amt
-        avg = float(r["средняя стоимость выполнения работ в месяц"] or 0)
-        f_avg = float(r["фактическая средняя"] or 0) if r["фактическая средняя"] != "" else None
-        avg_ok = f_avg is None or avg <= 0 or abs(f_avg - avg) <= tol * avg
-
-        if pm_ok and amount_ok and avg_ok:
-            status, comment = "выполнено", "Выполнено"
-        elif pm_ok and not amount_ok:
-            status, comment = "отклонение", "Чел.-мес. закрыты, но денег по строке не хватает"
-        elif not pm_ok and amount_ok:
-            status, comment = "отклонение", "Деньги потрачены, но чел.-мес. не закрыты"
-        elif not avg_ok:
-            status, comment = "отклонение", "Фактическая средняя отличается от плановой"
-        else:
-            status, comment = "отклонение", "Отклонение по строке"
-
+        fact_pm = float(r["факт чел.-мес."] or 0)
+        fact_amt = float(r["факт сумма по строке"] or 0)
+        group = str(r["группа взаимозаменяемости"] or "")
+        checks = _labor_row_checks(plan_pm, plan_amt, fact_pm, fact_amt, tol)
         c = contracts.get(r["договор"])
-        rows.append(
+        row_records.append(
             {
-                "договор": r["договор"],
-                "название договора": c.name if c else "",
-                "должность / категория": r["должность"],
-                "группа взаимозаменяемости": r["группа взаимозаменяемости"],
-                "план чел.-мес.": r["план чел.-мес."],
-                "факт чел.-мес.": r["факт чел.-мес."],
-                "отклонение чел.-мес.": r["отклонение чел.-мес."],
-                "средняя стоимость выполнения работ в месяц": r[
-                    "средняя стоимость выполнения работ в месяц"
-                ],
-                "плановая сумма": r["плановая сумма по строке"],
-                "фактическая сумма": r["факт сумма по строке"],
-                "отклонение суммы": r["отклонение суммы"],
-                "фактическая средняя": r["фактическая средняя"],
-                "статус": status,
-                "комментарий": comment,
+                "contract_id": r["договор"],
+                "contract_name": c.name if c else "",
+                "position": r["должность"],
+                "group": group,
+                "checks": checks,
             }
         )
-    return pd.DataFrame(rows)
+        if group:
+            group_members[(r["договор"], group)].append(len(row_records) - 1)
+
+    group_ok_map: dict[tuple[str, str], bool] = {}
+    group_all_row_ok: dict[tuple[str, str], bool] = {}
+    for key, indices in group_members.items():
+        if len(indices) < 2:
+            continue
+        plan_pm = sum(row_records[i]["checks"]["plan_pm"] for i in indices)
+        plan_amt = sum(row_records[i]["checks"]["plan_amt"] for i in indices)
+        fact_pm = sum(row_records[i]["checks"]["fact_pm"] for i in indices)
+        fact_amt = sum(row_records[i]["checks"]["fact_amt"] for i in indices)
+        group_ok_map[key] = _labor_row_checks(plan_pm, plan_amt, fact_pm, fact_amt, tol)["row_ok"]
+        group_all_row_ok[key] = all(row_records[i]["checks"]["row_ok"] for i in indices)
+
+    rows: list[dict] = []
+    group_rows_added: set[tuple[str, str]] = set()
+    current_contract: str | None = None
+
+    for rec in row_records:
+        if current_contract is not None and rec["contract_id"] != current_contract:
+            for (cid, group), ok in sorted(group_ok_map.items()):
+                if cid != current_contract or (cid, group) in group_rows_added or len(group_members[(cid, group)]) < 2:
+                    continue
+                indices = group_members[(cid, group)]
+                plan_pm = sum(row_records[i]["checks"]["plan_pm"] for i in indices)
+                plan_amt = sum(row_records[i]["checks"]["plan_amt"] for i in indices)
+                fact_pm = sum(row_records[i]["checks"]["fact_pm"] for i in indices)
+                fact_amt = sum(row_records[i]["checks"]["fact_amt"] for i in indices)
+                checks = _labor_row_checks(plan_pm, plan_amt, fact_pm, fact_amt, tol)
+                status, comment = _labor_status_from_checks(checks)
+                rows.append(
+                    _labor_summary_row_dict(
+                        contract_id=cid,
+                        contract_name=row_records[indices[0]]["contract_name"],
+                        position=f"{group}{GROUP_ROW_SUFFIX}",
+                        group=group,
+                        checks=checks,
+                        status=status,
+                        comment=comment,
+                    )
+                )
+                group_rows_added.add((cid, group))
+
+        current_contract = rec["contract_id"]
+        group_key = (rec["contract_id"], rec["group"]) if rec["group"] else None
+        if (
+            group_key
+            and group_ok_map.get(group_key, False)
+            and not group_all_row_ok.get(group_key, True)
+        ):
+            status, comment = "выполнено по группе", GROUP_DONE_COMMENT
+        else:
+            status, comment = _labor_status_from_checks(rec["checks"])
+        rows.append(
+            _labor_summary_row_dict(
+                contract_id=rec["contract_id"],
+                contract_name=rec["contract_name"],
+                position=rec["position"],
+                group=rec["group"],
+                checks=rec["checks"],
+                status=status,
+                comment=comment,
+            )
+        )
+
+    if current_contract is not None:
+        for (cid, group), ok in sorted(group_ok_map.items()):
+            if cid != current_contract or (cid, group) in group_rows_added or len(group_members[(cid, group)]) < 2:
+                continue
+            indices = group_members[(cid, group)]
+            plan_pm = sum(row_records[i]["checks"]["plan_pm"] for i in indices)
+            plan_amt = sum(row_records[i]["checks"]["plan_amt"] for i in indices)
+            fact_pm = sum(row_records[i]["checks"]["fact_pm"] for i in indices)
+            fact_amt = sum(row_records[i]["checks"]["fact_amt"] for i in indices)
+            checks = _labor_row_checks(plan_pm, plan_amt, fact_pm, fact_amt, tol)
+            status, comment = _labor_status_from_checks(checks)
+            rows.append(
+                _labor_summary_row_dict(
+                    contract_id=cid,
+                    contract_name=row_records[indices[0]]["contract_name"],
+                    position=f"{group}{GROUP_ROW_SUFFIX}",
+                    group=group,
+                    checks=checks,
+                    status=status,
+                    comment=comment,
+                )
+            )
+
+    return rows
+
+
+def build_labor_summary_block(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
+    rows = _build_labor_summary_rows(ctx, result)
+    if not rows:
+        return pd.DataFrame(columns=LABOR_SUMMARY_COLUMNS)
+    return pd.DataFrame(rows, columns=LABOR_SUMMARY_COLUMNS)
 
 
 def _attributed_on_contract(
@@ -771,7 +1031,19 @@ def _detail_attribution_status(
     employee_id: str,
     contract_id: str,
     month: int,
+    *,
+    labor_row_id: str = "",
+    pm_on_row: float = 0.0,
 ) -> tuple[str, str]:
+    if labor_row_id:
+        total_on_row = _payment_on_labor_row(
+            result, employee_id, contract_id, month, labor_row_id
+        )
+        if total_on_row > 0.005 and pm_on_row <= 0.005:
+            return (
+                PAYMENT_WITHOUT_PM_MSG,
+                f"Отнесено {round(total_on_row, 0):,.0f} ₽, закрыто 0 чел.-мес.".replace(",", " "),
+            )
     if not contract_has_labor_plan(ctx, contract_id):
         return "ОК", ""
     for kind in ("salary", "allowance", "incentive"):
@@ -804,146 +1076,163 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
     for rec in result.labor_payment_attributions:
         pay_by[(rec.labor_row_id, rec.employee_id, rec.month, rec.payment_kind)] += rec.amount
 
-    cols = [
-        "договор",
-        "название договора",
-        "должность / категория строки",
-        "группа строки",
-        "месяц",
-        "табельный номер",
-        "ФИО",
-        "должность сотрудника",
-        "группа сотрудника",
-        "ставка сотрудника",
-        "закрыто чел.-мес.",
-        "оклад с договора",
-        "надбавка с договора",
-        "стимулирующая с договора",
-        "всего отнесено на строку",
-        "средняя по строке договора",
-        "статус",
-        "комментарий",
-    ]
-    rows: list[dict] = []
+    row_specs: list[dict] = []
+    group_members: dict[tuple[str, str], list[int]] = defaultdict(list)
 
     for contract in ctx.contracts:
         for _lp_idx, lp in labor_rows_for_contract(ctx, contract.id):
             row_id = labor_row_id(lp)
-            pos = lp.position or ""
             group = lp.equivalence_group or ""
-            plan_avg = lp.avg_monthly_labor_cost or 0.0
             plan_pm = lp.person_months
-            plan_amount = plan_pm * plan_avg if plan_avg else 0.0
-            c = contracts.get(contract.id)
-
-            detail_keys = {
-                (row_id, e_id, month)
-                for (rid, e_id, month) in pm_by
-                if rid == row_id and pm_by[(rid, e_id, month)] > 0.005
-            }
-            detail_keys |= {
-                (row_id, e_id, month)
-                for (rid, e_id, month, _kind) in pay_by
-                if rid == row_id and pay_by[(rid, e_id, month, _kind)] > 0.005
-            }
-
-            total_pm = 0.0
-            total_salary = 0.0
-            total_allowance = 0.0
-            total_incentive = 0.0
-
-            for _rid, e_id, month in sorted(detail_keys, key=lambda x: (x[2], x[1])):
-                pm = pm_by.get((row_id, e_id, month), 0.0)
-                salary = pay_by.get((row_id, e_id, month, "salary"), 0.0)
-                allowance = pay_by.get((row_id, e_id, month, "allowance"), 0.0)
-                incentive = pay_by.get((row_id, e_id, month, "incentive"), 0.0)
-                total = salary + allowance + incentive
-                if pm <= 0.005 and total <= 0.005:
-                    continue
-
-                emp = employees.get(e_id)
-                status, comment = _detail_attribution_status(ctx, result, e_id, contract.id, month)
-
-                total_pm += pm
-                total_salary += salary
-                total_allowance += allowance
-                total_incentive += incentive
-
-                rows.append(
-                    {
-                        "договор": contract.id,
-                        "название договора": c.name if c else "",
-                        "должность / категория строки": pos,
-                        "группа строки": group,
-                        "месяц": RU_MONTHS[month],
-                        "табельный номер": e_id,
-                        "ФИО": emp.full_name if emp else "",
-                        "должность сотрудника": emp.position if emp else "",
-                        "группа сотрудника": emp.equivalence_group if emp else "",
-                        "ставка сотрудника": emp.rate if emp else "",
-                        "закрыто чел.-мес.": round(pm, 4),
-                        "оклад с договора": round(salary, 2) if salary > 0.005 else "",
-                        "надбавка с договора": round(allowance, 2) if allowance > 0.005 else "",
-                        "стимулирующая с договора": round(incentive, 2) if incentive > 0.005 else "",
-                        "всего отнесено на строку": round(total, 2),
-                        "средняя по строке договора": round(plan_avg, 2) if plan_avg else "",
-                        "статус": status,
-                        "комментарий": comment,
-                    }
-                )
-
-            total_amount = total_salary + total_allowance + total_incentive
-            fact_avg = total_amount / total_pm if total_pm > 0.01 else None
-            pm_dev = total_pm - plan_pm
-            amt_dev = total_amount - plan_amount if plan_amount else 0.0
-            pm_ok = plan_pm <= 0 or abs(pm_dev) <= tol * plan_pm
-            amount_ok = plan_amount <= 0 or abs(amt_dev) <= tol * plan_amount
-            avg_ok = (
-                fact_avg is None
-                or plan_avg <= 0
-                or abs(fact_avg - plan_avg) <= tol * plan_avg
+            plan_amount = planned_labor_amount(lp)
+            rec_idx = len(row_specs)
+            row_specs.append(
+                {
+                    "contract": contract,
+                    "lp": lp,
+                    "row_id": row_id,
+                    "group": group,
+                    "plan_pm": plan_pm,
+                    "plan_amount": plan_amount,
+                    "plan_avg": _labor_avg_value(plan_amount, plan_pm),
+                }
             )
-            if pm_ok and amount_ok and avg_ok:
-                tot_status, tot_comment = "выполнено", "Выполнено"
-            elif pm_ok and not amount_ok:
-                tot_status = "отклонение"
-                tot_comment = "Чел.-мес. закрыты, но денег по строке не хватает"
-            elif not pm_ok and amount_ok:
-                tot_status = "отклонение"
-                tot_comment = "Деньги потрачены, но чел.-мес. не закрыты"
-            elif not avg_ok:
-                tot_status = "отклонение"
-                tot_comment = "Фактическая средняя отличается от плановой"
-            else:
-                tot_status, tot_comment = "отклонение", "Отклонение по строке"
+            if group:
+                group_members[(contract.id, group)].append(rec_idx)
 
-            if detail_keys or plan_pm > 0:
-                rows.append(
-                    {
-                        "договор": contract.id,
-                        "название договора": c.name if c else "",
-                        "должность / категория строки": pos,
-                        "группа строки": group,
-                        "месяц": "ИТОГО",
-                        "табельный номер": "",
-                        "ФИО": "",
-                        "должность сотрудника": "",
-                        "группа сотрудника": "",
-                        "ставка сотрудника": "",
-                        "закрыто чел.-мес.": round(total_pm, 4),
-                        "оклад с договора": round(total_salary, 2) if total_salary > 0.005 else "",
-                        "надбавка с договора": round(total_allowance, 2) if total_allowance > 0.005 else "",
-                        "стимулирующая с договора": round(total_incentive, 2) if total_incentive > 0.005 else "",
-                        "всего отнесено на строку": round(total_amount, 2),
-                        "средняя по строке договора": round(fact_avg, 2) if fact_avg is not None else "",
-                        "статус": tot_status,
-                        "комментарий": tot_comment,
-                    }
-                )
+    for rec_idx, spec in enumerate(row_specs):
+        row_id = spec["row_id"]
+        detail_keys = {
+            (row_id, e_id, month)
+            for (rid, e_id, month) in pm_by
+            if rid == row_id and pm_by[(rid, e_id, month)] > 0.005
+        }
+        detail_keys |= {
+            (row_id, e_id, month)
+            for (rid, e_id, month, _kind) in pay_by
+            if rid == row_id and pay_by[(rid, e_id, month, _kind)] > 0.005
+        }
+        total_pm = 0.0
+        total_amount = 0.0
+        total_salary = 0.0
+        total_allowance = 0.0
+        total_incentive = 0.0
+        for (_rid, e_id, month) in detail_keys:
+            total_pm += pm_by.get((row_id, e_id, month), 0.0)
+            total_salary += pay_by.get((row_id, e_id, month, "salary"), 0.0)
+            total_allowance += pay_by.get((row_id, e_id, month, "allowance"), 0.0)
+            total_incentive += pay_by.get((row_id, e_id, month, "incentive"), 0.0)
+        total_amount = total_salary + total_allowance + total_incentive
+        spec["detail_keys"] = detail_keys
+        spec["checks"] = _labor_row_checks(
+            spec["plan_pm"], spec["plan_amount"], total_pm, total_amount, tol
+        )
+        spec["total_salary"] = total_salary
+        spec["total_allowance"] = total_allowance
+        spec["total_incentive"] = total_incentive
+
+    group_ok_map: dict[tuple[str, str], bool] = {}
+    group_all_row_ok: dict[tuple[str, str], bool] = {}
+    for key, indices in group_members.items():
+        if len(indices) < 2:
+            continue
+        plan_pm = sum(row_specs[i]["checks"]["plan_pm"] for i in indices)
+        plan_amt = sum(row_specs[i]["checks"]["plan_amt"] for i in indices)
+        fact_pm = sum(row_specs[i]["checks"]["fact_pm"] for i in indices)
+        fact_amt = sum(row_specs[i]["checks"]["fact_amt"] for i in indices)
+        group_ok_map[key] = _labor_row_checks(plan_pm, plan_amt, fact_pm, fact_amt, tol)["row_ok"]
+        group_all_row_ok[key] = all(row_specs[i]["checks"]["row_ok"] for i in indices)
+
+    rows: list[dict] = []
+    for spec in row_specs:
+        contract = spec["contract"]
+        lp = spec["lp"]
+        row_id = spec["row_id"]
+        pos = lp.position or ""
+        group = spec["group"]
+        c = contracts.get(contract.id)
+
+        for _rid, e_id, month in sorted(spec["detail_keys"], key=lambda x: (x[2], x[1])):
+            pm = pm_by.get((row_id, e_id, month), 0.0)
+            salary = pay_by.get((row_id, e_id, month, "salary"), 0.0)
+            allowance = pay_by.get((row_id, e_id, month, "allowance"), 0.0)
+            incentive = pay_by.get((row_id, e_id, month, "incentive"), 0.0)
+            total = salary + allowance + incentive
+            if pm <= 0.005 and total <= 0.005:
+                continue
+
+            emp = employees.get(e_id)
+            status, comment = _detail_attribution_status(
+                ctx,
+                result,
+                e_id,
+                contract.id,
+                month,
+                labor_row_id=row_id,
+                pm_on_row=pm,
+            )
+            rows.append(
+                {
+                    "договор": contract.id,
+                    "название договора": c.name if c else "",
+                    "должность / категория строки": pos,
+                    "группа строки": group,
+                    "месяц": RU_MONTHS[month],
+                    "табельный номер": e_id,
+                    "ФИО": emp.full_name if emp else "",
+                    "должность сотрудника": emp.position if emp else "",
+                    "группа сотрудника": emp.equivalence_group if emp else "",
+                    "ставка сотрудника": emp.rate if emp else "",
+                    "закрыто чел.-мес.": round(pm, 4),
+                    "оклад с договора": round(salary, 2) if salary > 0.005 else "",
+                    "надбавка с договора": round(allowance, 2) if allowance > 0.005 else "",
+                    "стимулирующая с договора": round(incentive, 2) if incentive > 0.005 else "",
+                    "всего отнесено на строку": round(total, 2),
+                    "плановая средняя": "",
+                    "фактическая средняя": "",
+                    "статус": status,
+                    "комментарий": comment,
+                }
+            )
+
+        checks = spec["checks"]
+        group_key = (contract.id, group) if group else None
+        if (
+            group_key
+            and group_ok_map.get(group_key, False)
+            and not group_all_row_ok.get(group_key, True)
+        ):
+            status, comment = "выполнено по группе", GROUP_DONE_COMMENT
+        else:
+            status, comment = _labor_status_from_checks(checks)
+        if spec["detail_keys"] or spec["plan_pm"] > 0:
+            rows.append(
+                {
+                    "договор": contract.id,
+                    "название договора": c.name if c else "",
+                    "должность / категория строки": pos,
+                    "группа строки": group,
+                    "месяц": "ИТОГО",
+                    "табельный номер": "",
+                    "ФИО": "",
+                    "должность сотрудника": "",
+                    "группа сотрудника": "",
+                    "ставка сотрудника": "",
+                    "закрыто чел.-мес.": round(checks["fact_pm"], 4),
+                    "оклад с договора": round(spec["total_salary"], 2) if spec["total_salary"] > 0.005 else "",
+                    "надбавка с договора": round(spec["total_allowance"], 2) if spec["total_allowance"] > 0.005 else "",
+                    "стимулирующая с договора": round(spec["total_incentive"], 2) if spec["total_incentive"] > 0.005 else "",
+                    "всего отнесено на строку": round(checks["fact_amt"], 2),
+                    "плановая средняя": _round_avg(spec["plan_avg"]),
+                    "фактическая средняя": _round_avg(checks["fact_avg"]),
+                    "статус": status,
+                    "комментарий": comment,
+                }
+            )
 
     if not rows:
         return pd.DataFrame([{"договор": "Нет строк трудоёмкости для расшифровки"}])
-    return pd.DataFrame(rows, columns=cols)
+    return pd.DataFrame(rows, columns=LABOR_BREAKDOWN_COLUMNS)
 
 
 def build_plan_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
@@ -1315,8 +1604,6 @@ class UserExcelReport:
     contract_payments: pd.DataFrame
     balances: pd.DataFrame
     spend_plan: pd.DataFrame
-    labor_summary: pd.DataFrame
-    labor_breakdown: pd.DataFrame
     plan: pd.DataFrame
     labor_payments: pd.DataFrame
     position_control: pd.DataFrame
@@ -1337,8 +1624,6 @@ def build_user_excel_report(ctx: PlanningContext, result: PlanningResult) -> Use
         contract_payments=build_contract_payments_matrix(ctx, result),
         balances=build_balances_matrix(ctx, result),
         spend_plan=build_spend_plan_matrix(ctx, result),
-        labor_summary=build_labor_summary_block(ctx, result),
-        labor_breakdown=build_labor_breakdown_sheet(ctx, result),
         plan=build_plan_payments_sheet(ctx, result),
         labor_payments=build_labor_payments_sheet(ctx, result),
         position_control=build_position_control_sheet(ctx, result),

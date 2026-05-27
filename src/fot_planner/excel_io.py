@@ -156,6 +156,8 @@ COLUMN_ALIASES: dict[str, str] = {
     "месяцев фот для резерва": "min_fot_months_for_salary_reserve",
     "допуск трудоемкости гоз": "goz_labor_tolerance",
     "допуск трудоемкости": "goz_labor_tolerance",
+    "множитель выплаты на чел-мес": "labor_pm_payment_multiplier",
+    "макс множитель средней на чел-мес": "labor_pm_payment_multiplier",
     "вес отклонения равномерного освоения": "weight_uniform_spend_deviation",
     "штраф отклонения от равномерного освоения": "weight_uniform_spend_deviation",
     "вес штрафа смены надбавки": "weight_allowance_switch",
@@ -956,6 +958,8 @@ def _load_salary_stability(settings: pd.DataFrame) -> SalaryStabilityRules:
         rules.min_fot_months_for_salary_reserve = int(row["min_fot_months_for_salary_reserve"])
     if "goz_labor_tolerance" in row and pd.notna(row["goz_labor_tolerance"]):
         rules.goz_labor_tolerance = float(row["goz_labor_tolerance"])
+    if "labor_pm_payment_multiplier" in row and pd.notna(row["labor_pm_payment_multiplier"]):
+        rules.labor_pm_payment_multiplier = float(row["labor_pm_payment_multiplier"])
     return rules
 
 
@@ -1513,6 +1517,7 @@ def _format_result_workbook_sheets(wb) -> None:
 
 def export_result(path: str | Path, ctx: PlanningContext, result: PlanningResult) -> None:
     path = Path(path)
+    from fot_planner.labor_control_sheet import write_labor_control_sheet
     from fot_planner.user_excel_format import format_user_workbook
     from fot_planner.user_excel_report import (
         SHEET_ADMIN,
@@ -1522,8 +1527,6 @@ def export_result(path: str | Path, ctx: PlanningContext, result: PlanningResult
         SHEET_DEFICITS,
         SHEET_EMPLOYEE_PAYMENTS,
         SHEET_ISSUES,
-        SHEET_LABOR,
-        SHEET_LABOR_BREAKDOWN,
         SHEET_LABOR_PAYMENTS,
         SHEET_PLAN,
         SHEET_POSITION,
@@ -1545,8 +1548,6 @@ def export_result(path: str | Path, ctx: PlanningContext, result: PlanningResult
         report.contract_payments.to_excel(writer, sheet_name=SHEET_CONTRACT_PAYMENTS, index=False)
         report.balances.to_excel(writer, sheet_name=SHEET_BALANCES, index=False)
         report.spend_plan.to_excel(writer, sheet_name=SHEET_SPEND_PLAN, index=False)
-        report.labor_summary.to_excel(writer, sheet_name=SHEET_LABOR, index=False)
-        report.labor_breakdown.to_excel(writer, sheet_name=SHEET_LABOR_BREAKDOWN, index=False)
         report.plan.to_excel(writer, sheet_name=SHEET_PLAN, index=False)
         report.labor_payments.to_excel(writer, sheet_name=SHEET_LABOR_PAYMENTS, index=False)
         report.position_control.to_excel(writer, sheet_name=SHEET_POSITION, index=False)
@@ -1557,6 +1558,7 @@ def export_result(path: str | Path, ctx: PlanningContext, result: PlanningResult
         report.deficit_by_month.to_excel(writer, sheet_name=SHEET_DEFICIT_MONTH, index=False)
 
     format_user_workbook(path)
+    write_labor_control_sheet(path, ctx, result)
 
 
 def create_template(path: str | Path) -> None:
@@ -1721,7 +1723,7 @@ def create_template(path: str | Path) -> None:
             {
                 "лист": SHEET_CONTRACT_LABOR,
                 "описание": (
-                    "Трудоёмкость по строкам: должность, чел.-мес., "
+                    "Контроль трудоёмкости: план/факт по договорам, месяцам и сотрудникам. "
                     "средняя стоимость выполнения работ в месяц (обязательна при plan > 0)"
                 ),
             },
