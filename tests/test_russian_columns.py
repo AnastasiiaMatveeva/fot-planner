@@ -1,0 +1,77 @@
+from datetime import date
+
+import pandas as pd
+
+from fot_planner.excel_io import create_template, load_context
+
+
+def test_template_uses_russian_columns_and_loader_understands_them(tmp_path):
+    path = tmp_path / "input.xlsx"
+    create_template(path)
+    year = date.today().year
+
+    employees = pd.read_excel(path, sheet_name="employees")
+    contracts = pd.read_excel(path, sheet_name="contracts")
+
+    assert "фио" in employees.columns
+    assert "оклад" in employees.columns
+    assert "тип договора" in contracts.columns
+
+    labor = pd.DataFrame(
+        [
+            {
+                "договор": "C001",
+                "год": year,
+                "трудоемкость": 12,
+                "должность": "инженер",
+            }
+        ]
+    )
+    with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
+        labor.to_excel(w, sheet_name="contract_labor", index=False)
+
+    ctx = load_context(path)
+    assert ctx.employees[0].full_name == "Иванов Иван Иванович"
+    assert ctx.employees[0].salary == 100_000
+    assert ctx.contracts[0].contract_type == "goszakaz"
+    assert ctx.labor_plans[0].person_months == 12
+    c = ctx.contracts[0]
+    assert len(c.monthly_budgets) == 12
+    assert abs(sum(mb.inflow_amount for mb in c.monthly_budgets) - c.total_fot) < 0.01
+
+
+def test_contract_inherits_months_after_end_from_type(tmp_path):
+    path = tmp_path / "input.xlsx"
+    create_template(path)
+    year = date.today().year
+
+    contracts = pd.DataFrame(
+        [
+            {
+                "код": "VB01",
+                "название": "Внебюджет тест",
+                "номер": "1",
+                "тип договора": "off_budget",
+                "дата начала": f"{year}-01-01",
+                "дата окончания": f"{year}-12-31",
+                "срок освоения": "",
+                "фот": 1_000_000,
+                "оклад разрешен": True,
+                "надбавка разрешена": True,
+                "стимулирующая разрешена": True,
+                "месяцев после окончания": "",
+                "перенос остатков": "",
+            }
+        ]
+    )
+    fot_matrix = pd.DataFrame({"договор": ["VB01"]})
+    for m in range(1, 13):
+        fot_matrix[str(m)] = [100_000]
+
+    with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
+        contracts.to_excel(w, sheet_name="contracts", index=False)
+        fot_matrix.to_excel(w, sheet_name="fot_matrix", index=False)
+
+    ctx = load_context(path)
+    c = next(x for x in ctx.contracts if x.id == "VB01")
+    assert c.months_after_end == 2

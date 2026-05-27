@@ -1,0 +1,49 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+
+# Секреты и локальные env
+.env
+.env.*
+!.env.example
+
+# IDE / редакторы
+.idea/
+.vscode/
+*.swp
+*~
+
+# Cursor (кэш, MCP, чаты, локальные настройки агента)
+.cursor/
+!.cursor/rules/
+!.cursor/rules/**
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Логи и временные файлы
+*.log
+_tstab/
+_xfer_*.xlsx
+tests/_tmp_*.xlsx
+
+# Локальные архивы и справочные материалы (не в репозиторий)
+*.zip
+*.pdf
+
+# Локальные настройки IDE
+*.code-workspace
+
+# Рабочие Excel (пересоздаются скриптами); в репозитории не храним
+data/*.xlsx
+!data/.gitkeep
