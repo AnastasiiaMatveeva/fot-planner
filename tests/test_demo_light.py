@@ -49,9 +49,8 @@ def test_demo_light_solve_covers_main_rules(demo_light_path: Path, tmp_path: Pat
         spent = sum(a.amount for a in result.allocations if a.contract_id == cid)
         assert spent >= fot - 2_000, f"{cid}: освоено {spent}, ожидалось ~{fot}"
 
-    # Переносы ГОЗ не в январь/февраль (договор с марта)
-    bad_xfer = [t for t in result.month_transfers if t.contract_id == "C_GOS" and t.to_month in (1, 2)]
-    assert not bad_xfer
+    # Физических переносов из будущего в прошлое нет
+    assert not result.month_transfers
 
     # Грант — длинный ФОТ (12 месяцев поступлений → резерв в модели, если не выключен явно)
     assert is_long_fot_project(grant_contract, min_fot_months=6)

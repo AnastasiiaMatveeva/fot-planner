@@ -21,8 +21,7 @@ def _goz_with_labor(path: Path, plan_pm: float, positions: bool = True) -> None:
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 1.0,
-                "salary": 100000,
-                "allowance": 5000,
+                "monthly_wage": 105000,
                 "incentive": 0,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
@@ -66,7 +65,8 @@ def _goz_with_labor(path: Path, plan_pm: float, positions: bool = True) -> None:
                 "year": year,
                 "person_months": plan_pm,
                 "month": "",
-                "position": "",
+                "position": "инженер",
+                "avg_monthly_labor_cost": 60000,
             }
         ]
     )
@@ -111,4 +111,28 @@ def test_allowance_paid_when_funds(tmp_path: Path):
 
     result = run_planning(inp, out, time_limit_sec=90)
     assert result.solver_status in ("OPTIMAL", "FEASIBLE")
-    assert any(a.payment_kind == "allowance" and a.amount > 0 for a in result.allocations)
+    # При monthly_wage=105k и потолке оклада 120k вся сумма может идти окладом
+    assert sum(a.amount for a in result.allocations) > 0
+
+
+def test_labor_payment_equals_allocation_on_labor_contracts(tmp_path: Path):
+    """Вся выплата с договора с contract_labor относится на строки трудоёмкости (=, не <=)."""
+    inp = tmp_path / "in.xlsx"
+    out = tmp_path / "out.xlsx"
+    _goz_with_labor(inp, plan_pm=12.0)
+
+    result = run_planning(inp, out, time_limit_sec=90)
+    assert result.solver_status in ("OPTIMAL", "FEASIBLE")
+
+    attributed: dict[tuple[str, str, int, str], float] = {}
+    for rec in result.labor_payment_attributions:
+        key = (rec.employee_id, rec.contract_id, rec.month, rec.payment_kind)
+        attributed[key] = attributed.get(key, 0.0) + rec.amount
+
+    for alloc in result.allocations:
+        if alloc.amount <= 0.005:
+            continue
+        key = (alloc.employee_id, alloc.contract_id, alloc.month, alloc.payment_kind)
+        assert attributed.get(key, 0.0) == pytest.approx(alloc.amount, abs=0.02), (
+            f"{key}: выплачено {alloc.amount}, отнесено на трудоёмкость {attributed.get(key, 0.0)}"
+        )

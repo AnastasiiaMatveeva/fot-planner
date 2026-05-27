@@ -3,8 +3,25 @@
 from __future__ import annotations
 
 from fot_planner.fot_schedule import active_months_in_year, uniform_monthly_spend_target
-from fot_planner.labor_rules import person_month_terms_for_labor, planned_labor_groups
+from fot_planner.labor_rules import planned_labor_groups
 from fot_planner.models import PlanningContext, PlanningResult
+
+
+def cumulative_labor_pm_from_result(
+    result: PlanningResult,
+    contract_id: str,
+    through_month: int,
+) -> float:
+    """Фактическая накопленная трудоёмкость до конца месяца (из labor_pm_attributions)."""
+    return sum(
+        rec.person_months
+        for rec in result.labor_pm_attributions
+        if rec.contract_id == contract_id and rec.month <= through_month
+    )
+
+
+def planned_labor_pm_total(ctx: PlanningContext, contract_id: str) -> float:
+    return sum(pm for _pos, pm in planned_labor_groups(ctx, contract_id))
 
 
 def _sum_terms(terms):
@@ -22,59 +39,11 @@ def spent_or_zero(alloc, contract_id: str, month: int):
     return _sum_terms(terms)
 
 
-def labor_pm_or_zero(
-    employees: dict,
-    uses: dict,
-    contract_id: str,
-    months: list[int],
-    equivalence_group: str | None = None,
-):
-    """Накопленная трудоёмкость (оклад/salary) за указанные месяцы."""
-    expr = person_month_terms_for_labor(
-        employees,
-        uses,
-        contract_id,
-        months,
-        position=None,
-        equivalence_group=equivalence_group,
-    )
-    return expr if expr is not None else 0
-
-
-def planned_labor_pm_total(ctx: PlanningContext, contract_id: str) -> float:
-    return sum(pm for _pos, pm in planned_labor_groups(ctx, contract_id))
-
-
-def cumulative_salary_pm_from_result(
-    result: PlanningResult,
-    employees: dict,
-    contract_id: str,
-    through_month: int,
-    equivalence_group: str | None = None,
-) -> float:
-    """Фактическая накопленная трудоёмкость по окладу до конца месяца (для отчёта)."""
-    total = 0.0
-    for month in range(1, through_month + 1):
-        for alloc in result.allocations:
-            if (
-                alloc.contract_id != contract_id
-                or alloc.month != month
-                or alloc.payment_kind != "salary"
-                or alloc.amount < 0.01
-            ):
-                continue
-            employee = employees[alloc.employee_id]
-            if equivalence_group and employee.equivalence_group != equivalence_group:
-                continue
-            total += employee.rate
-    return total
-
-
 def build_spend_plan_fact_dataframe(ctx: PlanningContext, result: PlanningResult):
-    """Лист «освоение_план_факт»: равномерный план vs факт и резерв под трудоёмкость."""
+    """Лист «освоение_план_факт»: касса и отклонение от равномерного плана освоения."""
     import pandas as pd
 
-    employees = {e.id: e for e in ctx.employees}
+    balances_by_key = {(b.contract_id, b.month): b for b in result.contract_balances}
     rows: list[dict] = []
 
     for contract in ctx.contracts:
@@ -84,51 +53,46 @@ def build_spend_plan_fact_dataframe(ctx: PlanningContext, result: PlanningResult
 
         ideal = uniform_monthly_spend_target(contract, ctx.year) or 0.0
         plan_pm = planned_labor_pm_total(ctx, contract.id)
-        cost_per_pm = contract.total_fot / plan_pm if plan_pm > 0 else 0.0
 
         cum_plan = 0.0
         cum_actual = 0.0
 
         for m in range(1, 13):
             is_active = m in active
-            actual = (
-                sum(
-                    a.amount
-                    for a in result.allocations
-                    if a.contract_id == contract.id and a.month == m
-                )
-                if is_active
-                else 0.0
-            )
+            balance = balances_by_key.get((contract.id, m))
+            actual = balance.spent if balance and is_active else 0.0
+            inflow = balance.inflow if balance else 0.0
+            opening = balance.opening_balance if balance else 0.0
+            closing = balance.closing_balance if balance else 0.0
+
             ideal_m = ideal if is_active else 0.0
             deviation = actual - ideal_m
             cum_plan += ideal_m
             cum_actual += actual
             cum_dev = cum_actual - cum_plan
 
-            cum_labor = cumulative_salary_pm_from_result(result, employees, contract.id, m) if is_active else 0.0
-            remaining_labor = max(0.0, plan_pm - cum_labor) if plan_pm > 0 else 0.0
-            required_reserve = remaining_labor * cost_per_pm
+            cum_labor = (
+                cumulative_labor_pm_from_result(result, contract.id, m) if is_active else 0.0
+            )
             remaining_fot = contract.total_fot - cum_actual
-            threshold_ok = remaining_fot + 1.0 >= required_reserve if plan_pm > 0 else True
 
             rows.append(
                 {
                     "договор": contract.id,
                     "месяц": m,
                     "активный месяц": "да" if is_active else "нет",
+                    "поступление": round(inflow, 2) if is_active else "",
+                    "остаток на начало": round(opening, 2) if is_active else "",
+                    "факт выплат": round(actual, 2) if is_active else "",
+                    "остаток на конец": round(closing, 2) if is_active else "",
                     "равномерный план": round(ideal_m, 2),
-                    "факт выплат": round(actual, 2),
-                    "отклонение": round(deviation, 2),
+                    "отклонение от равномерного плана": round(deviation, 2),
                     "накопленный план": round(cum_plan, 2),
                     "накопленный факт": round(cum_actual, 2),
                     "накопленное отклонение": round(cum_dev, 2),
                     "план трудоёмкости": round(plan_pm, 4) if m == active[0] else "",
                     "накопленная трудоёмкость": round(cum_labor, 4) if is_active else "",
-                    "оставшаяся трудоёмкость": round(remaining_labor, 4) if is_active else "",
-                    "требуемый резерв под трудоёмкость": round(required_reserve, 2) if is_active else "",
                     "остаток ФОТ после месяца": round(remaining_fot, 2) if is_active else "",
-                    "порог выполнен": "да" if threshold_ok else "нет",
                 }
             )
 

@@ -71,7 +71,7 @@ def _uniform_spend_workbook(path: Path, *, uniform_weight: float) -> None:
                 "weight_salary_switch": 0,
                 "weight_uniform_spend_deviation": uniform_weight,
                 "weight_labor_deviation": 0,
-                "max_salary_contracts_per_year": 0,
+                "max_salary_contracts_per_year": 1,
             }
         ]
     )
@@ -108,3 +108,24 @@ def test_high_uniform_penalty_spreads_spend(tmp_path: Path):
     assert len(active) >= 10
     values = [by_month[m] for m in active]
     assert max(values) - min(values) <= 100_000 + 1_000
+
+
+def test_uniform_penalty_prefers_single_contract_over_micro_split(tmp_path: Path):
+    """При достаточном ФОТ на одном договоре не дробим надбавку ради микровыравнивания."""
+    from tests.test_contract_fragment_penalty import _fragment_workbook
+
+    path = tmp_path / "no_micro_split.xlsx"
+    _fragment_workbook(path, admin_complexity_weight=200_000, uniform_weight=100_000)
+    result = run_planning(path, tmp_path / "out.xlsx", time_limit_sec=60)
+    assert result.solver_status in ("OPTIMAL", "FEASIBLE")
+    april = [
+        a
+        for a in result.allocations
+        if a.employee_id == "E001"
+        and a.month == 4
+        and a.payment_kind == "allowance"
+        and a.amount > 0.01
+    ]
+    assert sum(a.amount for a in april) == pytest.approx(25_000, rel=0.01)
+    assert len({a.contract_id for a in april}) == 1
+    assert all(a.amount >= 24_000 for a in april)

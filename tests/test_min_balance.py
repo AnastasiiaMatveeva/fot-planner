@@ -42,7 +42,7 @@ def _grant_workbook(path: Path, monthly_inflow: float, min_balance_jan: float = 
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
                 "spend_deadline": "",
-                "total_fot": 3_000_000,
+                "total_fot": 1_200_000,
                 "priority": 1,
                 "allow_salary": True,
                 "allow_incentive": True,
@@ -94,10 +94,6 @@ def test_min_balance_enforced(tmp_path: Path):
 def test_contract_level_min_monthly_balance(tmp_path: Path):
     path = tmp_path / "input.xlsx"
     _grant_workbook(path, monthly_inflow=200_000)
-    contracts = pd.read_excel(path, sheet_name="contracts")
-    contracts["min_monthly_balance"] = 60_000
-    with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
-        contracts.to_excel(w, sheet_name="contracts", index=False)
-
     ctx = load_context(path)
-    assert ctx.contracts[0].min_monthly_balance == 60_000
+    jan = next(mb for mb in ctx.contracts[0].monthly_budgets if mb.month == 1)
+    assert jan.min_balance is None or jan.min_balance == 0

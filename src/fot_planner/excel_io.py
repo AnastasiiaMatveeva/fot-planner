@@ -2,14 +2,23 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 
 from fot_planner.contract_types import CONTRACT_TYPE_DEFAULTS, KNOWN_CONTRACT_TYPES
-from fot_planner.fot_schedule import spread_fot_by_active_months
-from fot_planner.labor_rules import planned_labor_groups
+from fot_planner.deficit_report import (
+    build_deficit_by_month_dataframe,
+    build_deficits_detail_dataframe,
+)
+from fot_planner.fot_schedule import default_fot_inflow_at_start
+from fot_planner.labor_rules import (
+    employee_compatible_with_labor_row,
+    labor_rows_for_contract,
+    planned_labor_groups,
+)
 from fot_planner.models import (
     AllocationRecord,
     Contract,
@@ -25,6 +34,7 @@ from fot_planner.models import (
     PlanningResult,
     PositionReference,
     SalaryStabilityRules,
+    labor_row_id,
 )
 from fot_planner.position_reference import (
     PositionReferenceRow,
@@ -66,6 +76,8 @@ COLUMN_ALIASES: dict[str, str] = {
     "подразделение": "department",
     "кафедра": "department",
     "ставка": "rate",
+    "зарплата": "monthly_wage",
+    "месячная зарплата": "monthly_wage",
     "оклад": "salary",
     "надбавка": "allowance",
     "стимулирующая": "incentive",
@@ -87,6 +99,7 @@ COLUMN_ALIASES: dict[str, str] = {
     "стимулирующая разрешена": "allow_incentive",
     "месяцев после окончания": "months_after_end",
     "перенос остатков": "allow_monthly_carryover",
+    # legacy: читается из старых Excel, в модели не используется
     "резерв оклада": "require_salary_reserve",
     "полное освоение за дней до срока": "spend_complete_days_before_end",
     # Contract links / limits
@@ -105,6 +118,10 @@ COLUMN_ALIASES: dict[str, str] = {
     "трудоемкость": "person_months",
     "трудоёмкость": "person_months",
     "чел-мес": "person_months",
+    "средняя стоимость выполнения работ в месяц": "avg_monthly_labor_cost",
+    "средняя зарплата": "avg_monthly_labor_cost",
+    "стоимость 1 чел-мес": "avg_monthly_labor_cost",
+    "стоимость чел мес": "avg_monthly_labor_cost",
     "месяц": "month",
     # Manual rules / plan
     "месяц с": "month_from",
@@ -116,7 +133,11 @@ COLUMN_ALIASES: dict[str, str] = {
     "поступление": "inflow_amount",
     # Settings
     "год": "year",
-    "штраф дефицита": "weight_uncovered_salary",
+    "разрешить дефицит": "allow_deficit",
+    "штраф дефицита": "weight_deficit_amount",
+    "штраф раннего дефицита": "weight_early_deficit",
+    # legacy
+    "weight_uncovered_salary": "weight_deficit_amount",
     "штраф компенсации оклада надбавкой": "weight_salary_compensation_via_flex",
     "вес штрафа смены оклада": "weight_salary_switch",
     "штраф смены договора оклада": "weight_salary_switch",
@@ -131,12 +152,15 @@ COLUMN_ALIASES: dict[str, str] = {
     "штраф договора сотрудника за год": "weight_employee_contract_year_count",
     "штраф договора сотрудника в месяце": "weight_employee_contract_month_count",
     "weight_flex_payment_fragment_count": "weight_flex_fragment",
+    # legacy: читается из старых Excel, в модели не используется
     "месяцев фот для резерва": "min_fot_months_for_salary_reserve",
     "допуск трудоемкости гоз": "goz_labor_tolerance",
+    "допуск трудоемкости": "goz_labor_tolerance",
     "вес отклонения равномерного освоения": "weight_uniform_spend_deviation",
     "штраф отклонения от равномерного освоения": "weight_uniform_spend_deviation",
     "вес штрафа смены надбавки": "weight_allowance_switch",
     "вес штрафа смены стимулирующей": "weight_incentive_switch",
+    # legacy: перенос из будущего в прошлое отключён, флаг игнорируется
     "разрешить перенос назад": "allow_backward_reallocation",
 }
 
@@ -196,6 +220,19 @@ def _parse_date(val) -> date | None:
         except ValueError:
             continue
     return pd.to_datetime(s).date()
+
+
+def _resolve_monthly_wage(row: pd.Series) -> float:
+    """Зарплата (итого): колонка `зарплата` или сумма legacy `оклад` + `надбавка`."""
+    if "monthly_wage" in row.index and pd.notna(row.get("monthly_wage")):
+        return float(row["monthly_wage"])
+    salary = float(row.get("salary", 0) or 0) if pd.notna(row.get("salary")) else 0.0
+    allowance = float(row.get("allowance", 0) or 0) if pd.notna(row.get("allowance")) else 0.0
+    if "salary" in row.index and pd.notna(row.get("salary")):
+        return salary + allowance
+    if "allowance" in row.index and pd.notna(row.get("allowance")):
+        return salary + allowance
+    raise ValueError("У сотрудника должна быть колонка «зарплата» или «оклад»")
 
 
 def _split_list(val) -> list[str]:
@@ -273,7 +310,7 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         position_index,
     )
     contracts = _load_contracts(_canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACTS)))
-    spread_fot_by_active_months(contracts, year)
+    default_fot_inflow_at_start(contracts, year)
 
     if SHEET_CONTRACT_POSITIONS in xl.sheet_names:
         _apply_positions(
@@ -335,9 +372,17 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
 
     weights = OptimizationWeights()
     salary_stability = SalaryStabilityRules()
+    allow_backward_reallocation = False
+    allow_deficit = False
     if settings_df is not None:
         weights = _load_weights(settings_df)
         salary_stability = _load_salary_stability(settings_df)
+        if not settings_df.empty:
+            row = settings_df.iloc[0]
+            if "allow_deficit" in row and pd.notna(row["allow_deficit"]):
+                allow_deficit = _bool(row["allow_deficit"])
+            if "allow_backward_reallocation" in row and pd.notna(row["allow_backward_reallocation"]):
+                allow_backward_reallocation = _bool(row["allow_backward_reallocation"])
 
     return PlanningContext(
         year=year,
@@ -350,6 +395,8 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         salary_stability=salary_stability,
         labor_plans=labor_plans,
         baseline_plan=baseline_plan,
+        allow_deficit=allow_deficit,
+        allow_backward_reallocation=allow_backward_reallocation,
     )
 
 
@@ -406,8 +453,7 @@ def _load_employees(
                 position=position,
                 department=str(r.get("department", "")).strip(),
                 rate=float(r["rate"]),
-                salary=float(r["salary"]),
-                allowance=float(r.get("allowance", 0) or 0),
+                monthly_wage=_resolve_monthly_wage(r),
                 incentive=float(r.get("incentive", 0) or 0),
                 start_date=_parse_date(r.get("start_date")),
                 end_date=_parse_date(r.get("end_date")),
@@ -883,6 +929,8 @@ def _load_contract_labor(
         pos_raw = r.get("position")
         position = str(pos_raw).strip() if pd.notna(pos_raw) and str(pos_raw).strip() else None
         ref = resolve_position(position, position_index) if position else None
+        avg_raw = r.get("avg_monthly_labor_cost")
+        avg_cost = float(avg_raw) if pd.notna(avg_raw) and str(avg_raw).strip() else None
         rows.append(
             ContractLaborPlan(
                 contract_id=cid,
@@ -891,6 +939,7 @@ def _load_contract_labor(
                 position=position,
                 equivalence_group=ref.группа_взаимозаменяемости if ref else None,
                 position_level=ref.уровень if ref else None,
+                avg_monthly_labor_cost=avg_cost,
             )
         )
     return rows
@@ -913,10 +962,10 @@ def _load_salary_stability(settings: pd.DataFrame) -> SalaryStabilityRules:
 def _load_weights(settings: pd.DataFrame) -> OptimizationWeights:
     w = OptimizationWeights()
     mapping = {
-        "weight_uncovered_salary": "uncovered_salary",
+        "weight_deficit_amount": "deficit_amount",
+        "weight_early_deficit": "early_deficit",
         "weight_salary_switch": "salary_contract_switch",
         "weight_admin_complexity": "admin_complexity",
-        "weight_flex_fragment": "flex_fragment",
         "weight_plan_deviation": "plan_deviation",
         "weight_uniform_spend_deviation": "uniform_spend_deviation",
         "weight_salary_compensation_via_flex": "salary_compensation_via_flex",
@@ -941,6 +990,8 @@ def _load_weights(settings: pd.DataFrame) -> OptimizationWeights:
     for col, attr in mapping.items():
         if col in row and pd.notna(row[col]):
             setattr(w, attr, float(row[col]))
+    if "weight_uncovered_salary" in row and pd.notna(row["weight_uncovered_salary"]):
+        w.deficit_amount = float(row["weight_uncovered_salary"])
 
     legacy_admin_vals = [
         float(row[col])
@@ -957,8 +1008,10 @@ def _load_weights(settings: pd.DataFrame) -> OptimizationWeights:
             for col in legacy_fragment_cols
             if col in row and pd.notna(row[col])
         ]
-        if legacy_fragment_vals:
-            w.flex_fragment = max(legacy_fragment_vals)
+        if legacy_fragment_vals and (
+            "weight_admin_complexity" not in row or pd.isna(row.get("weight_admin_complexity"))
+        ):
+            w.admin_complexity = max(w.admin_complexity, max(legacy_fragment_vals))
 
     if "weight_salary_switch" not in row or pd.isna(row.get("weight_salary_switch")):
         for col in legacy_salary_switch_cols:
@@ -1070,6 +1123,99 @@ def _labor_by_group_dataframe(ctx: PlanningContext, result: PlanningResult) -> p
     return pd.DataFrame(rows)
 
 
+def _labor_by_row_dataframe(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
+    row_id_to_idx: dict[str, int] = {}
+    for contract in ctx.contracts:
+        for lp_idx, lp in labor_rows_for_contract(ctx, contract.id):
+            row_id_to_idx[labor_row_id(lp)] = lp_idx
+
+    fact_pm: dict[int, float] = defaultdict(float)
+    for rec in result.labor_pm_attributions:
+        lp_idx = row_id_to_idx.get(rec.labor_row_id)
+        if lp_idx is not None:
+            fact_pm[lp_idx] += rec.person_months
+
+    fact_amount: dict[int, float] = defaultdict(float)
+    for rec in result.labor_payment_attributions:
+        lp_idx = row_id_to_idx.get(rec.labor_row_id)
+        if lp_idx is not None:
+            fact_amount[lp_idx] += rec.amount
+
+    rows: list[dict] = []
+    for contract in ctx.contracts:
+        for lp_idx, lp in labor_rows_for_contract(ctx, contract.id):
+            plan_pm = lp.person_months
+            avg_cost = lp.avg_monthly_labor_cost or 0.0
+            plan_amount = plan_pm * avg_cost if avg_cost else 0.0
+            f_pm = fact_pm.get(lp_idx, 0.0)
+            f_amount = fact_amount.get(lp_idx, 0.0)
+            f_avg = f_amount / f_pm if f_pm > 0.01 else None
+            pm_dev = f_pm - plan_pm
+            amount_dev = f_amount - plan_amount if plan_amount else None
+            tol = ctx.salary_stability.goz_labor_tolerance
+            pm_ok = plan_pm <= 0 or abs(pm_dev) <= tol * plan_pm
+            amount_ok = (
+                plan_amount <= 0
+                or amount_dev is None
+                or abs(amount_dev) <= tol * plan_amount
+            )
+            rows.append(
+                {
+                    "договор": contract.id,
+                    "должность": lp.position or "",
+                    "группа взаимозаменяемости": lp.equivalence_group or "",
+                    "план чел.-мес.": round(plan_pm, 4),
+                    "средняя стоимость выполнения работ в месяц": round(avg_cost, 2)
+                    if avg_cost
+                    else "",
+                    "плановая сумма по строке": round(plan_amount, 2) if plan_amount else "",
+                    "факт чел.-мес.": round(f_pm, 4),
+                    "факт сумма по строке": round(f_amount, 2),
+                    "фактическая средняя": round(f_avg, 2) if f_avg is not None else "",
+                    "отклонение чел.-мес.": round(pm_dev, 4),
+                    "отклонение суммы": round(amount_dev, 2) if amount_dev is not None else "",
+                    "статус": "выполнено" if pm_ok and amount_ok else "отклонение",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _labor_payment_report_dataframe(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
+    employees = {e.id: e for e in ctx.employees}
+    payment_totals: dict[tuple[str, str, int, str], float] = defaultdict(float)
+    for allocation in result.allocations:
+        if allocation.amount > 0:
+            key = (
+                allocation.employee_id,
+                allocation.contract_id,
+                allocation.month,
+                allocation.payment_kind,
+            )
+            payment_totals[key] += allocation.amount
+
+    kind_labels = {"salary": "оклад", "allowance": "надбавка", "incentive": "стимулирующая"}
+    rows: list[dict] = []
+    for rec in result.labor_payment_attributions:
+        employee = employees.get(rec.employee_id)
+        total_paid = payment_totals.get(
+            (rec.employee_id, rec.contract_id, rec.month, rec.payment_kind), 0.0
+        )
+        rows.append(
+            {
+                "сотрудник": rec.employee_id,
+                "фио": employee.full_name if employee else "",
+                "договор": rec.contract_id,
+                "месяц": RU_MONTHS.get(rec.month, rec.month),
+                "вид выплаты": kind_labels.get(rec.payment_kind, rec.payment_kind),
+                "выплачено всего": round(total_paid, 2),
+                "на строку трудоёмкости": round(rec.amount, 2),
+                "должность строки": rec.position or "",
+                "группа строки": rec.equivalence_group or "",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _project_monthly_grid(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
     """Остаток лимита ФОТ договора после плана выплат (не кассовый остаток)."""
     planned_by_contract_month: dict[tuple[str, int], float] = {}
@@ -1144,26 +1290,29 @@ def _result_readable_tables(
     balance_rows = []
     for balance in result.contract_balances:
         contract = contracts.get(balance.contract_id)
-        balance_rows.append(
-            {
-                "договор": balance.contract_id,
-                "проект": contract.name if contract else "",
-                "год": balance.year,
-                "месяц": RU_MONTHS[balance.month],
-                "остаток на начало": balance.opening_balance,
-                "поступление": balance.inflow,
-                "потрачено": balance.spent,
-                "остаток на конец": balance.closing_balance,
-                "перенос на будущий месяц": balance.carried_forward,
-                "резерв оклада": balance.salary_reserve_required,
-                "неподвижный остаток": balance.min_balance_required,
-                "можно перенести назад": balance.movable_balance,
-                "перенос пришел": balance.transfer_in,
-                "откуда пришло": "; ".join(incoming_transfers.get((balance.contract_id, balance.month), [])),
-                "перенос ушел": balance.transfer_out,
-                "куда перенесено": "; ".join(outgoing_transfers.get((balance.contract_id, balance.month), [])),
-            }
-        )
+        row = {
+            "договор": balance.contract_id,
+            "проект": contract.name if contract else "",
+            "год": balance.year,
+            "месяц": RU_MONTHS[balance.month],
+            "остаток на начало": balance.opening_balance,
+            "поступление": balance.inflow,
+            "потрачено": balance.spent,
+            "остаток на конец": balance.closing_balance,
+            "перенос на будущий месяц": balance.carried_forward,
+        }
+        if balance.min_balance_required > 0.005:
+            row["мин. остаток на конец"] = balance.min_balance_required
+        if balance.transfer_in > 0.005 or balance.transfer_out > 0.005:
+            row["перенос пришел"] = balance.transfer_in
+            row["откуда пришло"] = "; ".join(
+                incoming_transfers.get((balance.contract_id, balance.month), [])
+            )
+            row["перенос ушел"] = balance.transfer_out
+            row["куда перенесено"] = "; ".join(
+                outgoing_transfers.get((balance.contract_id, balance.month), [])
+            )
+        balance_rows.append(row)
 
     transfer_rows = []
     matrix_rows: dict[tuple[str, int], dict] = {}
@@ -1207,14 +1356,19 @@ def _result_readable_tables(
     return pd.DataFrame(plan_rows), pd.DataFrame(balance_rows), transfers_df, matrix_df
 
 
-_BALANCE_EXPORT_COLUMNS = [
+_BALANCE_CORE_COLUMNS = [
     "договор",
     "проект",
     "год",
     "месяц",
     "остаток на начало",
+    "поступление",
     "потрачено",
     "остаток на конец",
+    "перенос на будущий месяц",
+]
+
+_LEGACY_BACKWARD_TRANSFER_COLUMNS = [
     "перенос пришел",
     "откуда пришло",
     "перенос ушел",
@@ -1222,13 +1376,26 @@ _BALANCE_EXPORT_COLUMNS = [
 ]
 
 
-def _export_balances_sheet(writer: pd.ExcelWriter, balances_df: pd.DataFrame) -> None:
+def _balance_export_columns(balances_df: pd.DataFrame) -> list[str]:
+    cols = list(_BALANCE_CORE_COLUMNS)
     if balances_df.empty:
-        pd.DataFrame(columns=_BALANCE_EXPORT_COLUMNS).to_excel(
+        return cols
+    if "мин. остаток на конец" in balances_df.columns:
+        cols.append("мин. остаток на конец")
+    for col in _LEGACY_BACKWARD_TRANSFER_COLUMNS:
+        if col in balances_df.columns:
+            cols.append(col)
+    return cols
+
+
+def _export_balances_sheet(writer: pd.ExcelWriter, balances_df: pd.DataFrame) -> None:
+    export_cols = _balance_export_columns(balances_df)
+    if balances_df.empty:
+        pd.DataFrame(columns=export_cols).to_excel(
             writer, sheet_name="остатки_и_переносы", index=False
         )
         return
-    balances_df[_BALANCE_EXPORT_COLUMNS].to_excel(
+    balances_df[export_cols].to_excel(
         writer, sheet_name="остатки_и_переносы", index=False
     )
 
@@ -1346,83 +1513,50 @@ def _format_result_workbook_sheets(wb) -> None:
 
 def export_result(path: str | Path, ctx: PlanningContext, result: PlanningResult) -> None:
     path = Path(path)
-    budget_fixed_rows = []
-    for c in ctx.contracts:
-        for mb in c.monthly_budgets:
-            if mb.lock:
-                budget_fixed_rows.append(
-                    {
-                        "договор": c.id,
-                        "год": mb.year,
-                        "месяц": RU_MONTHS[mb.month],
-                        "поступление": mb.inflow_amount,
-                        "фикс": "да",
-                    }
-                )
-    budget_fixed_df = pd.DataFrame(budget_fixed_rows)
-    project_grid_df = _project_monthly_grid(ctx, result)
-    readable_plan_df, readable_balances_df, readable_transfers_df, transfer_matrix_df = (
-        _result_readable_tables(ctx, result)
+    from fot_planner.user_excel_format import format_user_workbook
+    from fot_planner.user_excel_report import (
+        SHEET_ADMIN,
+        SHEET_BALANCES,
+        SHEET_CONTRACT_PAYMENTS,
+        SHEET_DEFICIT_MONTH,
+        SHEET_DEFICITS,
+        SHEET_EMPLOYEE_PAYMENTS,
+        SHEET_ISSUES,
+        SHEET_LABOR,
+        SHEET_LABOR_BREAKDOWN,
+        SHEET_LABOR_PAYMENTS,
+        SHEET_PLAN,
+        SHEET_POSITION,
+        SHEET_README,
+        SHEET_SCHEME,
+        SHEET_SPEND_PLAN,
+        SHEET_SPLIT,
+        SHEET_SUMMARY,
+        build_user_excel_report,
     )
-    readable_deficits_df = pd.DataFrame(
-        [
-            {
-                "табельный номер": d.employee_id,
-                "год": d.year,
-                "месяц": RU_MONTHS[d.month],
-                "вид выплаты": _PAYMENT_KIND_RU.get(d.payment_kind, d.payment_kind),
-                "сумма": d.amount,
-                "причины": "; ".join(d.reasons),
-            }
-            for d in result.deficits
-        ]
-    )
-    readable_conflicts_df = pd.DataFrame(
-        [
-            {
-                "код": c.code,
-                "сообщение": c.message,
-                "табельный номер": c.employee_id,
-                "договор": c.contract_id,
-                "год": c.year,
-                "месяц": RU_MONTHS[c.month] if c.month else "",
-            }
-            for c in result.conflicts
-        ]
-    )
-    from fot_planner.spend_plan import build_spend_plan_fact_dataframe
 
-    spend_plan_fact_df = build_spend_plan_fact_dataframe(ctx, result)
-    readable_meta_df = pd.DataFrame(
-        [
-            {
-                "статус решателя": result.solver_status,
-                "целевая функция": result.objective_value,
-                "время расчета, сек": result.solve_time_sec,
-                "год": result.year,
-            }
-        ]
-    )
-    position_control_df = _position_control_dataframe(ctx, result)
-    labor_by_group_df = _labor_by_group_dataframe(ctx, result)
+    report = build_user_excel_report(ctx, result)
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        project_grid_df.to_excel(writer, sheet_name="проекты_помесячно", index=False)
-        readable_plan_df.to_excel(writer, sheet_name="план_выплат", index=False)
-        spend_plan_fact_df.to_excel(writer, sheet_name="освоение_план_факт", index=False)
-        _export_balances_sheet(writer, readable_balances_df)
-        readable_transfers_df.to_excel(writer, sheet_name="переносы", index=False)
-        if not transfer_matrix_df.empty:
-            transfer_matrix_df.to_excel(writer, sheet_name="переносы_матрица", index=False)
-        readable_deficits_df.to_excel(writer, sheet_name="дефициты", index=False)
-        if not readable_conflicts_df.empty:
-            readable_conflicts_df.to_excel(writer, sheet_name="конфликты", index=False)
-        readable_meta_df.to_excel(writer, sheet_name="расчет", index=False)
-        if not budget_fixed_df.empty:
-            budget_fixed_df.to_excel(writer, sheet_name="фиксированный_фот", index=False)
-        position_control_df.to_excel(writer, sheet_name="контроль_должностей", index=False)
-        labor_by_group_df.to_excel(writer, sheet_name="трудоемкость_по_группам", index=False)
-    _format_workbook(path, result=True)
+        report.readme.to_excel(writer, sheet_name=SHEET_README, index=False)
+        report.summary.to_excel(writer, sheet_name=SHEET_SUMMARY, index=False)
+        report.issues.to_excel(writer, sheet_name=SHEET_ISSUES, index=False)
+        report.employee_payments.to_excel(writer, sheet_name=SHEET_EMPLOYEE_PAYMENTS, index=False)
+        report.contract_payments.to_excel(writer, sheet_name=SHEET_CONTRACT_PAYMENTS, index=False)
+        report.balances.to_excel(writer, sheet_name=SHEET_BALANCES, index=False)
+        report.spend_plan.to_excel(writer, sheet_name=SHEET_SPEND_PLAN, index=False)
+        report.labor_summary.to_excel(writer, sheet_name=SHEET_LABOR, index=False)
+        report.labor_breakdown.to_excel(writer, sheet_name=SHEET_LABOR_BREAKDOWN, index=False)
+        report.plan.to_excel(writer, sheet_name=SHEET_PLAN, index=False)
+        report.labor_payments.to_excel(writer, sheet_name=SHEET_LABOR_PAYMENTS, index=False)
+        report.position_control.to_excel(writer, sheet_name=SHEET_POSITION, index=False)
+        report.admin.to_excel(writer, sheet_name=SHEET_ADMIN, index=False)
+        report.split_check.to_excel(writer, sheet_name=SHEET_SPLIT, index=False)
+        report.scheme_changes.to_excel(writer, sheet_name=SHEET_SCHEME, index=False)
+        report.deficits.to_excel(writer, sheet_name=SHEET_DEFICITS, index=False)
+        report.deficit_by_month.to_excel(writer, sheet_name=SHEET_DEFICIT_MONTH, index=False)
+
+    format_user_workbook(path)
 
 
 def create_template(path: str | Path) -> None:
@@ -1437,8 +1571,7 @@ def create_template(path: str | Path) -> None:
                 "должность": "инженер",
                 "подразделение": "лаборатория",
                 "ставка": 1.0,
-                "оклад": 100000,
-                "надбавка": 0,
+                "зарплата": 100000,
                 "стимулирующая": 0,
                 "дата начала": f"{year}-01-01",
                 "дата окончания": "",
@@ -1452,7 +1585,7 @@ def create_template(path: str | Path) -> None:
             {
                 "code": "goszakaz",
                 "name": "Государственный заказ",
-                "allow_monthly_carryover": False,
+                "allow_monthly_carryover": True,
                 "allow_use_after_end": False,
                 "months_after_end": 0,
                 "spend_complete_days_before_end": 20,
@@ -1495,7 +1628,15 @@ def create_template(path: str | Path) -> None:
             },
         ]
     )
-    contract_labor = pd.DataFrame(columns=["договор", "год", "трудоемкость", "должность"])
+    contract_labor = pd.DataFrame(
+        columns=[
+            "договор",
+            "год",
+            "трудоемкость",
+            "должность",
+            "средняя стоимость выполнения работ в месяц",
+        ]
+    )
     contracts = pd.DataFrame(
         [
             {
@@ -1512,7 +1653,6 @@ def create_template(path: str | Path) -> None:
                 "стимулирующая разрешена": True,
                 "месяцев после окончания": 0,
                 "перенос остатков": True,
-                "резерв оклада": False,
             }
         ]
     )
@@ -1534,12 +1674,10 @@ def create_template(path: str | Path) -> None:
         [
             {
                 "год": year,
-                "штраф дефицита": 1_000_000,
+                "разрешить дефицит": "нет",
                 "макс договоров оклада в год": 2,
                 "штраф смены договора оклада": 500_000,
                 "штраф административной сложности выплат": 200_000,
-                "штраф дробления переменных выплат": 200_000,
-                "месяцев фот для резерва": 6,
                 "допуск трудоемкости гоз": 0.05,
             }
         ]
@@ -1582,7 +1720,10 @@ def create_template(path: str | Path) -> None:
             },
             {
                 "лист": SHEET_CONTRACT_LABOR,
-                "описание": "Трудоёмкость (чел.-мес.); должность опциональна; ГОЗ ±goz_labor_tolerance",
+                "описание": (
+                    "Трудоёмкость по строкам: должность, чел.-мес., "
+                    "средняя стоимость выполнения работ в месяц (обязательна при plan > 0)"
+                ),
             },
             {"лист": SHEET_MANUAL_ASSIGNMENTS, "описание": "Ручные фиксации (fixed_amount пусто = только привязка)"},
             {"лист": "plan (результат)", "описание": "lock=yes — зафиксировать строку при пересчёте"},

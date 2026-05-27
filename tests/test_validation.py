@@ -11,7 +11,7 @@ def test_employee_active():
         position="инженер",
         department="",
         rate=1.0,
-        salary=100,
+        monthly_wage=100,
         start_date=date(2025, 3, 1),
         end_date=date(2025, 6, 30),
     )
@@ -30,7 +30,7 @@ def test_validate_unknown_contract():
                 position="инженер",
                 department="",
                 rate=1,
-                salary=100,
+                monthly_wage=100,
                 allowed_contracts=["C999"],
             )
         ],

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 CONTRACT_TYPE_DEFAULTS: dict[str, dict[str, bool | int | None]] = {
     "goszakaz": {
-        "allow_monthly_carryover": False,
+        "allow_monthly_carryover": True,
         "months_after_end": 0,
         "spend_complete_days_before_end": 20,
         "allow_salary": True,

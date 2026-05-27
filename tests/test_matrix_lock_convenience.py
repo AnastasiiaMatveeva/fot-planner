@@ -59,10 +59,12 @@ def test_matrix_lock_by_fill(tmp_path: Path):
     assert dec.inflow_amount == 2_000_000
 
 
-def test_auto_spread_december_not_locked_by_default(tmp_path: Path):
+def test_default_inflow_at_start_not_locked(tmp_path: Path):
     path = tmp_path / "input.xlsx"
     create_template(path)
     ctx = load_context(path)
+    jan = next(mb for mb in ctx.contracts[0].monthly_budgets if mb.month == 1)
     dec = next(mb for mb in ctx.contracts[0].monthly_budgets if mb.month == 12)
-    assert dec.lock is False
-    assert dec.inflow_amount == pytest.approx(100_000, rel=0.01)
+    assert jan.lock is False
+    assert jan.inflow_amount == pytest.approx(1_200_000, rel=0.01)
+    assert dec.inflow_amount == pytest.approx(0.0, abs=0.01)

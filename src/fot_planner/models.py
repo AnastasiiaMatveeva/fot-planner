@@ -11,15 +11,14 @@ PaymentKind = Literal["salary", "allowance", "incentive"]
 
 @dataclass
 class Employee:
-    """Сотрудник: оклад, надбавка, стимулирующие, договоры, запреты."""
+    """Сотрудник: месячная зарплата (итого), стимулирующие, договоры, запреты."""
 
     id: str
     full_name: str
     position: str
     department: str
     rate: float
-    salary: float
-    allowance: float = 0.0
+    monthly_wage: float
     incentive: float = 0.0
     start_date: date | None = None
     end_date: date | None = None
@@ -78,7 +77,7 @@ class Contract:
     allow_incentive: bool = True
     months_after_end: int = 0  # 0 — до end_date; 2 — +2 мес.; -1 в Excel → 0 + освоение за 20 дней
     allow_monthly_carryover: bool = True  # перенос кассы между месяцами
-    require_salary_reserve: bool | None = None  # None — по settings (месяцев с ФОТ)
+    require_salary_reserve: bool | None = None  # legacy: читается из старых Excel
     # None — не требуем полное освоение; 0 — к сроку; N>0 — за N дней до срока
     spend_complete_days_before_end: int | None = None
     position_rules: list[ContractPositionRule] = field(default_factory=list)
@@ -87,7 +86,7 @@ class Contract:
 
 @dataclass
 class ContractLaborPlan:
-    """Плановая трудоёмкость: чел.-мес. с привязкой к группе должностей."""
+    """Строка плановой трудоёмкости по договору и должности/группе."""
 
     contract_id: str
     year: int
@@ -95,6 +94,41 @@ class ContractLaborPlan:
     position: str | None = None
     equivalence_group: str | None = None
     position_level: int | None = None
+    avg_monthly_labor_cost: float | None = None
+
+
+def labor_row_id(lp: ContractLaborPlan) -> str:
+    """Устойчивый идентификатор строки трудоёмкости."""
+    return f"{lp.contract_id}|{lp.position or ''}|{lp.equivalence_group or ''}"
+
+
+@dataclass
+class LaborPmAttribution:
+    """Распределение чел.-мес. сотрудника на строку трудоёмкости (для отчёта)."""
+
+    employee_id: str
+    contract_id: str
+    year: int
+    month: int
+    labor_row_id: str
+    position: str | None
+    equivalence_group: str | None
+    person_months: float
+
+
+@dataclass
+class LaborPaymentAttribution:
+    """Распределение суммы выплаты на строку трудоёмкости (для отчёта)."""
+
+    employee_id: str
+    contract_id: str
+    year: int
+    month: int
+    payment_kind: PaymentKind
+    labor_row_id: str
+    position: str | None
+    equivalence_group: str | None
+    amount: float
 
 
 @dataclass
@@ -123,22 +157,26 @@ class ManualProhibition:
 # Доли одного веса «административная сложность» по техническим компонентам (не настраиваются в Excel).
 ADMIN_COMPLEXITY_YEAR_LINK_FACTOR = 1.0
 ADMIN_COMPLEXITY_SCHEME_CHANGE_FACTOR = 0.5
+ADMIN_COMPLEXITY_FRAGMENT_FACTOR = 0.1
 
 
 @dataclass
 class OptimizationWeights:
     # Штрафы в целевой функции (не жёсткие ограничения)
-    uncovered_salary: float = 10_000.0
-    # Штраф за выплату сверх справочной надбавки/стимулирующей (компенсация срезанного оклада)
+    # Диагностический дефицит (allow_deficit): этап 1 — сумма; этап 2 — ранний дефицит
+    deficit_amount: float = 1_000_000_000.0
+    early_deficit: float = 10_000_000.0
+    # Штраф за вынужденный добор оклада через allowance/incentive (низкий salary_cap)
     salary_compensation_via_flex: float = 3_000.0
-    # Мягкий штраф смены договора оклада (только если max_contracts_per_year > 1)
+    # Мягкий штраф смены договора оклада
     salary_contract_switch: float = 500_000.0
     # Связи сотрудник–договор и смены схемы между месяцами
     admin_complexity: float = 200_000.0
-    # Штраф за каждый use по allowance/incentive (число фрагментов, не сумма выплаты)
+    # Legacy: читается из старых Excel, в оптимизаторе не используется (фрагменты — через admin_complexity).
     flex_fragment: float = 200_000.0
     plan_deviation: float = 10.0
-    uniform_spend_deviation: float = 10_000.0
+    # Штраф за 100% отклонения от идеала (actual−ideal)/ideal; см. optimizer.UNIFORM_SPEND_TOLERANCE_*.
+    uniform_spend_deviation: float = 50_000.0
     labor_deviation: float = 50_000.0
 
 
@@ -146,9 +184,11 @@ class OptimizationWeights:
 class SalaryStabilityRules:
     """Ограничения и допуски по окладу (salary)."""
 
-    max_contracts_per_year: int = 2
-    # Резерв и привязка окладов: если месяцев с поступлением в fot_matrix строго больше этого числа
+    # Legacy: опциональное жёсткое ограничение из старых Excel; None — выключено
+    max_contracts_per_year: int | None = None
+    # Legacy: читается из старых Excel (ограничение в модели снято)
     min_fot_months_for_salary_reserve: int = 6
+    # Допуск ±% по чел.-мес. и сумме строки трудоёмкости (все типы договоров)
     goz_labor_tolerance: float = 0.05
 
 
@@ -164,7 +204,9 @@ class PlanningContext:
     salary_stability: SalaryStabilityRules = field(default_factory=SalaryStabilityRules)
     labor_plans: list[ContractLaborPlan] = field(default_factory=list)
     baseline_plan: list[AllocationRecord] | None = None
-    # Физический перенос денег из будущего месяца в прошлый (xfer); по умолчанию выключен
+    # Диагностический режим: разрешить недоплату с большим штрафом (см. allow_deficit)
+    allow_deficit: bool = False
+    # Legacy: перенос из будущего в прошлое отключён; флаг читается из старых Excel
     allow_backward_reallocation: bool = False
 
 
@@ -184,24 +226,16 @@ class AllocationRecord:
 
 @dataclass
 class DeficitRecord:
-    """
-    Недоплата сотруднику за месяц (лист «дефициты» в Excel-результате).
-
-    В карточке сотрудника, например, оклад 100 000 ₽/мес. С договоров в плане
-    набралось только 70 000 ₽ — сюда пишут недостающие 30 000 ₽ (amount).
-    Это не минус на договоре, а разрыв между «сколько должен получить» и
-    «сколько удалось повесить на проекты».
-
-    В модели: Σ выплат с договоров за месяц + deficit = оклад + надбавка + стимулирующая
-    из справочника. Оптимизатор сильно штрафует deficit (вес uncovered_salary).
-    """
+    """Недоплата сотруднику за месяц (лист «дефициты»); только при allow_deficit."""
 
     employee_id: str
     year: int
-    month: int  # в каком месяце не хватило денег с договоров
-    amount: float  # рублей, которые не назначили с договоров
-    payment_kind: PaymentKind | None = None  # None — суммарный месячный дефицит
-    reasons: list[str] = field(default_factory=list)  # подсказки: нет кассы, запрет, резерв…
+    month: int
+    due_amount: float
+    paid_amount: float
+    amount: float
+    payment_kind: PaymentKind | None = None  # None — общий дефицит за месяц
+    reasons: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -234,11 +268,11 @@ class ContractBalanceRecord:
     closing_balance: float  # на конец месяца на «счёте» договора
     carried_forward: float = 0.0
     forfeited: float = 0.0
-    salary_reserve_required: float = 0.0
-    min_balance_required: float = 0.0  # не отдавать на более ранние месяцы (min_balance_matrix)
-    transfer_in: float = 0.0
-    transfer_out: float = 0.0
-    movable_balance: float = 0.0  # лимит переноса на месяцы до текущего
+    salary_reserve_required: float = 0.0  # legacy: в отчёте не выводится
+    min_balance_required: float = 0.0  # минимальный остаток на конец месяца (min_balance_matrix)
+    transfer_in: float = 0.0  # legacy: перенос назад отключён
+    transfer_out: float = 0.0  # legacy: перенос назад отключён
+    movable_balance: float = 0.0  # legacy: лимит переноса назад
     carryover_allowed: bool = True
 
     @property
@@ -249,7 +283,7 @@ class ContractBalanceRecord:
 
 @dataclass
 class MonthTransfer:
-    """Сколько денег перенесли с более позднего месяца на более ранний (для листа «переносы»)."""
+    """Legacy: перенос из будущего в прошлое; в новых отчётах не выводится."""
 
     contract_id: str
     year: int
@@ -271,3 +305,5 @@ class PlanningResult:
     objective_value: float  # значение целевой функции (сумма штрафов)
     solve_time_sec: float
     month_transfers: list[MonthTransfer] = field(default_factory=list)
+    labor_pm_attributions: list[LaborPmAttribution] = field(default_factory=list)
+    labor_payment_attributions: list[LaborPaymentAttribution] = field(default_factory=list)

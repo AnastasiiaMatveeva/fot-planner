@@ -72,8 +72,7 @@ def test_demo_team_solve(demo_team_path: Path, tmp_path: Path):
     assert sum(gos_spent_by_month.get(m, 0) for m in range(3, 8)) >= 1_400_000
     assert sum(gos_spent_by_month.get(m, 0) for m in range(8, 13)) < 5_000
 
-    xfer_total = sum(t.amount for t in result.month_transfers)
-    assert xfer_total < 5_000, f"ожидался carry, а не крупные xfer: {xfer_total}"
+    assert not result.month_transfers
 
     gos_mar = next(b for b in result.contract_balances if b.contract_id == "C_GOS" and b.month == 3)
     assert gos_mar.inflow == pytest.approx(1_500_000, rel=0.01)

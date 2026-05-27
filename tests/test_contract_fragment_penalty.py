@@ -14,8 +14,7 @@ def _fragment_workbook(
     path: Path,
     *,
     uniform_weight: float = 10_000,
-    flex_fragment_weight: float = 200_000,
-    admin_complexity_weight: float = 0,
+    admin_complexity_weight: float = 200_000,
     short_total_fot: float = 25_000,
     short_inflow_april: float = 25_000,
     long_total_fot: float = 275_000,
@@ -31,8 +30,7 @@ def _fragment_workbook(
                 "position": "инженер",
                 "department": "отдел",
                 "rate": 1.0,
-                "salary": 0,
-                "allowance": 25_000,
+                "зарплата": 25_000,
                 "incentive": 0,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
@@ -52,7 +50,7 @@ def _fragment_workbook(
                 "end_date": f"{year}-04-30",
                 "spend_deadline": "",
                 "total_fot": short_total_fot,
-                "allow_salary": True,
+                "allow_salary": False,
                 "allow_allowance": True,
                 "allow_incentive": True,
                 "months_after_end": 0,
@@ -103,9 +101,8 @@ def _fragment_workbook(
                 "weight_uncovered_salary": 1_000_000,
                 "weight_uniform_spend_deviation": uniform_weight,
                 "weight_labor_deviation": 0,
-                "weight_flex_fragment": flex_fragment_weight,
                 "weight_admin_complexity": admin_complexity_weight,
-                "max_salary_contracts_per_year": 0,
+                "max_salary_contracts_per_year": 1,
             }
         ]
     )
@@ -141,7 +138,7 @@ def test_allowance_not_split_across_contracts_when_one_is_enough(tmp_path: Path)
 def test_allowance_no_ruble_tail_split(tmp_path: Path):
     """Нельзя 24 999 + 1: второй фрагмент меньше 10% надбавки."""
     path = tmp_path / "tail.xlsx"
-    _fragment_workbook(path, flex_fragment_weight=200_000, admin_complexity_weight=0)
+    _fragment_workbook(path, admin_complexity_weight=200_000)
     result = run_planning(path, tmp_path / "out.xlsx", time_limit_sec=60)
     assert result.solver_status in ("OPTIMAL", "FEASIBLE")
     april = [

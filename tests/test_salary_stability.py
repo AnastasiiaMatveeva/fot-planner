@@ -1,4 +1,4 @@
-"""Стабильность оклада: квартал и не более 2 договоров в год."""
+"""Стабильность оклада: минимальный блок 3 месяца и не более N договоров в год."""
 
 from datetime import date
 from pathlib import Path
@@ -107,6 +107,45 @@ def _two_contract_workbook(path: Path) -> None:
         settings.to_excel(w, sheet_name="settings", index=False)
 
 
+def _ensure_adequate_fot(path: Path, monthly_wage: float = 100_000) -> None:
+    """Достаточно кассы и лимит ФОТ согласован с полным освоением (must_fully_spend_fot)."""
+    contracts = pd.read_excel(path, sheet_name="contracts")
+    contract_ids = contracts["id"].tolist()
+    n = max(len(contract_ids), 1)
+    annual_wage = monthly_wage * 12
+    per_contract_fot = annual_wage / n
+    monthly_inflow = max(monthly_wage * 1.5, monthly_wage + 50_000)
+    contracts["total_fot"] = per_contract_fot
+    fot_matrix = pd.DataFrame({"contract_id": contract_ids})
+    for m in range(1, 13):
+        fot_matrix[str(m)] = [monthly_inflow] * len(contract_ids)
+    with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
+        contracts.to_excel(w, sheet_name="contracts", index=False)
+        fot_matrix.to_excel(w, sheet_name="fot_matrix", index=False)
+
+
+def _set_contract_fot_and_inflow(
+    path: Path,
+    fot_by_contract: dict[str, float],
+    monthly_inflow: float | None = None,
+) -> None:
+    """Задать total_fot и равномерные поступления (для must_fully_spend_fot)."""
+    contracts = pd.read_excel(path, sheet_name="contracts")
+    contract_ids = contracts["id"].tolist()
+    for cid, fot in fot_by_contract.items():
+        contracts.loc[contracts["id"] == cid, "total_fot"] = fot
+    fot_matrix = pd.DataFrame({"contract_id": contract_ids})
+    for m in range(1, 13):
+        row = []
+        for cid in contract_ids:
+            total = float(fot_by_contract.get(cid, contracts.loc[contracts["id"] == cid, "total_fot"].iloc[0]))
+            row.append(monthly_inflow if monthly_inflow is not None else total / 12)
+        fot_matrix[str(m)] = row
+    with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
+        contracts.to_excel(w, sheet_name="contracts", index=False)
+        fot_matrix.to_excel(w, sheet_name="fot_matrix", index=False)
+
+
 def _salary_contracts_per_month(result, employee_id: str) -> dict[int, set[str]]:
     by_month: dict[int, set[str]] = {}
     for a in result.allocations:
@@ -126,6 +165,25 @@ def _quarter_switches(by_month: dict[int, set[str]], quarter: tuple[int, ...]) -
         if prev_c and cur_c and prev_c != cur_c:
             switches += 1
     return switches
+
+
+def _salary_change_months(by_month: dict[int, set[str]]) -> list[int]:
+    """Месяцы (2–12), в которых договор оклада сменился относительно прошлого месяца."""
+    changes: list[int] = []
+    for m in range(2, 13):
+        prev_c = frozenset(by_month.get(m - 1, set()))
+        cur_c = frozenset(by_month.get(m, set()))
+        if prev_c and cur_c and prev_c != cur_c:
+            changes.append(m)
+    return changes
+
+
+def _assert_min_salary_block(by_month: dict[int, set[str]], min_block: int = 3) -> None:
+    """Не более одной смены оклада в любом окне из min_block месяцев подряд."""
+    changes = _salary_change_months(by_month)
+    for start_m in range(2, 13 - min_block + 1):
+        window = set(range(start_m, start_m + min_block))
+        assert sum(1 for c in changes if c in window) <= 1
 
 
 def test_at_most_max_salary_contracts_per_year(tmp_path: Path):
@@ -279,3 +337,107 @@ def test_at_most_two_contracts_per_year(tmp_path: Path):
     for contracts in _salary_contracts_per_month(result, "E001").values():
         all_contracts |= contracts
     assert len(all_contracts) <= 2
+
+
+def test_salary_block_at_least_three_months(tmp_path: Path):
+    """Любой результат соблюдает правило: не более одной смены оклада в окне 3 месяцев."""
+    inp = tmp_path / "input.xlsx"
+    out = tmp_path / "result.xlsx"
+    _two_contract_workbook(inp)
+    _ensure_adequate_fot(inp)
+
+    result = run_planning(inp, out, time_limit_sec=90)
+    assert result.solver_status in ("OPTIMAL", "FEASIBLE")
+    _assert_min_salary_block(_salary_contracts_per_month(result, "E001"))
+
+
+def test_too_frequent_manual_salary_switches_infeasible(tmp_path: Path):
+    """Смена оклада в апреле и июне (блок < 3 мес.) — план невыполним."""
+    inp = tmp_path / "input.xlsx"
+    out = tmp_path / "result.xlsx"
+    year = date.today().year
+    _two_contract_workbook(inp)
+    _ensure_adequate_fot(inp)
+
+    manual = pd.DataFrame(
+        [
+            {
+                "employee_id": "E001",
+                "contract_id": "C001",
+                "year": year,
+                "month_from": 1,
+                "month_to": 3,
+                "payment_kind": "salary",
+            },
+            {
+                "employee_id": "E001",
+                "contract_id": "C002",
+                "year": year,
+                "month_from": 4,
+                "month_to": 5,
+                "payment_kind": "salary",
+            },
+            {
+                "employee_id": "E001",
+                "contract_id": "C001",
+                "year": year,
+                "month_from": 6,
+                "month_to": 12,
+                "payment_kind": "salary",
+            },
+        ]
+    )
+    with pd.ExcelWriter(inp, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
+        manual.to_excel(w, sheet_name="manual_assignments", index=False)
+
+    result = run_planning(inp, out, time_limit_sec=60)
+    assert result.solver_status == "INFEASIBLE"
+
+
+def test_salary_switches_april_and_july_feasible(tmp_path: Path):
+    """Смена в апреле и июле допустима: новый договор держится апрель–июнь."""
+    inp = tmp_path / "input.xlsx"
+    out = tmp_path / "result.xlsx"
+    year = date.today().year
+    _two_contract_workbook(inp)
+
+    manual = pd.DataFrame(
+        [
+            {
+                "employee_id": "E001",
+                "contract_id": "C001",
+                "year": year,
+                "month_from": 1,
+                "month_to": 3,
+                "payment_kind": "salary",
+            },
+            {
+                "employee_id": "E001",
+                "contract_id": "C002",
+                "year": year,
+                "month_from": 4,
+                "month_to": 6,
+                "payment_kind": "salary",
+            },
+            {
+                "employee_id": "E001",
+                "contract_id": "C001",
+                "year": year,
+                "month_from": 7,
+                "month_to": 12,
+                "payment_kind": "salary",
+            },
+        ]
+    )
+    with pd.ExcelWriter(inp, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
+        manual.to_excel(w, sheet_name="manual_assignments", index=False)
+
+    _set_contract_fot_and_inflow(inp, {"C001": 900_000, "C002": 300_000}, monthly_inflow=200_000)
+
+    result = run_planning(inp, out, time_limit_sec=60)
+    assert result.solver_status in ("OPTIMAL", "FEASIBLE")
+    by_month = _salary_contracts_per_month(result, "E001")
+    assert by_month.get(4) == {"C002"}
+    assert by_month.get(6) == {"C002"}
+    assert by_month.get(7) == {"C001"}
+    _assert_min_salary_block(by_month)

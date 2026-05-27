@@ -25,9 +25,8 @@ def _small_off_budget_workbook(path: Path) -> None:
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 1.0,
-                "salary": 90_000,
-                "allowance": 8_000,
-                "incentive": 12_000,
+                "monthly_wage": 75_000,
+                "incentive": 0,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -81,6 +80,7 @@ def _small_off_budget_workbook(path: Path) -> None:
                 "person_months": 4,
                 "month": "",
                 "position": "инженер",
+                "avg_monthly_labor_cost": 150_000,
             }
         ]
     )

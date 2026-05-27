@@ -1,4 +1,4 @@
-"""Резерв ФОТ под оставшуюся трудоёмкость (оклад = человеко-месяц)."""
+"""Касса покрывает будущие назначенные выплаты без отдельного резерва под трудоёмкость."""
 
 from datetime import date
 from pathlib import Path
@@ -8,7 +8,6 @@ import pytest
 
 from fot_planner.excel_io import create_template
 from fot_planner.planner import run_planning
-from fot_planner.spend_plan import build_spend_plan_fact_dataframe
 
 
 def _gos_early_spend_workbook(path: Path) -> None:
@@ -23,8 +22,7 @@ def _gos_early_spend_workbook(path: Path) -> None:
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 1.0,
-                "salary": 150_000,
-                "allowance": 50_000,
+                "monthly_wage": 150_000,
                 "incentive": 0,
                 "start_date": f"{year}-03-01",
                 "end_date": f"{year}-12-31",
@@ -67,6 +65,7 @@ def _gos_early_spend_workbook(path: Path) -> None:
                 "year": year,
                 "person_months": 10,
                 "position": "инженер",
+                "avg_monthly_labor_cost": 150_000,
             }
         ]
     )
@@ -91,8 +90,8 @@ def _gos_early_spend_workbook(path: Path) -> None:
         settings.to_excel(w, sheet_name="settings", index=False)
 
 
-def test_july_cumulative_spend_capped_by_labor_reserve(tmp_path: Path):
-    """При 7 чел.-мес. к июлю нельзя освоить весь ФОТ 1.5M (резерв 450k)."""
+def test_cash_balance_non_negative_with_carry(tmp_path: Path):
+    """Остаток кассы не уходит в минус; будущие выплаты учитываются через alloc."""
     inp = tmp_path / "in.xlsx"
     out = tmp_path / "out.xlsx"
     _gos_early_spend_workbook(inp)
@@ -100,24 +99,19 @@ def test_july_cumulative_spend_capped_by_labor_reserve(tmp_path: Path):
     result = run_planning(inp, out, time_limit_sec=120)
     assert result.solver_status in ("OPTIMAL", "FEASIBLE")
 
-    from fot_planner.excel_io import load_context
+    gos_balances = [b for b in result.contract_balances if b.contract_id == "C_GOS"]
+    for b in gos_balances:
+        assert b.closing_balance >= -0.01
 
-    ctx = load_context(inp)
-    report = build_spend_plan_fact_dataframe(ctx, result)
-    gos = report[report["договор"] == "C_GOS"]
-    active = gos[gos["активный месяц"] == "да"]
-
-    assert (active["порог выполнен"] == "да").all()
-
-    july = active[active["месяц"] == 7].iloc[0]
-    assert july["накопленный факт"] <= 1_050_000 + 500
+    mar = next(b for b in gos_balances if b.month == 3)
+    assert mar.inflow == pytest.approx(1_500_000, abs=1)
 
     spent_total = sum(a.amount for a in result.allocations if a.contract_id == "C_GOS")
     assert spent_total >= 1_500_000 - 2000
 
 
-def test_allowance_heavy_q1_infeasible_without_labor(tmp_path: Path):
-    """Ранний расход без оклада не закрывает трудоёмкость — модель режет или INFEASIBLE."""
+def test_heavy_q1_allowance_limited_by_cash(tmp_path: Path):
+    """Без отдельного резерва ранний расход ограничен только кассой и полной выплатой."""
     inp = tmp_path / "in.xlsx"
     out = tmp_path / "out.xlsx"
     _gos_early_spend_workbook(inp)
@@ -129,25 +123,28 @@ def test_allowance_heavy_q1_infeasible_without_labor(tmp_path: Path):
                 "employee_id": "E001",
                 "contract_id": "C_GOS",
                 "year": year,
-                "month": 3,
+                "month_from": 3,
+                "month_to": 3,
                 "payment_kind": "allowance",
-                "amount": 400_000,
+                "fixed_amount": 400_000,
             },
             {
                 "employee_id": "E001",
                 "contract_id": "C_GOS",
                 "year": year,
-                "month": 4,
+                "month_from": 4,
+                "month_to": 4,
                 "payment_kind": "allowance",
-                "amount": 400_000,
+                "fixed_amount": 400_000,
             },
             {
                 "employee_id": "E001",
                 "contract_id": "C_GOS",
                 "year": year,
-                "month": 5,
+                "month_from": 5,
+                "month_to": 5,
                 "payment_kind": "allowance",
-                "amount": 400_000,
+                "fixed_amount": 400_000,
             },
         ]
     )
@@ -161,6 +158,9 @@ def test_allowance_heavy_q1_infeasible_without_labor(tmp_path: Path):
             for a in result.allocations
             if a.contract_id == "C_GOS" and a.month in (3, 4, 5)
         )
-        assert mar_may <= 1_200_000 + 500
+        assert mar_may <= 1_500_000 + 500
+        for b in result.contract_balances:
+            if b.contract_id == "C_GOS":
+                assert b.closing_balance >= -0.01
     else:
         assert result.solver_status == "INFEASIBLE"

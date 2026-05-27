@@ -14,8 +14,13 @@ def test_template_uses_russian_columns_and_loader_understands_them(tmp_path):
     contracts = pd.read_excel(path, sheet_name="contracts")
 
     assert "фио" in employees.columns
-    assert "оклад" in employees.columns
+    assert "зарплата" in employees.columns
     assert "тип договора" in contracts.columns
+    assert "резерв оклада" not in contracts.columns
+
+    settings = pd.read_excel(path, sheet_name="settings")
+    assert "месяцев фот для резерва" not in settings.columns
+    assert "разрешить перенос назад" not in settings.columns
 
     labor = pd.DataFrame(
         [
@@ -24,6 +29,7 @@ def test_template_uses_russian_columns_and_loader_understands_them(tmp_path):
                 "год": year,
                 "трудоемкость": 12,
                 "должность": "инженер",
+                "средняя стоимость выполнения работ в месяц": 60000,
             }
         ]
     )
@@ -32,7 +38,7 @@ def test_template_uses_russian_columns_and_loader_understands_them(tmp_path):
 
     ctx = load_context(path)
     assert ctx.employees[0].full_name == "Иванов Иван Иванович"
-    assert ctx.employees[0].salary == 100_000
+    assert ctx.employees[0].monthly_wage == 100_000
     assert ctx.contracts[0].contract_type == "goszakaz"
     assert ctx.labor_plans[0].person_months == 12
     c = ctx.contracts[0]
