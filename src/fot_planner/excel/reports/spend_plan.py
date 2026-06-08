@@ -1,8 +1,8 @@
-"""Равномерный план освоения ФОТ и отчёт план–факт (не физический перенос денег)."""
+"""Отчёт «освоение план–факт»: касса и отклонение от равномерного плана освоения ФОТ."""
 
 from __future__ import annotations
 
-from fot_planner.fot_schedule import active_months_in_year, uniform_monthly_spend_target
+from fot_planner.fot_schedule import active_months_in_year, monthly_spend_targets
 from fot_planner.labor_rules import planned_labor_groups
 from fot_planner.models import PlanningContext, PlanningResult
 
@@ -24,23 +24,8 @@ def planned_labor_pm_total(ctx: PlanningContext, contract_id: str) -> float:
     return sum(pm for _pos, pm in planned_labor_groups(ctx, contract_id))
 
 
-def _sum_terms(terms):
-    terms = list(terms)
-    if not terms:
-        return 0
-    return sum(terms) if len(terms) > 1 else terms[0]
-
-
-def spent_or_zero(alloc, contract_id: str, month: int):
-    """Сумма выплат с договора в месяце (все виды) или 0 для Pyomo."""
-    terms = [alloc[k] for k in alloc if k[1] == contract_id and k[2] == month]
-    if not terms:
-        return 0
-    return _sum_terms(terms)
-
-
 def build_spend_plan_fact_dataframe(ctx: PlanningContext, result: PlanningResult):
-    """Лист «освоение_план_факт»: касса и отклонение от равномерного плана освоения."""
+    """Длинный формат для листа «освоение_план_факт»."""
     import pandas as pd
 
     balances_by_key = {(b.contract_id, b.month): b for b in result.contract_balances}
@@ -51,7 +36,7 @@ def build_spend_plan_fact_dataframe(ctx: PlanningContext, result: PlanningResult
         if not active or contract.total_fot <= 0:
             continue
 
-        ideal = uniform_monthly_spend_target(contract, ctx.year) or 0.0
+        targets = monthly_spend_targets(contract, ctx.year)
         plan_pm = planned_labor_pm_total(ctx, contract.id)
 
         cum_plan = 0.0
@@ -65,7 +50,7 @@ def build_spend_plan_fact_dataframe(ctx: PlanningContext, result: PlanningResult
             opening = balance.opening_balance if balance else 0.0
             closing = balance.closing_balance if balance else 0.0
 
-            ideal_m = ideal if is_active else 0.0
+            ideal_m = targets.get(m, 0.0) if is_active else 0.0
             deviation = actual - ideal_m
             cum_plan += ideal_m
             cum_actual += actual

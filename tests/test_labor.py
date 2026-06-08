@@ -8,7 +8,7 @@ from collections import defaultdict
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import SHEET_CONTRACT_LABOR, create_template
+from fot_planner.excel import SHEET_CONTRACT_LABOR, create_template
 from fot_planner.planner import run_planning
 
 
@@ -24,7 +24,6 @@ def _goz_with_labor(path: Path, plan_pm: float, positions: bool = True) -> None:
                 "department": "лаб",
                 "rate": 1.0,
                 "monthly_wage": 105000,
-                "incentive": 0,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -42,7 +41,6 @@ def _goz_with_labor(path: Path, plan_pm: float, positions: bool = True) -> None:
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 1_260_000,
                 "priority": 1,
                 "allow_salary": True,
@@ -50,8 +48,6 @@ def _goz_with_labor(path: Path, plan_pm: float, positions: bool = True) -> None:
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "months_after_end": 0,
-                "allow_monthly_carryover": False,
                 "require_salary_reserve": False,
             }
         ]

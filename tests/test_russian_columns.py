@@ -2,7 +2,7 @@ from datetime import date
 
 import pandas as pd
 
-from fot_planner.excel_io import create_template, load_context
+from fot_planner.excel import create_template, load_context
 
 
 def test_template_uses_russian_columns_and_loader_understands_them(tmp_path):
@@ -42,11 +42,11 @@ def test_template_uses_russian_columns_and_loader_understands_them(tmp_path):
     assert ctx.contracts[0].contract_type == "goszakaz"
     assert ctx.labor_plans[0].person_months == 12
     c = ctx.contracts[0]
-    assert len(c.monthly_budgets) == 12
     assert abs(sum(mb.inflow_amount for mb in c.monthly_budgets) - c.total_fot) < 0.01
+    assert c.monthly_budgets
 
 
-def test_contract_inherits_months_after_end_from_type(tmp_path):
+def test_empty_payment_deadlines_default_to_contract_end_date(tmp_path):
     path = tmp_path / "input.xlsx"
     create_template(path)
     year = date.today().year
@@ -60,12 +60,10 @@ def test_contract_inherits_months_after_end_from_type(tmp_path):
                 "тип договора": "off_budget",
                 "дата начала": f"{year}-01-01",
                 "дата окончания": f"{year}-12-31",
-                "срок освоения": "",
                 "фот": 1_000_000,
                 "оклад разрешен": True,
                 "надбавка разрешена": True,
                 "стимулирующая разрешена": True,
-                "месяцев после окончания": "",
                 "перенос остатков": "",
             }
         ]
@@ -80,4 +78,7 @@ def test_contract_inherits_months_after_end_from_type(tmp_path):
 
     ctx = load_context(path)
     c = next(x for x in ctx.contracts if x.id == "VB01")
-    assert c.months_after_end == 2
+    end = date(year, 12, 31)
+    assert c.salary_terms.payment_deadline == end
+    assert c.allowance_terms.payment_deadline == end
+    assert c.incentive_terms.payment_deadline == end

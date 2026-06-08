@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
 
 
@@ -22,9 +22,7 @@ def test_employee_paid_in_full_from_contracts(tmp_path: Path):
                 "position": "инженер",
                 "department": "отдел",
                 "rate": 1.0,
-                "salary": 100_000,
-                "allowance": 30_000,
-                "incentive": 0,
+                "monthly_wage": 130_000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -41,12 +39,10 @@ def test_employee_paid_in_full_from_contracts(tmp_path: Path):
                 "contract_type": "grant",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 1_560_000,
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": True,
-                "months_after_end": 0,
             }
         ]
     )

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from fot_planner.excel_io import create_template, load_context
+from fot_planner.excel import create_template, load_context
 from fot_planner.planner import run_planning
 
 
@@ -23,8 +23,7 @@ def mini_workbook(tmp_path: Path) -> Path:
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 1.0,
-                "salary": 100000,
-                "incentive": 0,
+                "monthly_wage": 100000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -36,8 +35,7 @@ def mini_workbook(tmp_path: Path) -> Path:
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 0.5,
-                "salary": 50000,
-                "incentive": 10000,
+                "monthly_wage": 60000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",

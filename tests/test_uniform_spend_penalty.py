@@ -6,8 +6,8 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
-from fot_planner.fot_schedule import uniform_monthly_spend_target
+from fot_planner.excel import create_template
+from fot_planner.fot_schedule import monthly_spend_targets
 from fot_planner.planner import run_planning
 
 
@@ -23,9 +23,7 @@ def _uniform_spend_workbook(path: Path, *, uniform_weight: float) -> None:
                 "position": "инженер",
                 "department": "отдел",
                 "rate": 1.0,
-                "salary": 100_000,
-                "allowance": 0,
-                "incentive": 0,
+                "monthly_wage": 100_000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -42,12 +40,10 @@ def _uniform_spend_workbook(path: Path, *, uniform_weight: float) -> None:
                 "contract_type": "minprom",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 1_200_000,
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": True,
-                "months_after_end": 0,
             }
         ]
     )
@@ -67,7 +63,7 @@ def _uniform_spend_workbook(path: Path, *, uniform_weight: float) -> None:
         [
             {
                 "year": year,
-                "weight_uncovered_salary": 1_000_000,
+                "weight_deficit_amount": 1_000_000,
                 "weight_salary_switch": 0,
                 "weight_uniform_spend_deviation": uniform_weight,
                 "weight_labor_deviation": 0,
@@ -84,14 +80,17 @@ def _uniform_spend_workbook(path: Path, *, uniform_weight: float) -> None:
         settings.to_excel(writer, sheet_name="settings", index=False)
 
 
-def test_uniform_monthly_spend_target_divides_active_months():
-    from fot_planner.excel_io import load_context
+def test_monthly_spend_targets_divides_single_inflow_over_active_months():
+    from fot_planner.excel import load_context
 
     path = Path(__file__).parent / "_tmp_uniform_target.xlsx"
     _uniform_spend_workbook(path, uniform_weight=50_000)
     ctx = load_context(path)
     c = ctx.contracts[0]
-    assert uniform_monthly_spend_target(c, ctx.year) == pytest.approx(100_000)
+    targets = monthly_spend_targets(c, ctx.year)
+    assert targets[1] == pytest.approx(100_000)
+    assert all(targets[m] == pytest.approx(100_000) for m in range(1, 13))
+    assert sum(targets.values()) == pytest.approx(1_200_000)
 
 
 def test_high_uniform_penalty_spreads_spend(tmp_path: Path):

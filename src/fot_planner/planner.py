@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fot_planner.excel_io import export_result, load_context
+from fot_planner.excel import export_result, load_context
 from fot_planner.models import ManualAssignment, PlanningResult
 from fot_planner.optimizer import solve
 from fot_planner.models import ConflictRecord

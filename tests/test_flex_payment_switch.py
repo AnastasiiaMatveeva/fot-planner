@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
 
 
@@ -22,9 +22,7 @@ def _flex_switch_workbook(path: Path, *, switch_weight: float) -> None:
                 "position": "инженер",
                 "department": "отдел",
                 "rate": 1.0,
-                "salary": 0,
-                "allowance": 20_000,
-                "incentive": 15_000,
+                "monthly_wage": 35_000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -41,12 +39,10 @@ def _flex_switch_workbook(path: Path, *, switch_weight: float) -> None:
                 "contract_type": "minprom",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 420_000,
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": True,
-                "months_after_end": 0,
             },
             {
                 "id": "C002",
@@ -55,12 +51,10 @@ def _flex_switch_workbook(path: Path, *, switch_weight: float) -> None:
                 "contract_type": "minprom",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 1,
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": True,
-                "months_after_end": 0,
             },
         ]
     )
@@ -85,7 +79,7 @@ def _flex_switch_workbook(path: Path, *, switch_weight: float) -> None:
         [
             {
                 "year": year,
-                "weight_uncovered_salary": 1_000_000,
+                "weight_deficit_amount": 1_000_000,
                 "weight_salary_switch": 0,
                 "weight_uniform_spend_deviation": 0,
                 "weight_admin_complexity": switch_weight,

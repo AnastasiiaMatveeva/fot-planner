@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 from fot_planner.models import PlanningContext, PlanningResult
+from fot_planner.payment_split import employee_monthly_payment_due
 from fot_planner.validation import employee_active_in_month
-
-
-def _monthly_total_due(employee) -> float:
-    return employee.monthly_wage + employee.incentive
 
 
 def build_deficits_detail_dataframe(ctx: PlanningContext, result: PlanningResult):
     import pandas as pd
 
-    from fot_planner.excel_io import _PAYMENT_KIND_RU, RU_MONTHS
+    from fot_planner.excel import PAYMENT_KIND_RU, RU_MONTHS
 
     rows: list[dict] = []
     for d in result.deficits:
@@ -24,7 +21,7 @@ def build_deficits_detail_dataframe(ctx: PlanningContext, result: PlanningResult
                 "сотрудник": name,
                 "табельный номер": d.employee_id,
                 "месяц": RU_MONTHS[d.month],
-                "вид выплаты": _PAYMENT_KIND_RU.get(d.payment_kind, "итого")
+                "вид выплаты": PAYMENT_KIND_RU.get(d.payment_kind, "итого")
                 if d.payment_kind
                 else "итого",
                 "требовалось выплатить": round(d.due_amount, 2),
@@ -39,7 +36,7 @@ def build_deficits_detail_dataframe(ctx: PlanningContext, result: PlanningResult
 def build_deficit_by_month_dataframe(ctx: PlanningContext, result: PlanningResult):
     import pandas as pd
 
-    from fot_planner.excel_io import RU_MONTHS
+    from fot_planner.excel.constants import RU_MONTHS
 
     employees_by_id = {e.id: e for e in ctx.employees}
     cum_deficit = 0.0
@@ -49,7 +46,7 @@ def build_deficit_by_month_dataframe(ctx: PlanningContext, result: PlanningResul
         total_need = 0.0
         for e in ctx.employees:
             if employee_active_in_month(e, ctx.year, m):
-                total_need += _monthly_total_due(e)
+                total_need += employee_monthly_payment_due(e)
 
         paid = sum(a.amount for a in result.allocations if a.month == m)
         month_deficit = sum(d.amount for d in result.deficits if d.month == m)

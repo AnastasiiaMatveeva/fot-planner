@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 from fot_planner.fot_schedule import active_months_in_year
 from fot_planner.labor_rules import labor_rows_for_contract, planned_labor_amount
 from fot_planner.models import PlanningContext, PlanningResult, labor_row_id
-from fot_planner.user_excel_report import (
+from fot_planner.excel.reports.user_report import (
     GROUP_DONE_COMMENT,
     MONTH_SHORT,
     PAYMENT_WITHOUT_PM_MSG,

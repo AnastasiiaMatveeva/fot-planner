@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
 
 
@@ -22,8 +22,7 @@ def _build_workbook(path: Path, *, allow_carryover: bool, budget_rows: list[dict
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 1.0,
-                "salary": 100000,
-                "incentive": 0,
+                "monthly_wage": 100000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -41,16 +40,12 @@ def _build_workbook(path: Path, *, allow_carryover: bool, budget_rows: list[dict
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 1_200_000,
                 "priority": 1,
                 "allow_salary": True,
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "months_after_end": 0,
-                "allow_monthly_carryover": allow_carryover,
-
                 "require_salary_reserve": False,
             }
         ]

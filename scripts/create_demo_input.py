@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fot_planner.excel_io import (
+from fot_planner.excel import (
     SHEET_CONTRACT_LABOR,
     SHEET_CONTRACT_POSITIONS,
     SHEET_CONTRACTS,
@@ -32,18 +32,53 @@ CONTRACT_SHEET_COLUMNS = [
     "тип договора",
     "дата начала",
     "дата окончания",
-    "срок освоения",
     "фот за год",
     "мин. фот (труд)",
     "мин. поступление/мес",
     "перенос остатков",
-    "месяцев после окончания",
-    "полное освоение за дней до срока",
+    "срок выплат оклада",
+    "срок выплат надбавки",
+    "срок выплат стимулирующей",
     "оклад разрешен",
     "надбавка разрешена",
     "стимулирующая разрешена",
     "резерв оклада",
 ]
+
+
+def _contract_row(
+    *,
+    code: str,
+    name: str,
+    number: str,
+    contract_type: str,
+    year: int,
+    end_date: str,
+    total_fot: float,
+    carryover: bool = False,
+    salary_payment_deadline: str | None = None,
+    allowance_payment_deadline: str | None = None,
+    incentive_payment_deadline: str | None = None,
+    **extra,
+) -> dict:
+    row = {
+        "код": code,
+        "название": name,
+        "номер": number,
+        "тип договора": contract_type,
+        "дата начала": f"{year}-01-01",
+        "дата окончания": end_date,
+        "фот": total_fot,
+        "перенос остатков": carryover,
+        "срок выплат оклада": salary_payment_deadline or end_date,
+        "срок выплат надбавки": allowance_payment_deadline or end_date,
+        "срок выплат стимулирующей": incentive_payment_deadline or end_date,
+        "оклад разрешен": True,
+        "надбавка разрешена": True,
+        "стимулирующая разрешена": True,
+    }
+    row.update(extra)
+    return row
 
 
 def _employees(year: int) -> list[dict]:
@@ -60,9 +95,7 @@ def _employees(year: int) -> list[dict]:
                 "должность": position,
                 "подразделение": "лаборатория" if is_lab else "инженерный отдел",
                 "ставка": rate,
-                "оклад": base_salary * rate,
-                "надбавка": 8_000 * rate,
-                "стимулирующая": 12_000 * rate,
+                "зарплата": (base_salary * rate) + (8_000 * rate) + (12_000 * rate),
                 "дата начала": f"{year}-01-01",
                 "дата окончания": "",
                 "разрешенные договоры": "",

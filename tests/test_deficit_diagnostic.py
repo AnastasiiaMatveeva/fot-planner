@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
 
 
@@ -29,7 +29,6 @@ def _workbook(
                 "department": "лаб",
                 "rate": 1.0,
                 "monthly_wage": wage,
-                "incentive": 0,
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
             }
@@ -43,12 +42,10 @@ def _workbook(
                 "contract_type": "grant",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": sum(monthly_inflow),
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": False,
-                "allow_monthly_carryover": True,
                 "require_salary_reserve": False,
             }
         ]
@@ -65,7 +62,7 @@ def _workbook(
             {
                 "year": year,
                 "allow_deficit": allow_deficit,
-                "weight_uncovered_salary": 1_000_000_000,
+                "weight_deficit_amount": 1_000_000_000,
             }
         ]
     )

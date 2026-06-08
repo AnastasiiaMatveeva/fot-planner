@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fot_planner.user_excel_report import (
+from fot_planner.excel.reports.user_report import (
     MONTH_COLS,
     SHEET_ADMIN,
     SHEET_BALANCES,

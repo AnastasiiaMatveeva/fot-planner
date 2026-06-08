@@ -12,10 +12,10 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PositionReferenceRow:
-    должность: str
-    группа_взаимозаменяемости: str
-    уровень: int | None
-    оклад_по_справочнику_за_1_ставку: float | None
+    position: str
+    equivalence_group: str
+    level: int | None
+    reference_salary_for_rate: float | None
 
 
 _DEFAULT_ROWS = [
@@ -115,7 +115,7 @@ def build_position_index(
     synonyms = synonyms or {}
     index: dict[str, PositionReferenceRow] = {}
     for row in rows:
-        index[normalize_position(row.должность)] = row
+        index[normalize_position(row.position)] = row
     for raw, canonical in synonyms.items():
         target = index.get(normalize_position(canonical))
         if target is not None:

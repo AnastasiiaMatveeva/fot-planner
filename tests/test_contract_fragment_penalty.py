@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
 
 
@@ -31,7 +31,6 @@ def _fragment_workbook(
                 "department": "отдел",
                 "rate": 1.0,
                 "зарплата": 25_000,
-                "incentive": 0,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -48,12 +47,10 @@ def _fragment_workbook(
                 "contract_type": "minprom",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-04-30",
-                "spend_deadline": "",
                 "total_fot": short_total_fot,
                 "allow_salary": False,
                 "allow_allowance": True,
                 "allow_incentive": True,
-                "months_after_end": 0,
             },
             {
                 "id": "C_LONG",
@@ -62,12 +59,10 @@ def _fragment_workbook(
                 "contract_type": "minprom",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": long_total_fot,
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": True,
-                "months_after_end": 0,
             },
         ]
     )
@@ -98,7 +93,7 @@ def _fragment_workbook(
         [
             {
                 "year": year,
-                "weight_uncovered_salary": 1_000_000,
+                "weight_deficit_amount": 1_000_000,
                 "weight_uniform_spend_deviation": uniform_weight,
                 "weight_labor_deviation": 0,
                 "weight_admin_complexity": admin_complexity_weight,

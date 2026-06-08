@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 
 YEAR = 2026
 
@@ -61,9 +61,8 @@ def create_demo_blocks(path: str | Path = "data/demo_blocks.xlsx") -> Path:
                 "должность": "ведущий инженер",
                 "подразделение": "РНД",
                 "ставка": 1.0,
-                "оклад": 180_000,
-                "надбавка": 0,
-                "стимулирующая": 0,
+                "зарплата": 180_000_
+
                 "дата начала": f"{YEAR}-01-01",
                 "дата окончания": "",
                 "разрешенные договоры": "C_BASE;C_GOS;C_MINPROM",
@@ -75,9 +74,8 @@ def create_demo_blocks(path: str | Path = "data/demo_blocks.xlsx") -> Path:
                 "должность": "инженер-помощник",
                 "подразделение": "РНД",
                 "ставка": 1.0,
-                "оклад": 120_000,
-                "надбавка": 0,
-                "стимулирующая": 0,
+                "зарплата": 120_000_
+
                 "дата начала": f"{YEAR}-01-01",
                 "дата окончания": "",
                 "разрешенные договоры": "C_BASE;C_GOS;C_MINPROM",
@@ -89,9 +87,8 @@ def create_demo_blocks(path: str | Path = "data/demo_blocks.xlsx") -> Path:
                 "должность": "аналитик",
                 "подразделение": "РНД",
                 "ставка": 1.0,
-                "оклад": 110_000,
-                "надбавка": 0,
-                "стимулирующая": 0,
+                "зарплата": 110_000_
+
                 "дата начала": f"{YEAR}-01-01",
                 "дата окончания": "",
                 "разрешенные договоры": "C_GRANT",

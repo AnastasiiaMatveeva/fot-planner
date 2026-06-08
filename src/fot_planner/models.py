@@ -7,11 +7,19 @@ from datetime import date
 from typing import Literal
 
 PaymentKind = Literal["salary", "allowance", "incentive"]
+PAYMENT_KINDS: tuple[PaymentKind, ...] = ("salary", "allowance", "incentive")
+
+
+@dataclass
+class PaymentKindTerms:
+    """Срок выплат по виду с договора (последний допустимый день)."""
+
+    payment_deadline: date | None = None
 
 
 @dataclass
 class Employee:
-    """Сотрудник: месячная зарплата (итого), стимулирующие, договоры, запреты."""
+    """Сотрудник: месячная зарплата (итого в месяц), договоры, запреты."""
 
     id: str
     full_name: str
@@ -19,7 +27,6 @@ class Employee:
     department: str
     rate: float
     monthly_wage: float
-    incentive: float = 0.0
     start_date: date | None = None
     end_date: date | None = None
     allowed_contracts: list[str] = field(default_factory=list)
@@ -70,18 +77,21 @@ class Contract:
     contract_type: str  # справочная метка (goszakaz, grant, off_budget…); правила — в колонках ниже
     start_date: date
     end_date: date
-    spend_deadline: date | None
     total_fot: float
     allow_salary: bool = True
     allow_allowance: bool = True
     allow_incentive: bool = True
-    months_after_end: int = 0  # 0 — до end_date; 2 — +2 мес.; -1 в Excel → 0 + освоение за 20 дней
-    allow_monthly_carryover: bool = True  # перенос кассы между месяцами
     require_salary_reserve: bool | None = None  # legacy: читается из старых Excel
-    # None — не требуем полное освоение; 0 — к сроку; N>0 — за N дней до срока
-    spend_complete_days_before_end: int | None = None
+    salary_terms: PaymentKindTerms = field(default_factory=PaymentKindTerms)
+    allowance_terms: PaymentKindTerms = field(default_factory=PaymentKindTerms)
+    incentive_terms: PaymentKindTerms = field(default_factory=PaymentKindTerms)
     position_rules: list[ContractPositionRule] = field(default_factory=list)
     monthly_budgets: list[ContractMonthlyBudget] = field(default_factory=list)
+
+    @property
+    def requires_full_fot_spend(self) -> bool:
+        """Договор с положительным ФОТ должен быть полностью освоен моделью."""
+        return self.total_fot > 0
 
 
 @dataclass

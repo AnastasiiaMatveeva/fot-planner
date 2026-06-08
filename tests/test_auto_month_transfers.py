@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import SHEET_MIN_BALANCE_MATRIX, create_template
+from fot_planner.excel import SHEET_MIN_BALANCE_MATRIX, create_template
 from fot_planner.planner import run_planning
 
 
@@ -26,7 +26,6 @@ def test_march_full_carry_to_april(tmp_path: Path):
                 "department": "лаб",
                 "rate": 1.0,
                 "monthly_wage": 50_000,
-                "incentive": 0,
                 "start_date": f"{year}-03-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -45,7 +44,6 @@ def test_march_full_carry_to_april(tmp_path: Path):
                 "total_fot": 500_000,
                 "allow_salary": True,
                 "allow_incentive": False,
-                "allow_monthly_carryover": True,
                 "require_salary_reserve": False,
             }
         ]
@@ -90,7 +88,6 @@ def test_min_balance_requires_closing_floor(tmp_path: Path):
                 "department": "лаб",
                 "rate": 1.0,
                 "monthly_wage": 100_000,
-                "incentive": 0,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -109,7 +106,6 @@ def test_min_balance_requires_closing_floor(tmp_path: Path):
                 "total_fot": 1_200_000,
                 "allow_salary": True,
                 "allow_incentive": False,
-                "allow_monthly_carryover": True,
                 "require_salary_reserve": False,
             }
         ]

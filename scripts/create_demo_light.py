@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fot_planner.excel_io import (
+from fot_planner.excel import (
     SHEET_CONTRACT_LABOR,
     SHEET_CONTRACT_POSITIONS,
     SHEET_CONTRACTS,
@@ -45,9 +45,8 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "должность": "инженер",
             "подразделение": "отдел НИОКР",
             "ставка": 1.0,
-            "оклад": 42_000,
-            "надбавка": 3_000,
-            "стимулирующая": 5_000,
+            "зарплата": 50_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -59,9 +58,8 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "должность": "инженер",
             "подразделение": "отдел НИОКР",
             "ставка": 1.0,
-            "оклад": 42_000,
-            "надбавка": 0,
-            "стимулирующая": 0,
+            "зарплата": 42_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -73,9 +71,8 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "должность": "инженер-лаборант",
             "подразделение": "лаборатория",
             "ставка": 0.5,
-            "оклад": 42_000,
-            "надбавка": 2_000,
-            "стимулирующая": 0,
+            "зарплата": 44_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -87,9 +84,8 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "должность": "инженер",
             "подразделение": "отдел НИОКР",
             "ставка": 1.0,
-            "оклад": 42_000,
-            "надбавка": 0,
-            "стимулирующая": 2_000,
+            "зарплата": 44_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -101,9 +97,8 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "должность": "инженер",
             "подразделение": "отдел НИОКР",
             "ставка": 1.0,
-            "оклад": 42_000,
-            "надбавка": 0,
-            "стимулирующая": 0,
+            "зарплата": 42_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -119,7 +114,6 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
         year=year,
         end_date=f"{year}-12-30",
         total_fot=580_000,
-        months_after_end=-1,
         carryover=True,
     )
     gos_row["дата начала"] = f"{year}-03-01"
@@ -134,7 +128,6 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             year=year,
             end_date=f"{year}-12-31",
             total_fot=1_064_000,
-            months_after_end=0,
             carryover=True,
         ),
         _contract_row(
@@ -145,7 +138,8 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             year=year,
             end_date=f"{year}-06-30",
             total_fot=600_000,
-            months_after_end=2,
+            allowance_payment_deadline=f"{year}-08-31",
+            incentive_payment_deadline=f"{year}-08-31",
             carryover=True,
         ),
     ]

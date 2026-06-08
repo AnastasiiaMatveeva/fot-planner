@@ -9,11 +9,14 @@ from datetime import date
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
 
-from fot_planner.fot_schedule import active_months_in_year, month_inflow_amount
+from fot_planner.fot_schedule import (
+    active_months_in_year,
+    min_balance_for_month,
+    month_inflow_amount,
+    monthly_spend_targets,
+)
 from fot_planner.labor_rules import (
     contract_has_labor_plan,
-    employee_compatible_with_contract_labor,
-    employee_compatible_with_labor_row,
     labor_payment_cap_per_pm,
     labor_payment_terms_for_row,
     labor_average_balance_gap,
@@ -21,13 +24,10 @@ from fot_planner.labor_rules import (
     planned_labor_amount,
 )
 from fot_planner.payment_split import (
-    employee_salary_due,
-    required_salary_on_contract,
-    salary_cap_on_contract,
+    employee_monthly_payment_due,
+    max_salary_amount_if_contract_used,
+    salary_position_options,
 )
-from fot_planner.spend_plan import spent_or_zero
-from fot_planner.reserve_rules import min_balance_for_month
-from fot_planner.spend_rules import must_fully_spend_fot, required_full_spend_month
 from fot_planner.models import (
     ADMIN_COMPLEXITY_FRAGMENT_FACTOR,
     ADMIN_COMPLEXITY_SCHEME_CHANGE_FACTOR,
@@ -46,7 +46,7 @@ from fot_planner.models import (
     PlanningResult,
     labor_row_id,
 )
-from fot_planner.contract_calendar import contract_allows_month
+from fot_planner.contract_calendar import contract_allows_month, contract_allows_payment_month
 from fot_planner.validation import employee_active_in_month
 
 PAYMENT_KINDS: tuple[PaymentKind, ...] = ("salary", "allowance", "incentive")
@@ -75,15 +75,6 @@ def _month_inflow(ctx: PlanningContext, contract_id: str, month: int) -> float:
     return 0.0
 
 
-def _month_budget(ctx: PlanningContext, contract_id: str, month: int) -> float:
-    """Для обратной совместимости: поступление без учёта переноса."""
-    return _month_inflow(ctx, contract_id, month)
-
-
-def _allows_carryover(contract) -> bool:
-    return contract.allow_monthly_carryover
-
-
 def _sum_terms(terms):
     terms = list(terms)
     if not terms:
@@ -96,40 +87,12 @@ def _value(obj) -> float:
     return 0.0 if val is None else float(val)
 
 
-def _contract_spent_expr(alloc, c_id: str, month: int):
-    terms = [alloc[k] for k in alloc if k[1] == c_id and k[2] == month]
+def _contract_month_spent(alloc, contract_id: str, month: int):
+    """Сумма выплат с договора в месяце (все виды) или 0 для Pyomo."""
+    terms = [alloc[k] for k in alloc if k[1] == contract_id and k[2] == month]
     if not terms:
-        return None
+        return 0
     return _sum_terms(terms)
-
-
-def _compatible_position_rules(contract, employee):
-    """Договорные позиции, которые сотрудник может закрыть по группе взаимозаменяемости."""
-    if not contract.position_rules:
-        return []
-
-    if employee.equivalence_group:
-        rules = [
-            pr
-            for pr in contract.position_rules
-            if pr.equivalence_group == employee.equivalence_group
-        ]
-        if rules:
-            return rules
-
-    return [pr for pr in contract.position_rules if pr.position == employee.position]
-
-
-def _employee_can_cover_contract_positions(contract, employee) -> bool:
-    """Если у договора есть contract_positions, выплаты разрешены только совместимым сотрудникам."""
-    if not contract.position_rules:
-        return True
-    return bool(_compatible_position_rules(contract, employee))
-
-
-def _contract_payment_cap(contract, employee) -> float | None:
-    """Потолок месячного оклада (salary) с договора; None — потолок не задан."""
-    return salary_cap_on_contract(contract, employee)
 
 
 def _use_or_zero(
@@ -152,27 +115,18 @@ def _contract_allows_payment(contract, kind: PaymentKind) -> bool:
     return contract.allow_incentive
 
 
-def _monthly_total_due(emp) -> float:
-    return emp.monthly_wage + emp.incentive
-
-
 def _payment_ub(employee, contract, kind: PaymentKind) -> float | None:
     """Верхняя граница alloc по виду выплаты; None — переменную не создавать."""
     if kind == "salary":
-        if employee.monthly_wage <= 0:
+        amount = max_salary_amount_if_contract_used(contract, employee)
+        if amount <= 0:
             return None
-        ub = employee.monthly_wage
-        cap = _contract_payment_cap(contract, employee)
-        if cap is not None:
-            ub = min(ub, cap)
-        return ub
-    if kind == "allowance":
+        return amount
+    if kind in FLEX_PAYMENT_KINDS:
         if employee.monthly_wage <= 0:
             return None
         return employee.monthly_wage
-    if employee.incentive <= 0:
-        return None
-    return employee.incentive
+    return None
 
 
 def _min_flex_fragment_when_used(ub: float) -> float:
@@ -291,7 +245,7 @@ def _employee_cumulative_due(employee, year: int, through_month: int) -> float:
     total = 0.0
     for m in range(1, through_month + 1):
         if employee_active_in_month(employee, year, m):
-            total += _monthly_total_due(employee)
+            total += employee_monthly_payment_due(employee)
     return total
 
 
@@ -550,22 +504,16 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             for m in months:
                 if not employee_active_in_month(e, year, m):
                     continue
-                if not contract_allows_month(c, year, m):
-                    continue
                 if e.allowed_contracts and c_id not in e.allowed_contracts:
                     continue
                 if c_id in e.forbidden_contracts:
                     continue
                 for kind in PAYMENT_KINDS:
+                    if not contract_allows_payment_month(c, year, m, kind):
+                        continue
                     if not _contract_allows_payment(c, kind):
                         continue
                     if _is_forbidden(ctx.manual_prohibitions, e.id, c_id, m, kind):
-                        continue
-                    if not _employee_can_cover_contract_positions(c, e):
-                        continue
-                    if c_id in contracts_with_labor and not employee_compatible_with_contract_labor(
-                        ctx, e, c_id
-                    ):
                         continue
                     ub = _payment_ub(e, c, kind)
                     if ub is None or ub <= 0:
@@ -575,17 +523,13 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                     alloc_keys.append(key)
                     alloc_ub[key] = ub
 
-    allow_carry_by_contract: dict[str, bool] = {}
-    close_keys: list[tuple[str, int]] = []
-    carry_keys: list[tuple[str, int]] = []
-    for c_id in contract_list:
-        c = contracts[c_id]
-        allow_carry = _allows_carryover(c)
-        allow_carry_by_contract[c_id] = allow_carry
-        if allow_carry:
-            close_keys.extend((c_id, m) for m in months)
-            carry_keys.extend((c_id, m) for m in months if m < 12)
+    close_keys: list[tuple[str, int]] = [
+        (c_id, m) for c_id in contract_list for m in months
+    ]
 
+    carry_keys: list[tuple[str, int]] = [
+        (c_id, m) for c_id in contract_list for m in months if m < 12
+    ]
     year_contract_keys = []
     for e in ctx.employees:
         for c_id in contract_list:
@@ -607,14 +551,20 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
 
     alloc_key_set = set(alloc_keys)
 
-    required_salary: dict[tuple[str, str], float] = {}
-    for e_id, c_id, _m, kind in alloc_keys:
-        if kind != "salary":
-            continue
-        pair = (e_id, c_id)
-        if pair in required_salary:
-            continue
-        required_salary[pair] = required_salary_on_contract(contracts[c_id], employees[e_id])
+    # Выбор позиции для salary: position_used[e, c, m, pr_idx] ∈ {0,1}
+    salary_alloc_keys = [k for k in alloc_keys if k[3] == "salary"]
+    salary_alloc_key_set = set(salary_alloc_keys)
+
+    salary_position_keys: list[tuple[str, str, int, int]] = []
+    salary_position_cap: dict[tuple[str, str, int, int], float] = {}
+    for (e_id, c_id, m, _kind) in salary_alloc_keys:
+        e = employees[e_id]
+        c = contracts[c_id]
+        for opt in salary_position_options(c, e):
+            k = (e_id, c_id, m, opt.position_rule_index)
+            salary_position_keys.append(k)
+            salary_position_cap[k] = opt.final_cap
+    salary_position_key_set = set(salary_position_keys)
 
     stab = ctx.salary_stability
     month_used_set = set(employee_contract_month_keys)
@@ -650,16 +600,18 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
     uniform_dev_keys: list[tuple[str, int]] = []
     uniform_penalty_params: dict[tuple[str, int], tuple[float, float, float]] = {}
     for c in ctx.contracts:
-        active = active_months_in_year(c, year)
-        if not active or c.total_fot <= 0:
-            continue
-        ideal = c.total_fot / len(active)
-        tolerance = max(
-            UNIFORM_SPEND_TOLERANCE_AMOUNT,
-            UNIFORM_SPEND_TOLERANCE_RATIO * ideal,
-        )
-        scale = max(ideal, 1.0)
-        for m in active:
+        targets = monthly_spend_targets(c, year)
+
+        for m, ideal in targets.items():
+            if ideal <= 0:
+                continue
+
+            tolerance = max(
+                UNIFORM_SPEND_TOLERANCE_AMOUNT,
+                UNIFORM_SPEND_TOLERANCE_RATIO * ideal,
+            )
+            scale = max(ideal, 1.0)
+
             key = (c.id, m)
             uniform_dev_keys.append(key)
             uniform_penalty_params[key] = (ideal, tolerance, scale)
@@ -679,8 +631,6 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
     for e in ctx.employees:
         for lp_idx in labor_row_indices:
             lp = ctx.labor_plans[lp_idx]
-            if not employee_compatible_with_labor_row(e, lp):
-                continue
             c_id = lp.contract_id
             c = contracts.get(c_id)
             if c is None:
@@ -709,7 +659,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
     salary_deficit_keys: list[tuple[str, int]] = []
     salary_compensation_keys: list[tuple[str, int]] = []
     for e in ctx.employees:
-        if employee_salary_due(e) <= 0:
+        if employee_monthly_payment_due(e) <= 0:
             continue
         for m in months:
             if not employee_active_in_month(e, year, m):
@@ -724,7 +674,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             for m in months:
                 if not employee_active_in_month(e, year, m):
                     continue
-                total_due = _monthly_total_due(e)
+                total_due = employee_monthly_payment_due(e)
                 if total_due <= 0:
                     continue
                 has_payment_vars = any(k[0] == e.id and k[2] == m for k in alloc_keys)
@@ -743,6 +693,8 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
         bounds=lambda _, e, c, m, k: (0, alloc_ub[(e, c, m, k)]),
     )
     model.use = pyo.Var(alloc_keys, domain=pyo.Binary)
+    if salary_position_keys:
+        model.salary_position_used = pyo.Var(salary_position_keys, domain=pyo.Binary)
     model.close = pyo.Var(close_keys, domain=pyo.NonNegativeReals)
     model.carry = pyo.Var(carry_keys, domain=pyo.NonNegativeReals)
     model.year_use = pyo.Var(year_contract_keys, domain=pyo.Binary)
@@ -807,6 +759,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
 
     alloc = model.alloc
     uses = model.use
+    pos_used = getattr(model, "salary_position_used", {})
     deficit = getattr(model, "deficit", {})
     salary_deficit = getattr(model, "salary_deficit", {})
     salary_compensation = getattr(model, "salary_compensation", {})
@@ -819,17 +772,41 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
         model.cons.add(alloc[key] <= ub * uses[key])
         e = employees[e_id]
         c = contracts[_c_id]
-        if kind == "salary" and employee_salary_due(e) > 0:
-            req = required_salary.get((e_id, _c_id), 0.0)
-            if allow_deficit:
-                model.cons.add(alloc[key] <= req * uses[key])
-            else:
-                model.cons.add(alloc[key] == req * uses[key])
+        if kind == "salary" and employee_monthly_payment_due(e) > 0:
+            # Salary ограничивается выбранной строкой contract_positions (см. salary_position_used).
+            # Добор полной зарплаты делается flex-выплатами.
+            model.cons.add(alloc[key] >= MIN_USE_ALLOC * uses[key])
         elif kind in FLEX_PAYMENT_KINDS:
             floor = _min_flex_fragment_when_used(ub)
             model.cons.add(alloc[key] >= floor * uses[key])
         else:
             model.cons.add(alloc[key] >= MIN_USE_ALLOC * uses[key])
+
+    if salary_position_keys:
+        # Связываем бинарный выбор позиции с использованием salary, и ограничиваем salary по выбранной позиции.
+        for (e_id, c_id, m, _kind) in salary_alloc_keys:
+            salary_key = (e_id, c_id, m, "salary")
+            if salary_key not in alloc_key_set:
+                continue
+            related_pos = [
+                pos_used[(e_id, c_id, m, pr_idx)]
+                for (ee, cc, mm, pr_idx) in salary_position_key_set
+                if ee == e_id and cc == c_id and mm == m
+            ]
+            if not related_pos:
+                # Нет вариантов позиций → salary запрещён.
+                model.cons.add(uses[salary_key] == 0)
+                continue
+            model.cons.add(_sum_terms(related_pos) == uses[salary_key])
+            model.cons.add(
+                alloc[salary_key]
+                <= _sum_terms(
+                    salary_position_cap[(e_id, c_id, m, pr_idx)]
+                    * pos_used[(e_id, c_id, m, pr_idx)]
+                    for (ee, cc, mm, pr_idx) in salary_position_key_set
+                    if ee == e_id and cc == c_id and mm == m
+                )
+            )
 
     for key in alloc_keys:
         e_id, c_id, m, kind = key
@@ -918,7 +895,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             model.cons.add(_sum_terms(pay_terms) <= cap_per_pm * labor_pm[pm_key])
 
     for e in ctx.employees:
-        total_due = _monthly_total_due(e)
+        total_due = employee_monthly_payment_due(e)
         if total_due <= 0:
             continue
         for m in months:
@@ -946,23 +923,18 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                 for k in alloc_keys
                 if k[0] == e.id and k[2] == m and k[3] == "salary"
             ]
-            if employee_salary_due(e) > 0 and salary_uses:
+            if employee_monthly_payment_due(e) > 0 and salary_uses:
                 model.cons.add(_sum_terms(salary_uses) == 1)
 
             if allow_deficit:
                 agg_key = (e.id, m)
                 if agg_key in deficit_agg_key_set:
                     model.cons.add(_sum_terms(all_allocs) + deficit[agg_key] == total_due)
+                # В режиме allow_deficit: salary_deficit отражает "недоплату" относительно того,
+                # что модель фактически решила выплатить окладом (не относительно заранее
+                # вычисленного required_salary, т.к. потолок зависит от выбранной позиции).
                 if agg_key in salary_deficit_key_set and salary_terms:
-                    salary_obligation = _sum_terms(
-                        required_salary.get((e.id, c_id), 0.0)
-                        * uses[(e.id, c_id, m, "salary")]
-                        for c_id in contract_list
-                        if (e.id, c_id, m, "salary") in alloc_key_set
-                    )
-                    model.cons.add(
-                        _sum_terms(salary_terms) + salary_deficit[agg_key] == salary_obligation
-                    )
+                    model.cons.add(salary_deficit[agg_key] == 0)
             else:
                 model.cons.add(_sum_terms(all_allocs) == total_due)
 
@@ -970,50 +942,41 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             if comp_key in salary_compensation_keys and salary_terms:
                 model.cons.add(
                     salary_compensation[comp_key]
-                    >= employee_salary_due(e) - _sum_terms(salary_terms)
+                    >= employee_monthly_payment_due(e) - _sum_terms(salary_terms)
                 )
 
     for c_id in contract_list:
         c = contracts[c_id]
-        allow_carry = allow_carry_by_contract.get(c_id, True)
         year_spent_terms = []
 
         for m in months:
-            spent_expr = spent_or_zero(alloc, c_id, m)
+            spent_expr = _contract_month_spent(alloc, c_id, m)
             year_spent_terms.append(spent_expr)
 
             inflow = _month_inflow(ctx, c_id, m)
             min_bal = min_balance_for_month(c, m)
 
-            if not allow_carry:
-                model.cons.add(spent_expr <= inflow)
-                if min_bal > 0:
-                    model.cons.add(inflow - spent_expr >= min_bal)
-                continue
-
             opening = 0 if m == 1 else model.carry[(c_id, m - 1)]
             model.cons.add(model.close[(c_id, m)] == opening + inflow - spent_expr)
+
             if min_bal > 0:
                 model.cons.add(model.close[(c_id, m)] >= min_bal)
+
             if m < 12:
                 model.cons.add(model.carry[(c_id, m)] == model.close[(c_id, m)])
+
 
         if year_spent_terms and c.total_fot > 0:
             model.cons.add(_sum_terms(year_spent_terms) <= c.total_fot)
 
-        if must_fully_spend_fot(c) and c.total_fot > 0:
-            last_m = required_full_spend_month(c, year)
-            if last_m is not None:
-                spend_by_deadline = [
-                    _contract_spent_expr(alloc, c_id, m)
-                    for m in range(1, last_m + 1)
-                    if contract_allows_month(c, year, m)
-                ]
-                spend_by_deadline = [t for t in spend_by_deadline if t is not None]
-                if spend_by_deadline:
-                    model.cons.add(
-                        _sum_terms(spend_by_deadline) >= c.total_fot
-                    )
+        if c.requires_full_fot_spend:
+            spend_full_fot = [
+                _contract_month_spent(alloc, c_id, m)
+                for m in months
+                if contract_allows_month(c, year, m)
+            ]
+            if spend_full_fot:
+                model.cons.add(_sum_terms(spend_full_fot) >= c.total_fot)
 
     for c_id in contract_list:
         c = contracts[c_id]
@@ -1118,7 +1081,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
         for key in uniform_dev_keys:
             ideal, tolerance, _scale = uniform_penalty_params[key]
             c_id, m = key
-            actual = spent_or_zero(alloc, c_id, m)
+            actual = _contract_month_spent(alloc, c_id, m)
             model.cons.add(
                 model.uniform_penalty_pos[key] >= actual - ideal - tolerance
             )
@@ -1450,7 +1413,6 @@ def _compute_balances(
         spent[(a.contract_id, a.month)] += a.amount
 
     for c in ctx.contracts:
-        allow_carry = _allows_carryover(c)
         opening = 0.0
 
         for m in range(1, 13):
@@ -1460,17 +1422,13 @@ def _compute_balances(
 
             if key in balance_close:
                 closing = _value(balance_close[key])
-            elif allow_carry:
+            else:
                 closing = opening + inflow - sp
-            else:
-                closing = inflow - sp
-
-            if allow_carry and key in carry_forward:
+            
+            if key in carry_forward:
                 carried = _value(carry_forward[key])
-            elif allow_carry:
-                carried = max(0.0, closing)
             else:
-                carried = 0.0
+                carried = max(0.0, closing)
 
             salary_reserve_req = 0.0
             min_bal = min_balance_for_month(c, m)
@@ -1491,17 +1449,15 @@ def _compute_balances(
                     transfer_in=0.0,
                     transfer_out=0.0,
                     movable_balance=round(max(0.0, closing - min_bal), 2),
-                    carryover_allowed=allow_carry,
+                    carryover_allowed=True,
                 )
             )
-            opening = carried if allow_carry else 0.0
+            opening = carried
     return records
 
 
 def _monthly_pool(ctx: PlanningContext, contract, month: int) -> float:
     """Доступно на месяц: входящий остаток + поступление (для пояснения дефицита)."""
-    if not _allows_carryover(contract):
-        return _month_inflow(ctx, contract.id, month)
     pool = 0.0
     for m in range(1, month + 1):
         pool += _month_inflow(ctx, contract.id, m)
@@ -1511,7 +1467,7 @@ def _monthly_pool(ctx: PlanningContext, contract, month: int) -> float:
 def _explain_deficit(ctx: PlanningContext, employee, month: int) -> list[str]:
     reasons: list[str] = []
     year = ctx.year
-    total_due = _monthly_total_due(employee)
+    total_due = employee_monthly_payment_due(employee)
     possible_month = 0.0
     possible_cumulative = 0.0
     for c in ctx.contracts:
@@ -1528,10 +1484,7 @@ def _explain_deficit(ctx: PlanningContext, employee, month: int) -> list[str]:
             continue
         inflow_m = _month_inflow(ctx, c.id, month)
         possible_month += inflow_m
-        if _allows_carryover(c):
-            possible_cumulative += _monthly_pool(ctx, c, month)
-        else:
-            possible_cumulative += inflow_m
+        possible_cumulative += _monthly_pool(ctx, c, month)
 
     if possible_month < total_due:
         reasons.append(

@@ -15,7 +15,8 @@ from fot_planner.labor_rules import (
 )
 from fot_planner.models import PlanningContext, PlanningResult, labor_row_id
 from fot_planner.optimizer import MIN_FLEX_FRAGMENT_AMOUNT
-from fot_planner.spend_plan import build_spend_plan_fact_dataframe
+from fot_planner.payment_split import employee_monthly_payment_due
+from fot_planner.excel.reports.spend_plan import build_spend_plan_fact_dataframe
 from fot_planner.validation import employee_active_in_month
 
 FLEX_KINDS = frozenset({"allowance", "incentive"})
@@ -53,7 +54,7 @@ RU_MONTHS: dict[int, str] = {
 MONTH_RU_TO_SHORT = {v: MONTH_SHORT[k] for k, v in RU_MONTHS.items()}
 MONTH_RU_TO_NUM = {v: k for k, v in RU_MONTHS.items()}
 
-_PAYMENT_KIND_RU = {
+PAYMENT_KIND_RU = {
     "salary": "оклад",
     "allowance": "надбавка",
     "incentive": "стимулирующая",
@@ -77,10 +78,6 @@ SHEET_SPLIT = "Проверка дробления выплат"
 SHEET_SCHEME = "Смены схемы выплат"
 SHEET_DEFICITS = "Дефициты"
 SHEET_DEFICIT_MONTH = "Дефицит по месяцам"
-
-
-def _monthly_total_due(employee) -> float:
-    return employee.monthly_wage + employee.incentive
 
 
 def _single_message(message: str) -> pd.DataFrame:
@@ -362,7 +359,7 @@ def _split_payment_issues(ctx: PlanningContext, result: PlanningResult) -> list[
                 "раздел": "Дробление выплат",
                 "объект": emp.full_name if emp else eid,
                 "месяц": RU_MONTHS[month],
-                "описание проблемы": f"{_PAYMENT_KIND_RU[kind]} разбита между {len(contracts)} договорами",
+                "описание проблемы": f"{PAYMENT_KIND_RU[kind]} разбита между {len(contracts)} договорами",
                 "отклонение / сумма": len(contracts),
                 "куда смотреть": SHEET_SPLIT,
                 "рекомендация": "Проверить необходимость дробления",
@@ -598,7 +595,7 @@ def build_employee_payments_matrix(ctx: PlanningContext, result: PlanningResult)
         deficit: dict[int, float] = {}
         for m in range(1, 13):
             if employee_active_in_month(e, ctx.year, m):
-                due[m] = _monthly_total_due(e)
+                due[m] = employee_monthly_payment_due(e)
             paid[m] = sum(a.amount for a in result.allocations if a.employee_id == e.id and a.month == m)
             deficit[m] = sum(d.amount for d in result.deficits if d.employee_id == e.id and d.month == m)
 
@@ -871,9 +868,9 @@ def _labor_summary_row_dict(
 
 
 def _build_labor_summary_rows(ctx: PlanningContext, result: PlanningResult) -> list[dict]:
-    from fot_planner.excel_io import _labor_by_row_dataframe
+    from fot_planner.excel.export_tables import labor_by_row_dataframe
 
-    df = _labor_by_row_dataframe(ctx, result)
+    df = labor_by_row_dataframe(ctx, result)
     if df.empty:
         return []
 
@@ -1052,7 +1049,7 @@ def _detail_attribution_status(
             continue
         attr = _attributed_on_contract(result, employee_id, contract_id, month, kind)
         if paid > attr + 0.02:
-            label = _PAYMENT_KIND_RU[kind]
+            label = PAYMENT_KIND_RU[kind]
             return (
                 "выплата не полностью отнесена на трудоёмкость",
                 f"{label}: выплачено {round(paid, 0):,.0f}, отнесено {round(attr, 0):,.0f}".replace(
@@ -1271,7 +1268,7 @@ def build_plan_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> p
                 "месяц": RU_MONTHS[a.month],
                 "договор": a.contract_id,
                 "название договора": c.name if c else "",
-                "вид выплаты": _PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
+                "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
                 "сумма": round(a.amount, 2),
                 "источник решения": a.source,
                 "зафиксировано": "да" if a.is_manual else "нет",
@@ -1318,7 +1315,7 @@ def build_labor_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> 
                 "договор": rec.contract_id,
                 "название договора": c.name if c else "",
                 "месяц": RU_MONTHS[rec.month],
-                "вид выплаты": _PAYMENT_KIND_RU.get(rec.payment_kind, rec.payment_kind),
+                "вид выплаты": PAYMENT_KIND_RU.get(rec.payment_kind, rec.payment_kind),
                 "выплачено всего": round(total, 2),
                 "сумма, отнесенная на трудоёмкость": round(attr, 2),
                 "должность строки": rec.position or "",
@@ -1347,7 +1344,7 @@ def build_labor_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> 
                     "договор": a.contract_id,
                     "название договора": c.name if c else "",
                     "месяц": RU_MONTHS[a.month],
-                    "вид выплаты": _PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
+                    "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
                     "выплачено всего": round(a.amount, 2),
                     "сумма, отнесенная на трудоёмкость": round(attributed_sum.get(key, 0.0), 2),
                     "должность строки": "",
@@ -1368,9 +1365,9 @@ def build_labor_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> 
 
 
 def build_position_control_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
-    from fot_planner.excel_io import _position_control_dataframe
+    from fot_planner.excel.export_tables import position_control_dataframe
 
-    df = _position_control_dataframe(ctx, result)
+    df = position_control_dataframe(ctx, result)
     if df.empty:
         return _single_message("Нет назначений для контроля")
     rename = {
@@ -1387,7 +1384,7 @@ def build_position_control_sheet(ctx: PlanningContext, result: PlanningResult) -
 
 
 def build_admin_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
-    from fot_planner.admin_complexity_report import build_admin_complexity_dataframe
+    from fot_planner.excel.reports.admin_complexity import build_admin_complexity_dataframe
 
     summary, scheme, _fragments = build_admin_complexity_dataframe(ctx, result)
     if summary.empty:
@@ -1460,7 +1457,7 @@ def build_split_check_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.
                 "табельный номер": eid,
                 "ФИО": emp.full_name if emp else "",
                 "месяц": RU_MONTHS[month],
-                "вид выплаты": _PAYMENT_KIND_RU[kind],
+                "вид выплаты": PAYMENT_KIND_RU[kind],
                 "общая сумма выплаты": round(total, 2),
                 "количество договоров": len(contracts),
                 "договоры и суммы": parts,
@@ -1493,7 +1490,7 @@ def build_split_check_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.
 
 
 def build_scheme_changes_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
-    from fot_planner.admin_complexity_report import build_admin_complexity_dataframe
+    from fot_planner.excel.reports.admin_complexity import build_admin_complexity_dataframe
 
     _summary, scheme, _f = build_admin_complexity_dataframe(ctx, result)
     if scheme.empty:
@@ -1534,7 +1531,7 @@ def build_scheme_changes_sheet(ctx: PlanningContext, result: PlanningResult) -> 
 
 
 def build_deficits_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
-    from fot_planner.deficit_report import build_deficits_detail_dataframe
+    from fot_planner.excel.reports.deficit import build_deficits_detail_dataframe
 
     df = build_deficits_detail_dataframe(ctx, result)
     if df.empty:
@@ -1573,7 +1570,7 @@ def build_deficit_by_month_matrix(ctx: PlanningContext, result: PlanningResult) 
     cum_def: dict[int, float] = {}
     for m in range(1, 13):
         total_need = sum(
-            _monthly_total_due(e)
+            employee_monthly_payment_due(e)
             for e in ctx.employees
             if employee_active_in_month(e, ctx.year, m)
         )

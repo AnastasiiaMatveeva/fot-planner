@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fot_planner.excel_io import create_template, load_context
+from fot_planner.excel import create_template, load_context
 from fot_planner.planner import run_planning
 
 

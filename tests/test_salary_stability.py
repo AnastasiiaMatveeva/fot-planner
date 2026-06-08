@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
 
 
@@ -22,8 +22,7 @@ def _two_contract_workbook(path: Path) -> None:
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 1.0,
-                "salary": 100000,
-                "incentive": 0,
+                "monthly_wage": 100000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -41,14 +40,12 @@ def _two_contract_workbook(path: Path) -> None:
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 2_000_000,
                 "priority": 1,
                 "allow_salary": True,
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "months_after_end": 0,
             },
             {
                 "id": "C002",
@@ -58,14 +55,12 @@ def _two_contract_workbook(path: Path) -> None:
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 2_000_000,
                 "priority": 2,
                 "allow_salary": True,
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "months_after_end": 0,
             },
         ]
     )
@@ -91,7 +86,7 @@ def _two_contract_workbook(path: Path) -> None:
         [
             {
                 "year": year,
-                "weight_uncovered_salary": 1_000_000,
+                "weight_deficit_amount": 1_000_000,
                 "max_salary_contracts_per_year": 2,
                 "weight_salary_switch": 500_000,
                 "weight_admin_complexity": 200_000,
@@ -108,7 +103,7 @@ def _two_contract_workbook(path: Path) -> None:
 
 
 def _ensure_adequate_fot(path: Path, monthly_wage: float = 100_000) -> None:
-    """Достаточно кассы и лимит ФОТ согласован с полным освоением (must_fully_spend_fot)."""
+    """Достаточно кассы и лимит ФОТ согласован с полным освоением (requires_full_fot_spend)."""
     contracts = pd.read_excel(path, sheet_name="contracts")
     contract_ids = contracts["id"].tolist()
     n = max(len(contract_ids), 1)
@@ -129,7 +124,7 @@ def _set_contract_fot_and_inflow(
     fot_by_contract: dict[str, float],
     monthly_inflow: float | None = None,
 ) -> None:
-    """Задать total_fot и равномерные поступления (для must_fully_spend_fot)."""
+    """Задать total_fot и равномерные поступления (для requires_full_fot_spend)."""
     contracts = pd.read_excel(path, sheet_name="contracts")
     contract_ids = contracts["id"].tolist()
     for cid, fot in fot_by_contract.items():
@@ -228,14 +223,12 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 600_000,
                 "priority": 1,
                 "allow_salary": True,
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "months_after_end": 0,
             },
             {
                 "id": "V03",
@@ -245,14 +238,12 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 2_000_000,
                 "priority": 2,
                 "allow_salary": True,
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "months_after_end": 0,
             },
             {
                 "id": "V10",
@@ -262,14 +253,12 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 2_000_000,
                 "priority": 3,
                 "allow_salary": True,
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "months_after_end": 0,
             },
         ]
     )
@@ -293,7 +282,7 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
         [
             {
                 "year": year,
-                "weight_uncovered_salary": 1_000_000,
+                "weight_deficit_amount": 1_000_000,
                 "max_salary_contracts_per_year": 3,
                 "weight_salary_switch": 500_000,
             }
@@ -301,7 +290,7 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
     )
 
     employees = pd.read_excel(inp, sheet_name="employees")
-    employees.loc[0, "incentive"] = 50_000
+    employees.loc[0, "monthly_wage"] = float(employees.loc[0, "monthly_wage"]) + 50_000
 
     with pd.ExcelWriter(inp, engine="openpyxl", mode="a", if_sheet_exists="replace") as w:
         employees.to_excel(w, sheet_name="employees", index=False)

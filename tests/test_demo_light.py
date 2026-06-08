@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from fot_planner.excel_io import load_context
+from fot_planner.excel import load_context
 from fot_planner.planner import run_planning
-from fot_planner.reserve_rules import is_long_fot_project
 from fot_planner.validation import contract_allows_month
 
 import sys
@@ -37,8 +36,6 @@ def test_demo_light_solve_covers_main_rules(demo_light_path: Path, tmp_path: Pat
 
     year = date.today().year
     ctx = load_context(demo_light_path)
-    grant_contract = next(c for c in ctx.contracts if c.id == "C_GRANT")
-
     # ГОЗ: нет выплат до марта
     assert not any(a.contract_id == "C_GOS" and a.month < 3 for a in result.allocations)
     gos_contract = next(c for c in ctx.contracts if c.id == "C_GOS")
@@ -51,9 +48,6 @@ def test_demo_light_solve_covers_main_rules(demo_light_path: Path, tmp_path: Pat
 
     # Физических переносов из будущего в прошлое нет
     assert not result.month_transfers
-
-    # Грант — длинный ФОТ (12 месяцев поступлений → резерв в модели, если не выключен явно)
-    assert is_long_fot_project(grant_contract, min_fot_months=6)
 
     # Ручная привязка E001 → грант в Q1
     e001_q1 = [

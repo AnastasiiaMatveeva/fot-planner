@@ -1,13 +1,13 @@
-"""Расчёт срока полного освоения ФОТ."""
+"""Сроки выплат по виду и requires_full_fot_spend."""
 
 from datetime import date
 
-from fot_planner.models import Contract
-from fot_planner.spend_rules import (
-    must_fully_spend_fot,
-    required_full_spend_month,
-    spend_deadline_date,
+from fot_planner.contract_calendar import (
+    contract_allows_payment_month,
+    payment_deadline_date,
+    payment_month_count,
 )
+from fot_planner.models import Contract, PaymentKindTerms
 
 
 def _contract(**kwargs) -> Contract:
@@ -18,51 +18,36 @@ def _contract(**kwargs) -> Contract:
         contract_type="grant",
         start_date=date(2026, 1, 1),
         end_date=date(2026, 6, 30),
-        spend_deadline=None,
         total_fot=1_000_000,
-        months_after_end=0,
-        allow_monthly_carryover=True,
+        salary_terms=PaymentKindTerms(payment_deadline=date(2026, 6, 30)),
+        allowance_terms=PaymentKindTerms(payment_deadline=date(2026, 6, 30)),
+        incentive_terms=PaymentKindTerms(payment_deadline=date(2026, 6, 30)),
     )
     defaults.update(kwargs)
     return Contract(**defaults)
 
 
-def test_spend_deadline_explicit_overrides():
-    c = _contract(spend_deadline=date(2026, 5, 15), months_after_end=2)
-    assert spend_deadline_date(c) == date(2026, 5, 15)
-
-
-def test_spend_deadline_goz_20_days_before_end():
+def test_payment_deadline_explicit_per_kind():
     c = _contract(
-        contract_type="goszakaz",
-        end_date=date(2026, 6, 30),
-        months_after_end=0,
-        spend_complete_days_before_end=20,
+        salary_terms=PaymentKindTerms(payment_deadline=date(2026, 11, 1)),
+        allowance_terms=PaymentKindTerms(payment_deadline=date(2027, 2, 2)),
     )
-    assert spend_deadline_date(c) == date(2026, 6, 10)
+    assert payment_deadline_date(c, "salary") == date(2026, 11, 1)
+    assert payment_deadline_date(c, "allowance") == date(2027, 2, 2)
 
 
-def test_spend_deadline_off_budget_plus_two_months():
+def test_salary_stops_after_deadline_month():
     c = _contract(
-        contract_type="off_budget",
-        end_date=date(2026, 6, 30),
-        months_after_end=2,
-        spend_complete_days_before_end=None,
+        salary_terms=PaymentKindTerms(payment_deadline=date(2026, 6, 30)),
+        allowance_terms=PaymentKindTerms(payment_deadline=date(2026, 8, 31)),
     )
-    assert spend_deadline_date(c) == date(2026, 8, 28)
+    year = 2026
+    assert contract_allows_payment_month(c, year, 6, "salary")
+    assert not contract_allows_payment_month(c, year, 7, "salary")
+    assert contract_allows_payment_month(c, year, 7, "allowance")
+    assert payment_month_count(c, year, "allowance") == 8
 
 
-def test_spend_deadline_grant_end_date():
-    c = _contract(months_after_end=0, spend_complete_days_before_end=None)
-    assert spend_deadline_date(c) == date(2026, 6, 30)
-
-
-def test_must_fully_spend_when_total_fot_positive():
-    assert must_fully_spend_fot(_contract(total_fot=100)) is True
-    assert must_fully_spend_fot(_contract(total_fot=0)) is False
-
-
-def test_required_full_spend_month_from_deadline():
-    c = _contract(end_date=date(2026, 8, 31), months_after_end=0)
-    assert required_full_spend_month(c, 2026) == 8
-
+def test_requires_full_fot_spend_when_total_fot_positive():
+    assert _contract(total_fot=100).requires_full_fot_spend is True
+    assert _contract(total_fot=0).requires_full_fot_spend is False

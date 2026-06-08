@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import SHEET_MIN_BALANCE_MATRIX, create_template, load_context
+from fot_planner.excel import SHEET_MIN_BALANCE_MATRIX, create_template, load_context
 from fot_planner.planner import run_planning
 
 
@@ -22,8 +22,7 @@ def _grant_workbook(path: Path, monthly_inflow: float, min_balance_jan: float = 
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 1.0,
-                "salary": 100000,
-                "incentive": 0,
+                "monthly_wage": 100000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -41,15 +40,12 @@ def _grant_workbook(path: Path, monthly_inflow: float, min_balance_jan: float = 
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 1_200_000,
                 "priority": 1,
                 "allow_salary": True,
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "months_after_end": 0,
-                "allow_monthly_carryover": True,
                 "opening_balance": 0,
                 "require_salary_reserve": False,
                 "min_monthly_balance": "",

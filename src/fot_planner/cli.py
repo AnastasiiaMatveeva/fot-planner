@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
 
 

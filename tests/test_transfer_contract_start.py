@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template, load_context
+from fot_planner.excel import create_template, load_context
 from fot_planner.planner import run_planning
 from fot_planner.validation import contract_allows_month
 
@@ -23,9 +23,7 @@ def _goszakaz_march_start_workbook(path: Path) -> None:
                 "position": "инженер",
                 "department": "лаб",
                 "rate": 1.0,
-                "salary": 100_000,
-                "allowance": 0,
-                "incentive": 0,
+                "monthly_wage": 100_000,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -42,13 +40,10 @@ def _goszakaz_march_start_workbook(path: Path) -> None:
                 "contract_type": "goszakaz",
                 "start_date": f"{year}-03-01",
                 "end_date": f"{year}-12-30",
-                "spend_deadline": "",
                 "total_fot": 1_000_000,
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": True,
-                "months_after_end": 0,
-                "allow_monthly_carryover": True,
                 "require_salary_reserve": False,
             }
         ]
@@ -75,7 +70,7 @@ def _goszakaz_march_start_workbook(path: Path) -> None:
         [
             {
                 "year": year,
-                "weight_uncovered_salary": 1_000_000,
+                "weight_deficit_amount": 1_000_000,
                 "max_salary_contracts_per_year": 2,
                 "goz_labor_tolerance": 0.05,
             }
@@ -131,7 +126,6 @@ def test_march_inflow_carries_forward(tmp_path: Path):
                 "department": "лаб",
                 "rate": 1.0,
                 "monthly_wage": 150_000,
-                "incentive": 0,
                 "start_date": f"{year}-03-01",
                 "end_date": f"{year}-12-31",
                 "allowed_contracts": "",
@@ -151,7 +145,6 @@ def test_march_inflow_carries_forward(tmp_path: Path):
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": False,
-                "allow_monthly_carryover": True,
                 "require_salary_reserve": False,
             }
         ]

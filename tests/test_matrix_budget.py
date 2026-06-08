@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fot_planner.excel_io import SHEET_FOT_MATRIX, create_template, load_context
+from fot_planner.excel import SHEET_FOT_MATRIX, create_template, load_context
 
 
 def test_matrix_budget_and_lock(tmp_path: Path):

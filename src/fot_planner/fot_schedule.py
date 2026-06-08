@@ -1,4 +1,4 @@
-"""Физические поступления ФОТ и равномерный план освоения (отдельно от кассы)."""
+"""Поступления ФОТ, минимальный остаток кассы и план освоения по интервалам."""
 
 from __future__ import annotations
 
@@ -7,16 +7,53 @@ from fot_planner.contract_calendar import contract_allows_month
 
 
 def active_months_in_year(contract: Contract, year: int) -> list[int]:
-    """Месяцы года, когда договор доступен для выплат (начало … конец + months_after_end)."""
+    """Месяцы года, когда договор доступен для выплат (по срокам трёх видов)."""
     return [m for m in range(1, 13) if contract_allows_month(contract, year, m)]
 
 
-def uniform_monthly_spend_target(contract: Contract, year: int) -> float | None:
-    """Идеальное равномерное освоение ФОТ в активном месяце (total_fot / число месяцев)."""
-    months = active_months_in_year(contract, year)
-    if not months or contract.total_fot <= 0:
-        return None
-    return contract.total_fot / len(months)
+def monthly_spend_targets(contract: Contract, year: int) -> dict[int, float]:
+    """
+    Равномерный план освоения по кассовым интервалам:
+    каждое поступление распределяется от месяца поступления
+    до месяца перед следующим поступлением.
+    Последнее поступление — до конца активного периода договора.
+    """
+    active_months = active_months_in_year(contract, year)
+    if not active_months:
+        return {}
+
+    targets: dict[int, float] = {m: 0.0 for m in active_months}
+
+    inflows = sorted(
+        (mb.month, mb.inflow_amount)
+        for mb in contract.monthly_budgets
+        if mb.year == year and mb.inflow_amount > 0
+    )
+
+    if not inflows:
+        return targets
+
+    for idx, (start_month, amount) in enumerate(inflows):
+        if idx + 1 < len(inflows):
+            next_inflow_month = inflows[idx + 1][0]
+            end_month = next_inflow_month - 1
+        else:
+            end_month = max(active_months)
+
+        spend_months = [
+            m for m in active_months
+            if start_month <= m <= end_month
+        ]
+
+        if not spend_months:
+            continue
+
+        portion = amount / len(spend_months)
+
+        for m in spend_months:
+            targets[m] += portion
+
+    return targets
 
 
 def default_fot_inflow_at_start(contracts: list[Contract], year: int) -> None:
@@ -41,17 +78,20 @@ def default_fot_inflow_at_start(contracts: list[Contract], year: int) -> None:
         ]
 
 
-def spread_fot_by_active_months(contracts: list[Contract], year: int) -> None:
-    """Устарело: равномерное разнесение смешивало план и кассу. Используйте default_fot_inflow_at_start."""
-    default_fot_inflow_at_start(contracts, year)
-
-
 def month_inflow_amount(contract: Contract, year: int, month: int) -> float:
     """Поступление в месяце из monthly_budgets (0, если месяц не задан)."""
     for mb in contract.monthly_budgets:
         if mb.year == year and mb.month == month:
             return mb.inflow_amount
-    return 0.0 if contract.monthly_budgets else 0.0
+    return 0.0
+
+
+def min_balance_for_month(contract: Contract, month: int) -> float:
+    """Мин. остаток на конец месяца из min_balance_matrix (0, если не задан)."""
+    for mb in contract.monthly_budgets:
+        if mb.month == month and mb.min_balance is not None:
+            return mb.min_balance
+    return 0.0
 
 
 def cumulative_inflow_through_month(contract: Contract, year: int, through_month: int) -> float:

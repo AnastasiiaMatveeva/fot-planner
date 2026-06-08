@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from demo_business.scenario import DemoScenario
 
 
@@ -50,9 +50,7 @@ def write_demo_workbook(scenario: DemoScenario, path: str | Path) -> Path:
                 "должность": e.position,
                 "подразделение": e.department,
                 "ставка": 1.0,
-                "оклад": e.salary,
-                "надбавка": e.allowance,
-                "стимулирующая": 0,
+                "зарплата": e.salary + e.allowance,
                 "дата начала": f"{scenario.year}-01-01",
                 "дата окончания": "",
                 "разрешенные договоры": "",

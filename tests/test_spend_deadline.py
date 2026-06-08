@@ -6,16 +6,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
-from fot_planner.spend_rules import required_full_spend_month
 
 
 def _small_off_budget_workbook(path: Path) -> None:
     create_template(path)
     year = date.today().year
     end = date(year, 6, 30)
-    spend_deadline = date(year, 8, 31)
+    flex_deadline = date(year, 8, 31)
 
     employees = pd.DataFrame(
         [
@@ -26,7 +25,6 @@ def _small_off_budget_workbook(path: Path) -> None:
                 "department": "лаб",
                 "rate": 1.0,
                 "monthly_wage": 75_000,
-                "incentive": 0,
                 "start_date": f"{year}-01-01",
                 "end_date": "",
                 "allowed_contracts": "",
@@ -44,7 +42,9 @@ def _small_off_budget_workbook(path: Path) -> None:
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": end.isoformat(),
-                "spend_deadline": spend_deadline.isoformat(),
+                "salary_payment_deadline": end.isoformat(),
+                "allowance_payment_deadline": flex_deadline.isoformat(),
+                "incentive_payment_deadline": flex_deadline.isoformat(),
                 "total_fot": 600_000,
                 "priority": 1,
                 "allow_salary": True,
@@ -52,8 +52,6 @@ def _small_off_budget_workbook(path: Path) -> None:
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": True,
-                "months_after_end": 2,
-                "allow_monthly_carryover": True,
             }
         ]
     )

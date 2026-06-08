@@ -6,7 +6,7 @@ from fot_planner.fot_schedule import (
     active_months_in_year,
     default_fot_inflow_at_start,
 )
-from fot_planner.models import Contract
+from fot_planner.models import Contract, PaymentKindTerms
 
 
 def test_default_inflow_at_contract_start():
@@ -18,10 +18,10 @@ def test_default_inflow_at_contract_start():
         contract_type="off_budget",
         start_date=date(year, 3, 1),
         end_date=date(year, 6, 30),
-        spend_deadline=None,
         total_fot=600_000,
-        months_after_end=2,
-        allow_monthly_carryover=True,
+        salary_terms=PaymentKindTerms(payment_deadline=date(year, 6, 30)),
+        allowance_terms=PaymentKindTerms(payment_deadline=date(year, 8, 31)),
+        incentive_terms=PaymentKindTerms(payment_deadline=date(year, 8, 31)),
     )
     default_fot_inflow_at_start([contract], year)
     months = active_months_in_year(contract, year)
@@ -34,7 +34,7 @@ def test_default_inflow_at_contract_start():
 
 
 def test_template_without_fot_matrix_inflow_at_start(tmp_path):
-    from fot_planner.excel_io import create_template, load_context
+    from fot_planner.excel import create_template, load_context
     from fot_planner.validation import contract_allows_month
 
     path = tmp_path / "input.xlsx"

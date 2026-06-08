@@ -5,7 +5,7 @@ import pytest
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
-from fot_planner.excel_io import SHEET_FOT_MATRIX, create_template, load_context
+from fot_planner.excel import SHEET_FOT_MATRIX, create_template, load_context
 
 
 def test_matrix_lock_by_asterisk(tmp_path: Path):

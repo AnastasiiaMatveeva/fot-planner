@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from fot_planner.excel_io import create_template
+from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
 
 
@@ -23,7 +23,6 @@ def _gos_early_spend_workbook(path: Path) -> None:
                 "department": "лаб",
                 "rate": 1.0,
                 "monthly_wage": 150_000,
-                "incentive": 0,
                 "start_date": f"{year}-03-01",
                 "end_date": f"{year}-12-31",
                 "allowed_contracts": "",
@@ -40,13 +39,10 @@ def _gos_early_spend_workbook(path: Path) -> None:
                 "contract_type": "goszakaz",
                 "start_date": f"{year}-03-01",
                 "end_date": f"{year}-12-31",
-                "spend_deadline": "",
                 "total_fot": 1_500_000,
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": False,
-                "months_after_end": 0,
-                "allow_monthly_carryover": True,
                 "require_salary_reserve": False,
             }
         ]
@@ -73,7 +69,7 @@ def _gos_early_spend_workbook(path: Path) -> None:
         [
             {
                 "year": year,
-                "weight_uncovered_salary": 1_000_000,
+                "weight_deficit_amount": 1_000_000,
                 "weight_uniform_spend_deviation": 0,
                 "max_salary_contracts_per_year": 1,
                 "goz_labor_tolerance": 0.01,

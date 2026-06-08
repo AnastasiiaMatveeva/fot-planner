@@ -6,28 +6,24 @@ from datetime import date
 
 from fot_planner.contract_calendar import contract_allows_month
 from fot_planner.contract_types import KNOWN_CONTRACT_TYPES
-from fot_planner.fot_schedule import active_months_in_year, cumulative_inflow_through_month
+from fot_planner.fot_schedule import cumulative_inflow_through_month
 from fot_planner.labor_rules import (
-    contract_has_labor_plan,
-    employee_compatible_with_contract_labor,
-    is_goz_contract,
-    planned_labor_groups,
+    labor_rows_for_contract,
+    planned_labor_amount,
 )
-from fot_planner.models import ConflictRecord, PlanningContext
-from fot_planner.reserve_rules import fot_inflow_month_count
-from fot_planner.spend_rules import must_fully_spend_fot, payment_extension_months, required_full_spend_month
+from fot_planner.contract_calendar import (
+    latest_payment_month,
+    payment_deadline_date,
+    payment_kind_enabled,
+    payment_month_count,
+)
+from fot_planner.models import PAYMENT_KINDS, ConflictRecord, PlanningContext
 
-
-def _employee_can_cover_contract_positions(contract, employee) -> bool:
-    if not contract.position_rules:
-        return True
-    if employee.equivalence_group:
-        if any(
-            pr.equivalence_group == employee.equivalence_group for pr in contract.position_rules
-        ):
-            return True
-    return any(pr.position == employee.position for pr in contract.position_rules)
-
+_KIND_LABELS = {
+    "salary": "оклад",
+    "allowance": "надбавка",
+    "incentive": "стимулирующая",
+}
 
 
 def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
@@ -44,11 +40,11 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                     employee_id=e.id,
                 )
             )
-        if e.monthly_wage < 0 or e.incentive < 0:
+        if e.monthly_wage < 0:
             conflicts.append(
                 ConflictRecord(
                     code="INVALID_PAYMENT",
-                    message=f"Сотрудник {e.id}: отрицательная зарплата или стимулирующая",
+                    message=f"Сотрудник {e.id}: отрицательная зарплата",
                     employee_id=e.id,
                 )
             )
@@ -101,15 +97,45 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                     contract_id=c.id,
                 )
             )
-    for c in ctx.contracts:
-        for mb in c.monthly_budgets:
-            if mb.lock and mb.inflow_amount <= 0:
+        for kind in PAYMENT_KINDS:
+            if not payment_kind_enabled(c, kind):
+                continue
+            terms = c.salary_terms if kind == "salary" else (
+                c.allowance_terms if kind == "allowance" else c.incentive_terms
+            )
+            if terms.payment_deadline is None:
                 conflicts.append(
                     ConflictRecord(
-                        code="LOCKED_BUDGET_EMPTY",
+                        code="MISSING_PAYMENT_DEADLINE",
                         message=(
-                            f"Договор {c.id}, месяц {mb.month}: lock=yes, "
-                            f"но inflow_amount не задан"
+                            f"Договор {c.id}: укажите срок выплат "
+                            f"({_KIND_LABELS[kind]}) — колонка "
+                            f"«срок выплат {_KIND_LABELS[kind]}»"
+                        ),
+                        contract_id=c.id,
+                    )
+                )
+            elif payment_month_count(c, ctx.year, kind) <= 0:
+                conflicts.append(
+                    ConflictRecord(
+                        code="EMPTY_PAYMENT_WINDOW",
+                        message=(
+                            f"Договор {c.id}: нет месяцев в {ctx.year} для выплат "
+                            f"({_KIND_LABELS[kind]}) до "
+                            f"{payment_deadline_date(c, kind).isoformat()}"
+                        ),
+                        contract_id=c.id,
+                    )
+                )
+    for c in ctx.contracts:
+        for mb in c.monthly_budgets:
+            if mb.inflow_amount < 0:
+                conflicts.append(
+                    ConflictRecord(
+                        code="INVALID_BUDGET_INFLOW",
+                        message=(
+                            f"Договор {c.id}, месяц {mb.month}: "
+                            f"отрицательное поступление ({mb.inflow_amount})"
                         ),
                         contract_id=c.id,
                         month=mb.month,
@@ -117,6 +143,19 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                 )
 
     for e in ctx.employees:
+        if e.monthly_wage > 0 and (
+            e.reference_salary_for_rate is None or e.reference_salary_for_rate <= 0
+        ):
+            conflicts.append(
+                ConflictRecord(
+                    code="MISSING_ORG_SALARY_CAP_WARNING",
+                    message=(
+                        f"Сотрудник {e.id}: нет оклада по справочнику должностей "
+                        f"(организационный потолок оклада) — salary может быть 0"
+                    ),
+                    employee_id=e.id,
+                )
+            )
         if e.position and e.equivalence_group is None:
             conflicts.append(
                 ConflictRecord(
@@ -128,11 +167,24 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
 
     employee_groups = {e.equivalence_group for e in ctx.employees if e.equivalence_group}
     for c in ctx.contracts:
+        if c.allow_salary and not any(
+            pr.max_monthly_payment is not None for pr in c.position_rules
+        ):
+            conflicts.append(
+                ConflictRecord(
+                    code="MISSING_SALARY_CAP_WARNING",
+                    message=(
+                        f"Договор {c.id}: разрешён оклад, но нет потолка в contract_positions "
+                        f"(«макс выплата») — salary с договора будет 0"
+                    ),
+                    contract_id=c.id,
+                )
+            )
         for pr in c.position_rules:
             if pr.position and pr.equivalence_group is None:
                 conflicts.append(
                     ConflictRecord(
-                        code="UNKNOWN_CONTRACT_POSITION",
+                        code="UNKNOWN_CONTRACT_POSITION_WARNING",
                         message=(
                             f"Договор {c.id}: должность {pr.position!r} из contract_positions "
                             f"не найдена в справочнике должностей"
@@ -140,15 +192,14 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                         contract_id=c.id,
                     )
                 )
-        required_groups = {pr.equivalence_group for pr in c.position_rules if pr.equivalence_group}
-        for group in required_groups:
+        for group in {pr.equivalence_group for pr in c.position_rules if pr.equivalence_group}:
             if group not in employee_groups:
                 conflicts.append(
                     ConflictRecord(
-                        code="NO_EMPLOYEE_FOR_POSITION_GROUP",
+                        code="NO_EMPLOYEE_FOR_POSITION_GROUP_WARNING",
                         message=(
                             f"Договор {c.id}: есть договорная позиция группы {group!r}, "
-                            f"но нет сотрудников этой группы"
+                            f"но нет сотрудников этой группы в справочнике"
                         ),
                         contract_id=c.id,
                     )
@@ -188,7 +239,7 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
         if lp.position and lp.equivalence_group is None:
             conflicts.append(
                 ConflictRecord(
-                    code="UNKNOWN_LABOR_POSITION",
+                    code="UNKNOWN_LABOR_POSITION_WARNING",
                     message=(
                         f"Договор {lp.contract_id}: должность {lp.position!r} из contract_labor "
                         f"не найдена в справочнике должностей"
@@ -199,7 +250,7 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
         if lp.equivalence_group and lp.equivalence_group not in employee_groups:
             conflicts.append(
                 ConflictRecord(
-                    code="NO_EMPLOYEE_FOR_LABOR_GROUP",
+                    code="NO_EMPLOYEE_FOR_LABOR_GROUP_WARNING",
                     message=(
                         f"Договор {lp.contract_id}: задана трудоёмкость по группе "
                         f"{lp.equivalence_group!r}, но нет сотрудников этой группы"
@@ -210,7 +261,7 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
         if lp.person_months > 0 and (lp.avg_monthly_labor_cost is None or lp.avg_monthly_labor_cost <= 0):
             conflicts.append(
                 ConflictRecord(
-                    code="MISSING_AVG_LABOR_COST",
+                    code="MISSING_AVG_LABOR_COST_WARNING",
                     message=(
                         f"Договор {lp.contract_id}: для строки трудоёмкости "
                         f"({lp.position or lp.equivalence_group or 'без должности'}) "
@@ -244,96 +295,26 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
             )
 
     for c in ctx.contracts:
-        if not contract_has_labor_plan(ctx, c.id):
-            continue
-        for e in ctx.employees:
-            if e.allowed_contracts and c.id not in e.allowed_contracts:
-                continue
-            if c.id in e.forbidden_contracts:
-                continue
-            could_use = any(
-                employee_active_in_month(e, ctx.year, m)
-                and contract_allows_month(c, ctx.year, m)
-                for m in range(1, 13)
+        if c.total_fot > 0:
+            expected_labor_cost = sum(
+                planned_labor_amount(lp)
+                for _idx, lp in labor_rows_for_contract(ctx, c.id)
             )
-            if not could_use:
-                continue
-            if not _employee_can_cover_contract_positions(c, e):
-                continue
-            if employee_compatible_with_contract_labor(ctx, e, c.id):
-                continue
-            conflicts.append(
-                ConflictRecord(
-                    code="LABOR_INCOMPATIBLE_EMPLOYEE",
-                    message=(
-                        f"Договор {c.id}: задана трудоёмкость, но сотрудник {e.id} "
-                        f"({e.full_name}) не совместим ни с одной строкой contract_labor"
-                    ),
-                    employee_id=e.id,
-                    contract_id=c.id,
-                )
-            )
-
-    for c in ctx.contracts:
-        plan_pm = sum(pm for _pos, pm in planned_labor_groups(ctx, c.id))
-        if plan_pm > 0 and c.total_fot > 0:
-            cost_per_pm = c.total_fot / plan_pm
-            min_pay = min(
-                (e.monthly_wage + e.incentive) * e.rate
-                for e in ctx.employees
-                if e.rate > 0
-            )
-            if cost_per_pm < min_pay * 0.25:
+            if expected_labor_cost > c.total_fot + 0.01:
                 conflicts.append(
                     ConflictRecord(
-                        code="LOW_COST_PER_PM_WARNING",
+                        code="FOT_BELOW_PLANNED_LABOR_COST_WARNING",
                         message=(
-                            f"Договор {c.id}: стоимость 1 чел.-мес. ({cost_per_pm:.0f}) "
-                            f"мала относительно выплат сотрудников"
-                        ),
-                        contract_id=c.id,
-                    )
-                )
-        if (
-            is_goz_contract(c)
-            and plan_pm > 0
-            and c.total_fot > 0
-        ):
-            active = active_months_in_year(c, ctx.year)
-            max_pm = sum(
-                e.rate
-                for e in ctx.employees
-                if e.rate > 0 and contract_allows_month(c, ctx.year, active[-1] if active else 12)
-            )
-            if plan_pm > len(active) * max_pm + 0.01:
-                conflicts.append(
-                    ConflictRecord(
-                        code="LABOR_CAPACITY_WARNING",
-                        message=(
-                            f"Договор {c.id} (ГОЗ): план {plan_pm:.1f} чел.-мес. "
-                            f"может не набраться доступными сотрудниками"
+                            f"Договор {c.id}: по трудоёмкости ожидается "
+                            f"{expected_labor_cost:.0f} ₽, лимит ФОТ {c.total_fot:.0f} ₽ — "
+                            f"возможно, ФОТ недостаточен для заданной трудоёмкости"
                         ),
                         contract_id=c.id,
                     )
                 )
 
-        if not c.allow_monthly_carryover and c.total_fot > 0:
-            inflow_months = fot_inflow_month_count(c)
-            if inflow_months == 1 and len(active_months_in_year(c, ctx.year)) > 1:
-                conflicts.append(
-                    ConflictRecord(
-                        code="CARRYOVER_DISABLED_WARNING",
-                        message=(
-                            f"Договор {c.id}: перенос остатков выключен, "
-                            f"но поступление в одном месяце при {len(active_months_in_year(c, ctx.year))} "
-                            f"активных — возможна нерешаемость"
-                        ),
-                        contract_id=c.id,
-                    )
-                )
-
-        if must_fully_spend_fot(c) and c.total_fot > 0:
-            last_m = required_full_spend_month(c, ctx.year)
+        if c.requires_full_fot_spend:
+            last_m = latest_payment_month(c, ctx.year)
             if last_m is not None:
                 cum_inflow = cumulative_inflow_through_month(c, ctx.year, last_m)
                 if cum_inflow + 0.01 < c.total_fot:
@@ -341,8 +322,10 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                         ConflictRecord(
                             code="FOT_INFLOW_SHORTFALL_WARNING",
                             message=(
-                                f"Договор {c.id}: поступления до срока освоения "
-                                f"({cum_inflow:.0f} ₽) меньше лимита ФОТ ({c.total_fot:.0f} ₽)"
+                                f"Договор {c.id}: к последнему разрешённому месяцу "
+                                f"выплат ({last_m}) поступает {cum_inflow:.0f} ₽ из "
+                                f"{c.total_fot:.0f} ₽ ФОТ. Полное освоение ФОТ до срока "
+                                f"выплат может быть невозможно"
                             ),
                             contract_id=c.id,
                             year=ctx.year,

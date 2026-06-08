@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fot_planner.excel_io import (
+from fot_planner.excel import (
     SHEET_CONTRACT_LABOR,
     SHEET_CONTRACT_POSITIONS,
     SHEET_CONTRACTS,
@@ -25,7 +25,7 @@ from fot_planner.excel_io import (
     SHEET_SETTINGS,
 )
 
-from fot_planner.excel_io import _format_workbook
+from fot_planner.excel import _format_workbook
 
 from create_demo_input import (
     _contracts_sheet_dataframe,
@@ -53,9 +53,8 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "должность": "ведущий инженер",
             "подразделение": "НИОКР",
             "ставка": 1.0,
-            "оклад": 150_000,
-            "надбавка": 30_000,
-            "стимулирующая": 0,
+            "зарплата": 180_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -67,9 +66,8 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "должность": "инженер-помощник",
             "подразделение": "НИОКР",
             "ставка": 1.0,
-            "оклад": 90_000,
-            "надбавка": 30_000,
-            "стимулирующая": 0,
+            "зарплата": 120_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -81,9 +79,8 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "должность": "аналитик",
             "подразделение": "аналитика",
             "ставка": 1.0,
-            "оклад": 80_000,
-            "надбавка": 30_000,
-            "стимулирующая": 0,
+            "зарплата": 110_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -95,9 +92,8 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "должность": "конструктор",
             "подразделение": "КБ",
             "ставка": 1.0,
-            "оклад": 70_000,
-            "надбавка": 30_000,
-            "стимулирующая": 0,
+            "зарплата": 100_000_
+
             "дата начала": f"{year}-01-01",
             "дата окончания": "",
             "разрешенные договоры": "",
@@ -110,9 +106,8 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "подразделение": "НИОКР",
             "ставка": 0.5,
             # Итого 50k/мес; потолок по должности ×0.5 — оклад и надбавка отдельными строками
-            "оклад": 30_000,
-            "надбавка": 20_000,
-            "стимулирующая": 0,
+            "зарплата": 50_000_
+
             "дата начала": f"{year}-04-01",
             "дата окончания": f"{year}-07-31",
             "разрешенные договоры": "",
@@ -143,7 +138,6 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
                 year=year,
                 end_date=f"{year}-12-30",
                 total_fot=1_500_000,
-                months_after_end=-1,
                 carryover=True,
             ),
             "дата начала": f"{year}-03-01",

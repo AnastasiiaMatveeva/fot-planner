@@ -333,7 +333,7 @@ def assert_success_scenario(
     xl = pd.ExcelFile(out_path)
     assert "Контроль трудоёмкости" in xl.sheet_names
     assert "Трудоёмкость по строкам" not in xl.sheet_names
-    from fot_planner.user_excel_report import build_labor_summary_block
+    from fot_planner.excel.reports.user_report import build_labor_summary_block
 
     labor_df = build_labor_summary_block(ctx, result)
     labor_df = labor_df[labor_df["план чел.-мес."].notna()].copy()
@@ -415,7 +415,7 @@ def assert_deficit_scenario(
 
     xl = pd.ExcelFile(out_path)
     assert "Контроль трудоёмкости" in xl.sheet_names
-    from fot_planner.user_excel_report import build_labor_summary_block
+    from fot_planner.excel.reports.user_report import build_labor_summary_block
 
     labor_df = build_labor_summary_block(ctx, result)
     labor_df = labor_df[labor_df["план чел.-мес."].notna()].copy()

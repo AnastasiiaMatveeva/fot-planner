@@ -13,7 +13,7 @@ FLEX_KINDS = frozenset({"allowance", "incentive"})
 def build_admin_complexity_dataframe(ctx: PlanningContext, result: PlanningResult):
     import pandas as pd
 
-    from fot_planner.excel_io import RU_MONTHS, _PAYMENT_KIND_RU
+    from fot_planner.excel.constants import PAYMENT_KIND_RU, RU_MONTHS
 
     employees = {e.id: e for e in ctx.employees}
     year = ctx.year
@@ -35,7 +35,7 @@ def build_admin_complexity_dataframe(ctx: PlanningContext, result: PlanningResul
                     "табельный номер": a.employee_id,
                     "месяц": RU_MONTHS.get(a.month, a.month),
                     "договор": a.contract_id,
-                    "вид выплаты": _PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
+                    "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
                     "сумма": round(a.amount, 2),
                 }
             )
