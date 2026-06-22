@@ -40,6 +40,7 @@ from fot_planner.excel.parsing import (
 )
 from fot_planner.fot_schedule import default_fot_inflow_at_start
 from fot_planner.labor_rules import employee_compatible_with_labor_row
+from fot_planner.open_rate_rules import normalize_employment_category
 from fot_planner.models import (
     AllocationRecord,
     Contract,
@@ -252,6 +253,9 @@ def _load_employees(
                 equivalence_group=ref.equivalence_group if ref else None,
                 position_level=ref.level if ref else None,
                 reference_salary_for_rate=ref.reference_salary_for_rate if ref else None,
+                employment_category=normalize_employment_category(
+                    r.get("employment_category")
+                ),
             )
         )
     return rows
@@ -313,6 +317,8 @@ def _load_contracts(df: pd.DataFrame) -> list[Contract]:
                 salary_terms=_parse_payment_kind_terms(r, "salary"),
                 allowance_terms=_parse_payment_kind_terms(r, "allowance"),
                 incentive_terms=_parse_payment_kind_terms(r, "incentive"),
+                allow_main_employment=_bool(r.get("allow_main_employment"), True),
+                allow_part_time=_bool(r.get("allow_part_time"), True),
             )
         )
         _apply_payment_deadlines(rows[-1])
@@ -740,6 +746,8 @@ def _load_salary_stability(settings: pd.DataFrame) -> SalaryStabilityRules:
         rules.goz_labor_tolerance = float(row["goz_labor_tolerance"])
     if "labor_pm_payment_multiplier" in row and pd.notna(row["labor_pm_payment_multiplier"]):
         rules.labor_pm_payment_multiplier = float(row["labor_pm_payment_multiplier"])
+    if "enable_open_rates" in row and pd.notna(row["enable_open_rates"]):
+        rules.enable_open_rates = _bool(row["enable_open_rates"], False)
     return rules
 
 

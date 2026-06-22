@@ -8,6 +8,7 @@ from typing import Literal
 
 PaymentKind = Literal["salary", "allowance", "incentive"]
 PAYMENT_KINDS: tuple[PaymentKind, ...] = ("salary", "allowance", "incentive")
+EmploymentCategory = Literal["regular", "student", "graduate_student"]
 
 
 @dataclass
@@ -34,6 +35,8 @@ class Employee:
     equivalence_group: str | None = None
     position_level: int | None = None
     reference_salary_for_rate: float | None = None
+    # regular — до 1.5 в сумме; student — 0.5; graduate_student — 0.75
+    employment_category: EmploymentCategory = "regular"
 
 
 @dataclass
@@ -87,6 +90,8 @@ class Contract:
     incentive_terms: PaymentKindTerms = field(default_factory=PaymentKindTerms)
     position_rules: list[ContractPositionRule] = field(default_factory=list)
     monthly_budgets: list[ContractMonthlyBudget] = field(default_factory=list)
+    allow_main_employment: bool = True
+    allow_part_time: bool = True
 
     @property
     def requires_full_fot_spend(self) -> bool:
@@ -110,6 +115,18 @@ class ContractLaborPlan:
 def labor_row_id(lp: ContractLaborPlan) -> str:
     """Устойчивый идентификатор строки трудоёмкости."""
     return f"{lp.contract_id}|{lp.position or ''}|{lp.equivalence_group or ''}"
+
+
+@dataclass
+class OpenRateAttribution:
+    """Открытая ставка сотрудника на договоре в месяце (для отчёта)."""
+
+    employee_id: str
+    contract_id: str
+    year: int
+    month: int
+    open_rate: float
+    is_main: bool
 
 
 @dataclass
@@ -202,6 +219,8 @@ class SalaryStabilityRules:
     goz_labor_tolerance: float = 0.05
     # Верхняя граница отнесённой суммы на строку в месяце: multiplier × средняя × чел.-мес.
     labor_pm_payment_multiplier: float = 5.0
+    # Открытые ставки: основное место + совместительство (см. open_rate_rules).
+    enable_open_rates: bool = False
 
 
 @dataclass
@@ -319,3 +338,4 @@ class PlanningResult:
     month_transfers: list[MonthTransfer] = field(default_factory=list)
     labor_pm_attributions: list[LaborPmAttribution] = field(default_factory=list)
     labor_payment_attributions: list[LaborPaymentAttribution] = field(default_factory=list)
+    open_rate_attributions: list[OpenRateAttribution] = field(default_factory=list)
