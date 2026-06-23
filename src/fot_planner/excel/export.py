@@ -11,6 +11,7 @@ from fot_planner.models import PlanningContext, PlanningResult
 def export_result(path: str | Path, ctx: PlanningContext, result: PlanningResult) -> None:
     path = Path(path)
     from fot_planner.excel.reports.labor_control import write_labor_control_sheet
+    from fot_planner.excel.reports.staff_detail import write_staff_detail_sheet
     from fot_planner.excel.format import format_user_workbook
     from fot_planner.excel.reports.user_report import (
         SHEET_ADMIN,
@@ -52,5 +53,6 @@ def export_result(path: str | Path, ctx: PlanningContext, result: PlanningResult
 
     format_user_workbook(path)
     write_labor_control_sheet(path, ctx, result)
+    write_staff_detail_sheet(path, ctx, result)
 
 

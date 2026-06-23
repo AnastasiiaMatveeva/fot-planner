@@ -24,6 +24,7 @@ from fot_planner.excel.constants import (
     SHEET_MIN_BALANCE_MATRIX,
     SHEET_PLAN,
     SHEET_POSITION_REFERENCE,
+    SHEET_POSITION_SALARY_LIMITS,
     SHEET_POSITION_SYNONYMS,
     SHEET_SETTINGS,
 )
@@ -66,6 +67,10 @@ from fot_planner.position_reference import (
     normalize_position,
     resolve_position,
 )
+from fot_planner.salary_limits_2556 import (
+    PositionSalaryLimit,
+    default_position_salary_limits,
+)
 
 def load_context(path: str | Path, plan_path: str | Path | None = None) -> PlanningContext:
     path = Path(path)
@@ -90,6 +95,7 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         )
         for row in position_reference_rows
     ]
+    position_salary_limits = _load_position_salary_limits(xl)
 
     employees = _load_employees(
         _canonicalize_columns(pd.read_excel(xl, SHEET_EMPLOYEES)),
@@ -181,6 +187,7 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         employees=employees,
         contracts=contracts,
         position_reference=position_reference,
+        position_salary_limits=position_salary_limits,
         manual_assignments=manual_assignments,
         manual_prohibitions=manual_prohibitions,
         weights=weights,
@@ -190,6 +197,37 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         allow_deficit=allow_deficit,
         allow_backward_reallocation=allow_backward_reallocation,
     )
+
+
+def _clean_optional_text(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _load_position_salary_limits(xl: pd.ExcelFile) -> list[PositionSalaryLimit]:
+    """Лист заменяет встроенный справочник целиком, включая изменённые суммы."""
+    if SHEET_POSITION_SALARY_LIMITS not in xl.sheet_names:
+        return default_position_salary_limits()
+
+    df = _canonicalize_columns(pd.read_excel(xl, SHEET_POSITION_SALARY_LIMITS))
+    rows: list[PositionSalaryLimit] = []
+    for _, r in df.iterrows():
+        position = _clean_optional_text(r.get("position"))
+        personnel_category = _clean_optional_text(r.get("personnel_category"))
+        if not position or not personnel_category:
+            continue
+        rows.append(
+            PositionSalaryLimit(
+                position=position,
+                personnel_category=personnel_category,
+                order_2556_limit=_optional_float(r.get("order_2556_limit")),
+                p3_average=_optional_float(r.get("p3_average")),
+                note=_clean_optional_text(r.get("salary_limit_note")),
+            )
+        )
+    return rows
 
 
 def _load_position_reference(xl: pd.ExcelFile) -> list[PositionReferenceRow]:
@@ -273,6 +311,14 @@ def _type_defaults(contract_type: str) -> dict[str, bool]:
     return {**generic, **known}
 
 
+def _goz_defense_order_flag(row: pd.Series, contract_type: str) -> bool:
+    """БЭП 550 ВП применяется только к ГОЗ/оборонным заказам, не ко всем госзаказам."""
+    explicit = _optional_bool(row.get("is_goz_defense_order"))
+    if explicit is not None:
+        return explicit
+    return contract_type in {"goz", "gosoboronzakaz", "defense_order"}
+
+
 def _parse_payment_kind_terms(row: pd.Series, kind: str) -> PaymentKindTerms:
     deadline_col = f"{kind}_payment_deadline"
     payment_deadline = None
@@ -306,6 +352,7 @@ def _load_contracts(df: pd.DataFrame) -> list[Contract]:
                 start_date=_parse_date(r["start_date"]),
                 end_date=_parse_date(r["end_date"]),
                 total_fot=float(r["total_fot"]),
+                is_goz_defense_order=_goz_defense_order_flag(r, ctype),
                 allow_salary=_bool(r.get("allow_salary"), bool(defaults["allow_salary"])),
                 allow_allowance=_bool(
                     r.get("allow_allowance"), bool(defaults["allow_allowance"])
@@ -744,24 +791,25 @@ def _load_salary_stability(settings: pd.DataFrame) -> SalaryStabilityRules:
         rules.min_fot_months_for_salary_reserve = int(row["min_fot_months_for_salary_reserve"])
     if "goz_labor_tolerance" in row and pd.notna(row["goz_labor_tolerance"]):
         rules.goz_labor_tolerance = float(row["goz_labor_tolerance"])
+    if "goz_average_salary_limit" in row and pd.notna(row["goz_average_salary_limit"]):
+        rules.goz_average_salary_limit = float(row["goz_average_salary_limit"])
     if "labor_pm_payment_multiplier" in row and pd.notna(row["labor_pm_payment_multiplier"]):
         rules.labor_pm_payment_multiplier = float(row["labor_pm_payment_multiplier"])
-    if "enable_open_rates" in row and pd.notna(row["enable_open_rates"]):
-        rules.enable_open_rates = _bool(row["enable_open_rates"], False)
+    # Открытые ставки всегда включены; столбец в Excel игнорируется (legacy).
+    rules.enable_open_rates = True
     return rules
 
 
 def _load_weights(settings: pd.DataFrame) -> OptimizationWeights:
     w = OptimizationWeights()
     mapping = {
-        "weight_deficit_amount": "deficit_amount",
-        "weight_early_deficit": "early_deficit",
         "weight_salary_switch": "salary_contract_switch",
         "weight_admin_complexity": "admin_complexity",
         "weight_plan_deviation": "plan_deviation",
         "weight_uniform_spend_deviation": "uniform_spend_deviation",
         "weight_salary_compensation_via_flex": "salary_compensation_via_flex",
         "weight_labor_deviation": "labor_deviation",
+        "weight_rate_below_staff": "rate_below_staff",
     }
     if settings.empty:
         return w

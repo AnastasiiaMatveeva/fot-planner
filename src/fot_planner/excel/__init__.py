@@ -15,6 +15,7 @@ from fot_planner.excel.constants import (
     SHEET_MANUAL_PROHIBITIONS,
     SHEET_META,
     SHEET_MIN_BALANCE_MATRIX,
+    SHEET_POSITION_SALARY_LIMITS,
     SHEET_SETTINGS,
 )
 from fot_planner.excel.export import export_result
@@ -48,6 +49,7 @@ __all__ = [
     "SHEET_MANUAL_PROHIBITIONS",
     "SHEET_META",
     "SHEET_MIN_BALANCE_MATRIX",
+    "SHEET_POSITION_SALARY_LIMITS",
     "SHEET_SETTINGS",
     "create_template",
     "export_result",

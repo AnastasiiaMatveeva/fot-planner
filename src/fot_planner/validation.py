@@ -8,8 +8,10 @@ from fot_planner.contract_calendar import contract_allows_month
 from fot_planner.contract_types import KNOWN_CONTRACT_TYPES
 from fot_planner.fot_schedule import cumulative_inflow_through_month
 from fot_planner.labor_rules import (
+    is_goz_contract,
     labor_rows_for_contract,
     planned_labor_amount,
+    total_planned_person_months,
 )
 from fot_planner.contract_calendar import (
     latest_payment_month,
@@ -295,6 +297,37 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
             )
 
     for c in ctx.contracts:
+        if is_goz_contract(c) and ctx.salary_stability.goz_average_salary_limit > 0:
+            planned_pm = total_planned_person_months(ctx, c.id)
+            if planned_pm <= 0:
+                conflicts.append(
+                    ConflictRecord(
+                        code="GOZ_BEP_WITHOUT_LABOR_WARNING",
+                        message=(
+                            f"Договор {c.id}: норматив средней зарплаты ГОЗ не применяется, "
+                            "потому что не задана трудоёмкость в contract_labor"
+                        ),
+                        contract_id=c.id,
+                    )
+                )
+            else:
+                bep_fot_limit = (
+                    ctx.salary_stability.goz_average_salary_limit * planned_pm
+                )
+                if c.total_fot > bep_fot_limit + 0.01:
+                    conflicts.append(
+                        ConflictRecord(
+                            code="GOZ_FOT_ABOVE_BEP_LIMIT",
+                            message=(
+                                f"Договор {c.id}: ФОТ {c.total_fot:.2f} ₽ превышает "
+                                f"лимит БЭП {bep_fot_limit:.2f} ₽ "
+                                f"({planned_pm:.4g} чел.-мес. × "
+                                f"{ctx.salary_stability.goz_average_salary_limit:.2f} ₽)"
+                            ),
+                            contract_id=c.id,
+                        )
+                    )
+
         if c.total_fot > 0:
             expected_labor_cost = sum(
                 planned_labor_amount(lp)

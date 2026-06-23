@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from datetime import date
 
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
@@ -16,12 +15,13 @@ from fot_planner.fot_schedule import (
     monthly_spend_targets,
 )
 from fot_planner.labor_rules import (
-    contract_has_labor_plan,
+    is_goz_contract,
     labor_payment_cap_per_pm,
     labor_payment_terms_for_row,
     labor_average_balance_gap,
     labor_pm_terms_for_row,
     planned_labor_amount,
+    total_planned_person_months,
 )
 from fot_planner.payment_split import (
     employee_monthly_payment_due,
@@ -236,29 +236,6 @@ def _status_name(results) -> str:
     return "NOT_SOLVED"
 
 
-def _employee_cumulative_inflow(ctx: PlanningContext, employee, through_month: int) -> float:
-    """Сумма поступлений по доступным договорам сотрудника с января по through_month."""
-    year = ctx.year
-    total = 0.0
-    for c in ctx.contracts:
-        if employee.allowed_contracts and c.id not in employee.allowed_contracts:
-            continue
-        if c.id in employee.forbidden_contracts:
-            continue
-        for m in range(1, through_month + 1):
-            if contract_allows_month(c, year, m):
-                total += _month_inflow(ctx, c.id, m)
-    return total
-
-
-def _employee_cumulative_due(employee, year: int, through_month: int) -> float:
-    total = 0.0
-    for m in range(1, through_month + 1):
-        if employee_active_in_month(employee, year, m):
-            total += employee_monthly_payment_due(employee)
-    return total
-
-
 def _preferred_salary_anchor_contract_id(ctx: PlanningContext) -> str | None:
     """Предпочтительный договор для окладов: grant с максимальным сроком, иначе самый длинный."""
     candidates = [c for c in ctx.contracts if c.allow_salary is not False]
@@ -286,6 +263,12 @@ def _emp_contract_month_used_or_zero(model, month_used_set: set, e_id: str, c_id
     if key in month_used_set:
         return model.emp_contract_month_used[key]
     return 0
+
+
+def _expr_rate_below_staff(model, rate_below_staff_keys, weight: float):
+    if not rate_below_staff_keys or weight <= 0:
+        return None
+    return _sum_terms(weight * model.rate_below_staff_dev[k] for k in rate_below_staff_keys)
 
 
 def _expr_salary_compensation(model, salary_compensation_keys):
@@ -413,64 +396,6 @@ def _run_minimize_stage(
     return status_name, elapsed, best
 
 
-def _collect_soft_objective_terms(
-    model,
-    *,
-    w,
-    alloc_keys,
-    salary_change_keys,
-    employee_contract_keys,
-    scheme_change_keys,
-    uniform_dev_keys,
-    uniform_penalty_params,
-    baseline_dev_keys,
-    labor_dev_keys,
-    labor_amount_dev_keys,
-    labor_balance_dev_keys,
-    labor_plan_amount: dict[int, float],
-    labor_soft_indices: set[int],
-    salary_compensation_keys,
-    uses,
-    include_uniform: bool = True,
-):
-    terms = []
-    comp = _expr_salary_compensation(model, salary_compensation_keys)
-    if comp is not None and w.salary_compensation_via_flex:
-        terms.append(w.salary_compensation_via_flex * comp)
-    admin_part = _expr_admin_complexity(
-        model,
-        employee_contract_keys=employee_contract_keys,
-        scheme_change_keys=scheme_change_keys,
-        alloc_keys=alloc_keys,
-        uses=uses,
-        admin_weight=1.0,
-    )
-    if admin_part is not None and w.admin_complexity:
-        terms.append(w.admin_complexity * admin_part)
-    switch_part = _expr_salary_switch(model, salary_change_keys, w.salary_contract_switch)
-    if switch_part is not None:
-        terms.append(switch_part)
-    if include_uniform and uniform_dev_keys and w.uniform_spend_deviation:
-        uniform_part = _expr_uniform_deviation(
-            model, uniform_dev_keys, uniform_penalty_params, w.uniform_spend_deviation
-        )
-        if uniform_part is not None:
-            terms.append(uniform_part)
-    terms.extend(w.plan_deviation * model.baseline_dev[k] for k in baseline_dev_keys)
-    labor_part = _expr_labor_deviations(
-        model,
-        labor_dev_keys=labor_dev_keys,
-        labor_amount_dev_keys=labor_amount_dev_keys,
-        labor_balance_dev_keys=labor_balance_dev_keys,
-        labor_plan_amount=labor_plan_amount,
-        labor_soft_indices=labor_soft_indices,
-        weight=w.labor_deviation,
-    )
-    if labor_part is not None:
-        terms.append(labor_part)
-    return terms
-
-
 def _run_solver(model, time_limit_sec: int):
     t0 = time.perf_counter()
     solver = _create_solver(time_limit_sec)
@@ -577,7 +502,6 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
 
     # Выбор позиции для salary: position_used[e, c, m, pr_idx] ∈ {0,1}
     salary_alloc_keys = [k for k in alloc_keys if k[3] == "salary"]
-    salary_alloc_key_set = set(salary_alloc_keys)
 
     salary_position_keys: list[tuple[str, str, int, int]] = []
     salary_position_cap: dict[tuple[str, str, int, int], float] = {}
@@ -679,8 +603,6 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
 
     allow_deficit = ctx.allow_deficit
     deficit_agg_keys: list[tuple[str, int]] = []
-    deficit_due_ub: dict[tuple[str, int], float] = {}
-    salary_deficit_keys: list[tuple[str, int]] = []
     salary_compensation_keys: list[tuple[str, int]] = []
     for e in ctx.employees:
         if employee_monthly_payment_due(e) <= 0:
@@ -691,8 +613,6 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             if not any(k[0] == e.id and k[2] == m and k[3] == "salary" for k in alloc_keys):
                 continue
             salary_compensation_keys.append((e.id, m))
-            if allow_deficit:
-                salary_deficit_keys.append((e.id, m))
     if allow_deficit:
         for e in ctx.employees:
             for m in months:
@@ -706,11 +626,8 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                     continue
                 agg_key = (e.id, m)
                 deficit_agg_keys.append(agg_key)
-                deficit_due_ub[agg_key] = total_due
     deficit_agg_key_set = set(deficit_agg_keys)
-    salary_deficit_key_set = set(salary_deficit_keys)
 
-    enable_open_rates = stab.enable_open_rates
     open_rate_keys: list[tuple[str, str, int]] = sorted(
         {
             (e_id, c_id, m)
@@ -730,13 +647,21 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
     }
     salary_rate_pos_keys: list[tuple[str, str, int, int]] = []
     salary_open_q_keys: list[tuple[str, str, int]] = []
-    if enable_open_rates:
-        for (e_id, c_id, m, pr_idx) in salary_position_keys:
-            if (e_id, c_id, m) in open_rate_key_set:
-                salary_rate_pos_keys.append((e_id, c_id, m, pr_idx))
-        salary_open_q_keys = [
-            k for k in open_rate_keys if k in main_eligible_keys
-        ]
+    for (e_id, c_id, m, pr_idx) in salary_position_keys:
+        if (e_id, c_id, m) in open_rate_key_set:
+            salary_rate_pos_keys.append((e_id, c_id, m, pr_idx))
+    # Для ограничений по группам (max_positions) и отчётов: открытая ставка по договору,
+    # если salary используется (основное место и совместительство).
+    salary_open_q_keys = list(open_rate_keys)
+    rate_below_staff_keys: list[tuple[str, int]] = []
+    for e in ctx.employees:
+        if e.rate <= 0:
+            continue
+        for m in months:
+            if not employee_active_in_month(e, year, m):
+                continue
+            if any(k[0] == e.id and k[2] == m for k in open_rate_keys):
+                rate_below_staff_keys.append((e.id, m))
 
     model = pyo.ConcreteModel()
     model.alloc = pyo.Var(
@@ -770,14 +695,13 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             uniform_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
         )
     if labor_pm_keys:
-        pm_ub = TOTAL_RATE_MAX_REGULAR if enable_open_rates else None
         model.labor_pm = pyo.Var(
             labor_pm_keys,
             domain=pyo.NonNegativeReals,
             bounds=(
                 lambda _m, e_id, _c, _mo, _lp: (
                     0,
-                    pm_ub if pm_ub is not None else employees[e_id].rate,
+                    TOTAL_RATE_MAX_REGULAR,
                 )
             ),
         )
@@ -801,7 +725,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
     open_rate_q = {}
     rate_on_main_q = {}
     salary_rate_pos = {}
-    if enable_open_rates and open_rate_keys:
+    if open_rate_keys:
         model.open_rate_q = pyo.Var(
             open_rate_keys,
             domain=pyo.NonNegativeIntegers,
@@ -825,6 +749,12 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                 domain=pyo.NonNegativeIntegers,
                 bounds=(0, MAIN_QUARTERS_MAX),
             )
+        if rate_below_staff_keys:
+            model.rate_below_staff_dev = pyo.Var(
+                rate_below_staff_keys,
+                domain=pyo.NonNegativeIntegers,
+                bounds=(0, MAIN_QUARTERS_MAX),
+            )
         open_rate_q = model.open_rate_q
         is_main = model.is_main
         rate_on_main_q = model.rate_on_main_q
@@ -835,15 +765,6 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
         model.deficit = pyo.Var(
             deficit_agg_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
         )
-        model.deficit_used = pyo.Var(deficit_agg_keys, domain=pyo.Binary)
-        for d_key in deficit_agg_keys:
-            model.cons.add(
-                model.deficit[d_key] <= deficit_due_ub[d_key] * model.deficit_used[d_key]
-            )
-    if salary_deficit_keys:
-        model.salary_deficit = pyo.Var(
-            salary_deficit_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
-        )
     if salary_compensation_keys:
         model.salary_compensation = pyo.Var(
             salary_compensation_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
@@ -853,7 +774,6 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
     uses = model.use
     pos_used = getattr(model, "salary_position_used", {})
     deficit = getattr(model, "deficit", {})
-    salary_deficit = getattr(model, "salary_deficit", {})
     salary_compensation = getattr(model, "salary_compensation", {})
     labor_pm = getattr(model, "labor_pm", {})
     labor_pay = getattr(model, "labor_pay", {})
@@ -890,9 +810,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                 model.cons.add(uses[salary_key] == 0)
                 continue
             model.cons.add(_sum_terms(related_pos) == uses[salary_key])
-            if enable_open_rates and (e_id, c_id, m) in open_rate_key_set:
-                if (e_id, c_id, m) in is_main and employee_monthly_payment_due(employees[e_id]) > 0:
-                    model.cons.add(uses[salary_key] <= is_main[(e_id, c_id, m)])
+            if (e_id, c_id, m) in open_rate_key_set:
                 staff_rate = employees[e_id].rate
                 scale = OPEN_RATE_STEP / staff_rate if staff_rate > 0 else 1.0
                 cap_terms = []
@@ -912,7 +830,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                         model.cons,
                         salary_rate_pos[sp_key],
                         pos_used[(e_id, c_id, m, pr_idx)],
-                        rate_on_main_q[(e_id, c_id, m)],
+                        open_rate_q[(e_id, c_id, m)],
                         MAIN_QUARTERS_MAX,
                     )
                 if cap_terms:
@@ -936,7 +854,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
         elif _must_use_pair(ctx.manual_assignments, e_id, c_id, m, kind):
             model.cons.add(uses[key] == 1)
 
-    if enable_open_rates and open_rate_keys:
+    if open_rate_keys:
         for key in open_rate_keys:
             e_id, c_id, m = key
             e = employees[e_id]
@@ -954,6 +872,17 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             if not c.allow_part_time:
                 model.cons.add(q <= MAIN_QUARTERS_MAX * w)
 
+            # Бизнес-правило: ставка на трудоёмком договоре подразумевает оклад с этого договора.
+            # Поэтому на договоре с labor: salary используется <=> открытая ставка > 0.
+            if c_id in contracts_with_labor and employee_monthly_payment_due(e) > 0:
+                salary_key = (e_id, c_id, m, "salary")
+                if salary_key in alloc_key_set:
+                    model.cons.add(q <= MAIN_QUARTERS_MAX * uses[salary_key])
+                    model.cons.add(uses[salary_key] <= q)
+                else:
+                    # Если salary на договоре невозможен (нет потолков/строк), то и ставка на labor-договоре запрещена.
+                    model.cons.add(q == 0)
+
         for e in ctx.employees:
             if e.rate <= 0:
                 continue
@@ -969,11 +898,13 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                 has_salary_month = bool(main_keys) and employee_monthly_payment_due(e) > 0
 
                 model.cons.add(
-                    _sum_terms(open_rate_q[k] for k in keys_em) >= staff_q_min
-                )
-                model.cons.add(
                     _sum_terms(open_rate_q[k] for k in keys_em) <= max_q
                 )
+                if (e.id, m) in rate_below_staff_keys:
+                    model.cons.add(
+                        model.rate_below_staff_dev[(e.id, m)]
+                        >= staff_q_min - _sum_terms(open_rate_q[k] for k in keys_em)
+                    )
 
                 if has_salary_month:
                     model.cons.add(_sum_terms(is_main[k] for k in main_keys) == 1)
@@ -996,7 +927,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                     model.cons,
                     salary_open_q[key],
                     uses[salary_key],
-                    rate_on_main_q[key],
+                    open_rate_q[key],
                     MAIN_QUARTERS_MAX,
                 )
 
@@ -1014,7 +945,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                     keys_em = [
                         k for k in open_rate_keys if k[0] == e.id and k[2] == m
                     ]
-                    if enable_open_rates and keys_em:
+                    if keys_em:
                         model.cons.add(
                             _sum_terms(pm_terms)
                             <= OPEN_RATE_STEP
@@ -1044,7 +975,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                 continue
             payment_pm_linked.add(link_key)
             pay_sum = _sum_terms(pay_uses)
-            if enable_open_rates and link_key in open_rate_key_set:
+            if link_key in open_rate_key_set:
                 model.cons.add(
                     _sum_terms(pm_on_contract)
                     <= OPEN_RATE_STEP * open_rate_q[link_key]
@@ -1098,7 +1029,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                 continue
             model.cons.add(_sum_terms(pay_terms) <= cap_per_pm * labor_pm[pm_key])
 
-        if enable_open_rates and open_rate_keys:
+        if open_rate_keys:
             for (e_id, c_id, m, _lp_idx) in labor_pm_keys:
                 key = (e_id, c_id, m)
                 if key not in open_rate_key_set:
@@ -1138,23 +1069,10 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             if not all_allocs:
                 continue
 
-            salary_uses = [
-                uses[k]
-                for k in alloc_keys
-                if k[0] == e.id and k[2] == m and k[3] == "salary"
-            ]
-            if employee_monthly_payment_due(e) > 0 and salary_uses:
-                model.cons.add(_sum_terms(salary_uses) == 1)
-
             if allow_deficit:
                 agg_key = (e.id, m)
                 if agg_key in deficit_agg_key_set:
                     model.cons.add(_sum_terms(all_allocs) + deficit[agg_key] == total_due)
-                # В режиме allow_deficit: salary_deficit отражает "недоплату" относительно того,
-                # что модель фактически решила выплатить окладом (не относительно заранее
-                # вычисленного required_salary, т.к. потолок зависит от выбранной позиции).
-                if agg_key in salary_deficit_key_set and salary_terms:
-                    model.cons.add(salary_deficit[agg_key] == 0)
             else:
                 model.cons.add(_sum_terms(all_allocs) == total_due)
 
@@ -1167,11 +1085,9 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
 
     for c_id in contract_list:
         c = contracts[c_id]
-        year_spent_terms = []
 
         for m in months:
             spent_expr = _contract_month_spent(alloc, c_id, m)
-            year_spent_terms.append(spent_expr)
 
             inflow = _month_inflow(ctx, c_id, m)
             min_bal = min_balance_for_month(c, m)
@@ -1185,10 +1101,6 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             if m < 12:
                 model.cons.add(model.carry[(c_id, m)] == model.close[(c_id, m)])
 
-
-        if year_spent_terms and c.total_fot > 0:
-            model.cons.add(_sum_terms(year_spent_terms) <= c.total_fot)
-
         if c.requires_full_fot_spend:
             spend_full_fot = [
                 _contract_month_spent(alloc, c_id, m)
@@ -1196,7 +1108,23 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
                 if contract_allows_month(c, year, m)
             ]
             if spend_full_fot:
-                model.cons.add(_sum_terms(spend_full_fot) >= c.total_fot)
+                model.cons.add(_sum_terms(spend_full_fot) == c.total_fot)
+
+        # БЭП 550 ВП: средняя зарплата по каждому договору ГОЗ не превышает
+        # утверждённый норматив на один плановый чел.-мес.
+        goz_average_limit = ctx.salary_stability.goz_average_salary_limit
+        if is_goz_contract(c) and goz_average_limit > 0:
+            planned_pm = total_planned_person_months(ctx, c_id)
+            if planned_pm > 0:
+                goz_spend = [
+                    _contract_month_spent(alloc, c_id, m)
+                    for m in months
+                    if contract_allows_month(c, year, m)
+                ]
+                if goz_spend:
+                    model.cons.add(
+                        _sum_terms(goz_spend) <= goz_average_limit * planned_pm
+                    )
 
     for c_id in contract_list:
         c = contracts[c_id]
@@ -1211,36 +1139,24 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
 
         for group, max_rate in max_rate_by_group.items():
             for m in months:
-                if enable_open_rates:
-                    group_terms = []
-                    for (e_id, cid, mo, kind), uvar in uses.items():
-                        if (
-                            cid != c_id
-                            or mo != m
-                            or kind != "salary"
-                            or employees[e_id].equivalence_group != group
-                        ):
-                            continue
-                        key = (e_id, cid, mo)
-                        if key in salary_open_q:
-                            group_terms.append(OPEN_RATE_STEP * salary_open_q[key])
-                        elif key in open_rate_key_set:
-                            group_terms.append(OPEN_RATE_STEP * open_rate_q[key] * uvar)
-                        else:
-                            group_terms.append(employees[e_id].rate * uvar)
-                    if group_terms:
-                        model.cons.add(_sum_terms(group_terms) <= max_rate)
-                else:
-                    group_uses = [
-                        employees[e_id].rate * uvar
-                        for (e_id, cid, mo, kind), uvar in uses.items()
-                        if cid == c_id
-                        and mo == m
-                        and kind == "salary"
-                        and employees[e_id].equivalence_group == group
-                    ]
-                    if group_uses:
-                        model.cons.add(_sum_terms(group_uses) <= max_rate)
+                group_terms = []
+                for (e_id, cid, mo, kind), uvar in uses.items():
+                    if (
+                        cid != c_id
+                        or mo != m
+                        or kind != "salary"
+                        or employees[e_id].equivalence_group != group
+                    ):
+                        continue
+                    key = (e_id, cid, mo)
+                    if key in salary_open_q:
+                        group_terms.append(OPEN_RATE_STEP * salary_open_q[key])
+                    elif key in open_rate_key_set:
+                        group_terms.append(OPEN_RATE_STEP * open_rate_q[key] * uvar)
+                    else:
+                        group_terms.append(employees[e_id].rate * uvar)
+                if group_terms:
+                    model.cons.add(_sum_terms(group_terms) <= max_rate)
 
     if employee_contract_keys:
         for e_id, c_id in employee_contract_keys:
@@ -1431,6 +1347,11 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             return _solver_failed("этап раннего дефицита")
 
     soft_stage_exprs: list[tuple[object, str]] = []
+    rate_below_part = _expr_rate_below_staff(
+        model, rate_below_staff_keys, w.rate_below_staff
+    )
+    if rate_below_part is not None:
+        soft_stage_exprs.append((rate_below_part, "снижение ниже штатной ставки"))
     preferred_anchor = _preferred_salary_anchor_contract_id(ctx)
     non_anchor_part = _expr_non_anchor_salary_penalty(
         uses, alloc_keys, preferred_anchor, w.salary_contract_switch
@@ -1604,7 +1525,7 @@ def solve(ctx: PlanningContext, time_limit_sec: int = 120) -> PlanningResult:
             )
 
     open_rate_attributions: list[OpenRateAttribution] = []
-    if enable_open_rates and open_rate_keys and hasattr(model, "open_rate_q"):
+    if open_rate_keys and hasattr(model, "open_rate_q"):
         for key in open_rate_keys:
             q = int(round(_value(open_rate_q[key])))
             if q <= 0:

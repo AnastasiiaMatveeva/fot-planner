@@ -99,6 +99,9 @@ def test_salary_cap_without_contract_positions_is_zero():
 def _workbook_with_cap(path: Path, *, wage: float, cap: float) -> None:
     create_template(path)
     year = date.today().year
+    settings = pd.read_excel(path, sheet_name="settings")
+    # Этот helper проверяет разбиение оклад/надбавка, а не норматив БЭП.
+    settings["средняя зарплата ГОЗ"] = max(112_261, wage)
     employees = pd.DataFrame(
         [
             {
@@ -153,6 +156,7 @@ def _workbook_with_cap(path: Path, *, wage: float, cap: float) -> None:
         positions.to_excel(w, sheet_name="contract_positions", index=False)
         fot_matrix.to_excel(w, sheet_name="fot_matrix", index=False)
         labor.to_excel(w, sheet_name=SHEET_CONTRACT_LABOR, index=False)
+        settings.to_excel(w, sheet_name="settings", index=False)
 
 
 def test_contract_cap_is_max_on_contract_not_by_employee_position():

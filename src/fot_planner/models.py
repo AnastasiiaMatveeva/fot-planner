@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
 
+from fot_planner.salary_limits_2556 import PositionSalaryLimit
+
 PaymentKind = Literal["salary", "allowance", "incentive"]
 PAYMENT_KINDS: tuple[PaymentKind, ...] = ("salary", "allowance", "incentive")
 EmploymentCategory = Literal["regular", "student", "graduate_student"]
@@ -81,6 +83,7 @@ class Contract:
     start_date: date
     end_date: date
     total_fot: float
+    is_goz_defense_order: bool = False  # ГОЗ/оборонный заказ: включает норматив БЭП 550 ВП
     allow_salary: bool = True
     allow_allowance: bool = True
     allow_incentive: bool = True
@@ -190,21 +193,18 @@ ADMIN_COMPLEXITY_FRAGMENT_FACTOR = 0.1
 @dataclass
 class OptimizationWeights:
     # Штрафы в целевой функции (не жёсткие ограничения)
-    # Диагностический дефицит (allow_deficit): этап 1 — сумма; этап 2 — ранний дефицит
-    deficit_amount: float = 1_000_000_000.0
-    early_deficit: float = 10_000_000.0
     # Штраф за вынужденный добор оклада через allowance/incentive (низкий salary_cap)
     salary_compensation_via_flex: float = 3_000.0
     # Мягкий штраф смены договора оклада
     salary_contract_switch: float = 500_000.0
     # Связи сотрудник–договор и смены схемы между месяцами
     admin_complexity: float = 200_000.0
-    # Legacy: читается из старых Excel, в оптимизаторе не используется (фрагменты — через admin_complexity).
-    flex_fragment: float = 200_000.0
     plan_deviation: float = 10.0
     # Штраф за 100% отклонения от идеала (actual−ideal)/ideal; см. optimizer.UNIFORM_SPEND_TOLERANCE_*.
     uniform_spend_deviation: float = 50_000.0
     labor_deviation: float = 50_000.0
+    # Штраф за снижение суммарной открытой ставки ниже штатной (за 0.25 ставки)
+    rate_below_staff: float = 100_000.0
 
 
 @dataclass
@@ -217,10 +217,12 @@ class SalaryStabilityRules:
     min_fot_months_for_salary_reserve: int = 6
     # Допуск ±% по чел.-мес. и сумме строки трудоёмкости (все типы договоров)
     goz_labor_tolerance: float = 0.05
+    # БЭП 550 ВП: предельная средняя зарплата на 1 чел.-мес. по договору ГОЗ.
+    goz_average_salary_limit: float = 112_261.0
     # Верхняя граница отнесённой суммы на строку в месяце: multiplier × средняя × чел.-мес.
     labor_pm_payment_multiplier: float = 5.0
-    # Открытые ставки: основное место + совместительство (см. open_rate_rules).
-    enable_open_rates: bool = False
+    # Открытые ставки и мультиоклад — всегда включены (не настраиваются).
+    enable_open_rates: bool = True
 
 
 @dataclass
@@ -229,6 +231,7 @@ class PlanningContext:
     employees: list[Employee]
     contracts: list[Contract]
     position_reference: list[PositionReference] = field(default_factory=list)
+    position_salary_limits: list[PositionSalaryLimit] = field(default_factory=list)
     manual_assignments: list[ManualAssignment] = field(default_factory=list)
     manual_prohibitions: list[ManualProhibition] = field(default_factory=list)
     weights: OptimizationWeights = field(default_factory=OptimizationWeights)

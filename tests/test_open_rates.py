@@ -43,6 +43,12 @@ def test_main_and_part_quarter_limits():
     assert PART_QUARTERS_MAX * OPEN_RATE_STEP == 0.5
 
 
+def test_rate_below_staff_shortfall_in_quarters():
+    """Дефицит до штатной: staff_q_min - sum(q), штрафуется в оптимизаторе."""
+    assert staff_rate_min_quarters(1.0) == 4
+    assert staff_rate_min_quarters(1.0) - 3 == 1  # не хватает 0.25 ставки
+
+
 def test_open_rates_two_contracts_integration(tmp_path):
     """С зарплатой на основном договоре и надбавкой на втором — план выполним."""
     from datetime import date

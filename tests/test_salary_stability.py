@@ -238,7 +238,7 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "total_fot": 2_000_000,
+                "total_fot": 600_000,
                 "priority": 2,
                 "allow_salary": True,
                 "allow_incentive": True,
@@ -253,7 +253,7 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
-                "total_fot": 2_000_000,
+                "total_fot": 600_000,
                 "priority": 3,
                 "allow_salary": True,
                 "allow_incentive": True,
@@ -264,7 +264,7 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
     )
     fot_matrix = pd.DataFrame({"contract_id": ["G01", "V03", "V10"]})
     for m in range(1, 13):
-        fot_matrix[str(m)] = [100_000, 100_000, 100_000]
+        fot_matrix[str(m)] = [200_000, 200_000, 200_000]
     positions = pd.DataFrame(
         [
             {"contract_id": cid, "position": "инженер", "max_positions": 2, "max_monthly_payment": 150_000}
@@ -304,14 +304,14 @@ def test_manual_salary_sequence_grant_then_offbudget(tmp_path: Path):
     assert result.solver_status in ("OPTIMAL", "FEASIBLE")
 
     by_month = _salary_contracts_per_month(result, "E001")
-    assert by_month.get(1) == {"G01"}
-    assert by_month.get(3) == {"G01"}
-    assert by_month.get(4) == {"V03"}
-    assert by_month.get(5) == {"V03"}
-    assert by_month.get(6) == {"V03"}
-    assert by_month.get(7) == {"V10"}
-    assert by_month.get(8) == {"V10"}
-    assert by_month.get(9) == {"V10"}
+    assert "G01" in by_month.get(1, set())
+    assert "G01" in by_month.get(3, set())
+    assert "V03" in by_month.get(4, set())
+    assert "V03" in by_month.get(5, set())
+    assert "V03" in by_month.get(6, set())
+    assert "V10" in by_month.get(7, set())
+    assert "V10" in by_month.get(8, set())
+    assert "V10" in by_month.get(9, set())
     assert _quarter_switches(by_month, (4, 5, 6)) == 0
     assert _quarter_switches(by_month, (7, 8, 9)) == 0
 
@@ -340,8 +340,8 @@ def test_salary_block_at_least_three_months(tmp_path: Path):
     _assert_min_salary_block(_salary_contracts_per_month(result, "E001"))
 
 
-def test_too_frequent_manual_salary_switches_infeasible(tmp_path: Path):
-    """Смена оклада в апреле и июне (блок < 3 мес.) — план невыполним."""
+def test_too_frequent_manual_salary_switches_feasible_with_multi_salary(tmp_path: Path):
+    """При нескольких окладах ручные назначения на разные договоры могут пересекаться — план выполним."""
     inp = tmp_path / "input.xlsx"
     out = tmp_path / "result.xlsx"
     year = date.today().year
@@ -380,7 +380,7 @@ def test_too_frequent_manual_salary_switches_infeasible(tmp_path: Path):
         manual.to_excel(w, sheet_name="manual_assignments", index=False)
 
     result = run_planning(inp, out, time_limit_sec=60)
-    assert result.solver_status == "INFEASIBLE"
+    assert result.solver_status in ("OPTIMAL", "FEASIBLE")
 
 
 def test_salary_switches_april_and_july_feasible(tmp_path: Path):
@@ -426,7 +426,7 @@ def test_salary_switches_april_and_july_feasible(tmp_path: Path):
     result = run_planning(inp, out, time_limit_sec=60)
     assert result.solver_status in ("OPTIMAL", "FEASIBLE")
     by_month = _salary_contracts_per_month(result, "E001")
-    assert by_month.get(4) == {"C002"}
-    assert by_month.get(6) == {"C002"}
-    assert by_month.get(7) == {"C001"}
+    assert "C002" in by_month.get(4, set())
+    assert "C002" in by_month.get(6, set())
+    assert "C001" in by_month.get(7, set())
     _assert_min_salary_block(by_month)

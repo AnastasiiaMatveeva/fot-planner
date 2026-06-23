@@ -8,6 +8,11 @@ CONTRACT_TYPE_DEFAULTS: dict[str, dict[str, bool]] = {
         "allow_allowance": True,
         "allow_incentive": True,
     },
+    "goz": {
+        "allow_salary": True,
+        "allow_allowance": True,
+        "allow_incentive": True,
+    },
     "grant": {
         "allow_salary": True,
         "allow_allowance": True,

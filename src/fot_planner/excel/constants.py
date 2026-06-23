@@ -20,6 +20,7 @@ SHEET_BALANCES = "contract_balances"
 SHEET_META = "meta"
 SHEET_POSITION_REFERENCE = "справочник_должностей"
 SHEET_POSITION_SYNONYMS = "синонимы_должностей"
+SHEET_POSITION_SALARY_LIMITS = "должности_лимиты"
 
 COLUMN_ALIASES: dict[str, str] = {
     # Common IDs / dates
@@ -46,6 +47,11 @@ COLUMN_ALIASES: dict[str, str] = {
     "название": "name",
     "номер": "number",
     "тип договора": "contract_type",
+    "гоз / оборонный заказ": "is_goz_defense_order",
+    "гоз": "is_goz_defense_order",
+    "оборонный заказ": "is_goz_defense_order",
+    "применять бэп 550 вп": "is_goz_defense_order",
+    "is_goz_defense_order": "is_goz_defense_order",
     "фот": "total_fot",
     "фот за год": "total_fot",
     "оклад разрешен": "allow_salary",
@@ -71,6 +77,11 @@ COLUMN_ALIASES: dict[str, str] = {
     "должностной оклад за 1 ставку": "reference_salary_for_rate",
     "как написано": "raw_position",
     "должность из справочника": "canonical_position",
+    # Приказ № 2556
+    "категория персонала": "personnel_category",
+    "п2556": "order_2556_limit",
+    "п3": "p3_average",
+    "примечание к п2556": "salary_limit_note",
     "трудоемкость": "person_months",
     "трудоёмкость": "person_months",
     "чел-мес": "person_months",
@@ -95,6 +106,7 @@ COLUMN_ALIASES: dict[str, str] = {
     "штраф компенсации оклада надбавкой": "weight_salary_compensation_via_flex",
     "вес штрафа смены оклада": "weight_salary_switch",
     "штраф смены договора оклада": "weight_salary_switch",
+    "штраф снижения ставки ниже штатной": "weight_rate_below_staff",
     "макс договоров оклада в год": "max_salary_contracts_per_year",
     "штраф административной сложности выплат": "weight_admin_complexity",
     "штраф дробления переменных выплат": "weight_flex_fragment",
@@ -107,6 +119,9 @@ COLUMN_ALIASES: dict[str, str] = {
     "weight_flex_payment_fragment_count": "weight_flex_fragment",
     "допуск трудоемкости гоз": "goz_labor_tolerance",
     "допуск трудоемкости": "goz_labor_tolerance",
+    "средняя зарплата гоз": "goz_average_salary_limit",
+    "бэп 550 вп": "goz_average_salary_limit",
+    "goz_average_salary_limit": "goz_average_salary_limit",
     "открытые ставки": "enable_open_rates",
     "enable_open_rates": "enable_open_rates",
     "множитель выплаты на чел-мес": "labor_pm_payment_multiplier",

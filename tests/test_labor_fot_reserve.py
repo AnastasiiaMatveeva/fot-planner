@@ -73,6 +73,8 @@ def _gos_early_spend_workbook(path: Path) -> None:
                 "weight_uniform_spend_deviation": 0,
                 "max_salary_contracts_per_year": 1,
                 "goz_labor_tolerance": 0.01,
+                # Этот сценарий проверяет кассу; норматив БЭП вынесен за рамки теста.
+                "goz_average_salary_limit": 150_000,
             }
         ]
     )

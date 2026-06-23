@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from fot_planner.models import Contract, ContractLaborPlan, Employee, PlanningContext, labor_row_id
 
-GOZ_CONTRACT_TYPE = "goszakaz"
+GOZ_CONTRACT_TYPE = "goz"
+GOZ_CONTRACT_TYPES = frozenset({"goz", "gosoboronzakaz", "defense_order"})
 
 
 def is_goz_contract(contract: Contract) -> bool:
-    return contract.contract_type == GOZ_CONTRACT_TYPE
+    return contract.is_goz_defense_order or contract.contract_type in GOZ_CONTRACT_TYPES
 
 
 def _labor_group(position: str | None, equivalence_group: str | None) -> str | None:
@@ -170,6 +171,7 @@ def person_month_terms(employees: dict, uses: dict, contract_id: str, months: li
 
 __all__ = [
     "GOZ_CONTRACT_TYPE",
+    "GOZ_CONTRACT_TYPES",
     "compatible_labor_row_indices",
     "contract_has_labor_plan",
     "employee_compatible_with_contract_labor",

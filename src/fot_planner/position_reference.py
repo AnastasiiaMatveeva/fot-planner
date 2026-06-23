@@ -86,6 +86,29 @@ _DEFAULT_SYNONYMS = {
     "снс": "старший научный сотрудник",
     "внс": "ведущий научный сотрудник",
     "гнс": "главный научный сотрудник",
+    "инженер 1 категории": "инженер i категории",
+    "инженер 2 категории": "инженер ii категории",
+}
+
+# Категории из листа «Должности из ШР» справочной информации по зарплате.
+_DEFAULT_PERSONNEL_CATEGORIES = {
+    "аналитик": "НТП",
+    "ведущий инженер": "НТП",
+    "ведущий научный сотрудник": "НР",
+    "ведущий специалист": "НТП",
+    "главный инженер проекта": "НТП",
+    "главный научный сотрудник": "НР",
+    "главный специалист": "НТП",
+    "инженер": "НТП",
+    "инженер i категории": "НТП",
+    "инженер ii категории": "НТП",
+    "инженер-исследователь": "НР",
+    "лаборант-исследователь": "НТП",
+    "младший научный сотрудник": "НР",
+    "научный сотрудник": "НР",
+    "инженер-программист": "НТП",
+    "старший научный сотрудник": "НР",
+    "эксперт": "НТП",
 }
 
 
@@ -106,6 +129,14 @@ def default_position_reference() -> list[PositionReferenceRow]:
 
 def default_position_synonyms() -> dict[str, str]:
     return {normalize_position(k): normalize_position(v) for k, v in _DEFAULT_SYNONYMS.items()}
+
+
+def personnel_category_for_position(value: str | None) -> str | None:
+    """Категория персонала ШР для известной должности."""
+    key = normalize_position(value)
+    synonyms = default_position_synonyms()
+    canonical = synonyms.get(key, key)
+    return _DEFAULT_PERSONNEL_CATEGORIES.get(canonical)
 
 
 def build_position_index(
