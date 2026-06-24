@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 
 from fot_planner.fot_schedule import active_months_in_year
 from fot_planner.labor_rules import labor_rows_for_contract, planned_labor_amount
-from fot_planner.models import PlanningContext, PlanningResult, labor_row_id
+from fot_planner.models import PAYMENT_KINDS, PaymentKind, PlanningContext, PlanningResult, labor_row_id
 from fot_planner.excel.reports.user_report import (
     GROUP_DONE_COMMENT,
     MONTH_SHORT,
@@ -47,9 +47,12 @@ BORDER_TOP = Border(top=Side(style="medium", color="1F4E78"))
 
 EMPLOYEE_METRICS = (
     ("pm", "Закрыто чел.-мес."),
-    ("salary", "Оклад с договора"),
-    ("allowance", "Надбавка с договора"),
-    ("incentive", "Стимулирующая с договора"),
+    (PaymentKind.SALARY, "Оклад с договора"),
+    (PaymentKind.K120, "120 с договора"),
+    (PaymentKind.K122, "122 с договора"),
+    (PaymentKind.K124, "124 с договора"),
+    (PaymentKind.K152, "152 с договора"),
+    (PaymentKind.ORDER_INCENTIVE, "приказ с договора"),
     ("total", "Всего денег на строку"),
 )
 
@@ -351,48 +354,25 @@ def _collect_employee_rows(
             )
             for m in MONTHS
         }
-        sal_m = {
-            m: sum(
-                rec.amount
-                for rec in result.labor_payment_attributions
-                if rec.contract_id == contract_id
-                and rec.employee_id == e_id
-                and rec.labor_row_id == row_id
-                and rec.month == m
-                and rec.payment_kind == "salary"
-            )
-            for m in MONTHS
+        pay_m = {
+            kind: {
+                m: sum(
+                    rec.amount
+                    for rec in result.labor_payment_attributions
+                    if rec.contract_id == contract_id
+                    and rec.employee_id == e_id
+                    and rec.labor_row_id == row_id
+                    and rec.month == m
+                    and rec.payment_kind == kind
+                )
+                for m in MONTHS
+            }
+            for kind in PAYMENT_KINDS
         }
-        alw_m = {
-            m: sum(
-                rec.amount
-                for rec in result.labor_payment_attributions
-                if rec.contract_id == contract_id
-                and rec.employee_id == e_id
-                and rec.labor_row_id == row_id
-                and rec.month == m
-                and rec.payment_kind == "allowance"
-            )
-            for m in MONTHS
-        }
-        inc_m = {
-            m: sum(
-                rec.amount
-                for rec in result.labor_payment_attributions
-                if rec.contract_id == contract_id
-                and rec.employee_id == e_id
-                and rec.labor_row_id == row_id
-                and rec.month == m
-                and rec.payment_kind == "incentive"
-            )
-            for m in MONTHS
-        }
-        tot_m = {m: sal_m[m] + alw_m[m] + inc_m[m] for m in MONTHS}
+        tot_m = {m: sum(pay_m[kind][m] for kind in PAYMENT_KINDS) for m in MONTHS}
         metrics = {
             "pm": pm_m,
-            "salary": sal_m,
-            "allowance": alw_m,
-            "incentive": inc_m,
+            **pay_m,
             "total": tot_m,
         }
         for key, label in EMPLOYEE_METRICS:

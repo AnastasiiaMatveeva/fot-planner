@@ -128,7 +128,6 @@ def _workbook_with_cap(path: Path, *, wage: float, cap: float) -> None:
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": False,
-                "require_salary_reserve": False,
             }
         ]
     )

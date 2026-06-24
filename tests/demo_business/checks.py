@@ -166,11 +166,9 @@ def assert_cash_non_negative(result: PlanningResult) -> None:
         assert b.closing_balance >= -0.01, f"{b.contract_id} м{b.month}: отрицательный остаток"
 
 
-def assert_no_backward_transfers(result: PlanningResult) -> None:
-    assert not result.month_transfers
+def assert_forward_cashflow_only(result: PlanningResult) -> None:
     for b in result.contract_balances:
-        assert b.transfer_in == pytest.approx(0, abs=0.01)
-        assert b.transfer_out == pytest.approx(0, abs=0.01)
+        assert b.carried_forward >= -0.01
 
 
 def simulate_forward_cashflow(
@@ -322,7 +320,7 @@ def assert_success_scenario(
     assert_allowance_routing(scenario, result)
     assert_no_flex_tails(result)
     assert_cash_non_negative(result)
-    assert_no_backward_transfers(result)
+    assert_forward_cashflow_only(result)
     assert_no_payment_without_pm(result)
 
     assert_contract_cashflow(
@@ -446,7 +444,7 @@ def assert_no_backward_money_scenario(
     scenario: DemoScenario, result: PlanningResult
 ) -> None:
     """Деньги проекта поступают поздно — нельзя тратить их в более ранних месяцах."""
-    assert_no_backward_transfers(result)
+    assert_forward_cashflow_only(result)
     assert_cash_non_negative(result)
 
     project = scenario.contract(PROJECT_CONTRACT)

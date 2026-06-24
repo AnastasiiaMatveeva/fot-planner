@@ -44,7 +44,6 @@ def test_march_full_carry_to_april(tmp_path: Path):
                 "total_fot": 500_000,
                 "allow_salary": True,
                 "allow_incentive": False,
-                "require_salary_reserve": False,
             }
         ]
     )
@@ -69,7 +68,6 @@ def test_march_full_carry_to_april(tmp_path: Path):
     apr = next(b for b in result.contract_balances if b.month == 4)
     assert mar.carried_forward == pytest.approx(mar.closing_balance, abs=1)
     assert apr.opening_balance == pytest.approx(mar.closing_balance, abs=1)
-    assert not result.month_transfers
 
 
 def test_min_balance_requires_closing_floor(tmp_path: Path):
@@ -106,7 +104,6 @@ def test_min_balance_requires_closing_floor(tmp_path: Path):
                 "total_fot": 1_200_000,
                 "allow_salary": True,
                 "allow_incentive": False,
-                "require_salary_reserve": False,
             }
         ]
     )

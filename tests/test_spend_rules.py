@@ -7,7 +7,7 @@ from fot_planner.contract_calendar import (
     payment_deadline_date,
     payment_month_count,
 )
-from fot_planner.models import Contract, PaymentKindTerms
+from fot_planner.models import Contract
 
 
 def _contract(**kwargs) -> Contract:
@@ -19,18 +19,17 @@ def _contract(**kwargs) -> Contract:
         start_date=date(2026, 1, 1),
         end_date=date(2026, 6, 30),
         total_fot=1_000_000,
-        salary_terms=PaymentKindTerms(payment_deadline=date(2026, 6, 30)),
-        allowance_terms=PaymentKindTerms(payment_deadline=date(2026, 6, 30)),
-        incentive_terms=PaymentKindTerms(payment_deadline=date(2026, 6, 30)),
+        salary_payment_deadline=date(2026, 6, 30),
+        allowances_payment_deadline=date(2026, 6, 30),
     )
     defaults.update(kwargs)
     return Contract(**defaults)
 
 
-def test_payment_deadline_explicit_per_kind():
+def test_payment_deadline_salary_and_allowances_differ():
     c = _contract(
-        salary_terms=PaymentKindTerms(payment_deadline=date(2026, 11, 1)),
-        allowance_terms=PaymentKindTerms(payment_deadline=date(2027, 2, 2)),
+        salary_payment_deadline=date(2026, 11, 1),
+        allowances_payment_deadline=date(2027, 2, 2),
     )
     assert payment_deadline_date(c, "salary") == date(2026, 11, 1)
     assert payment_deadline_date(c, "allowance") == date(2027, 2, 2)
@@ -38,8 +37,8 @@ def test_payment_deadline_explicit_per_kind():
 
 def test_salary_stops_after_deadline_month():
     c = _contract(
-        salary_terms=PaymentKindTerms(payment_deadline=date(2026, 6, 30)),
-        allowance_terms=PaymentKindTerms(payment_deadline=date(2026, 8, 31)),
+        salary_payment_deadline=date(2026, 6, 30),
+        allowances_payment_deadline=date(2026, 8, 31),
     )
     year = 2026
     assert contract_allows_payment_month(c, year, 6, "salary")

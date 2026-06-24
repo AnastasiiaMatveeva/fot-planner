@@ -6,7 +6,8 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from fot_planner.excel.constants import COLUMN_ALIASES
+from fot_planner.excel.constants import COLUMN_ALIASES, PAYMENT_KIND_INPUT_ALIASES
+from fot_planner.payment_kind import PaymentKind
 
 def _canonical_column_name(col) -> str:
     raw = str(col).strip()
@@ -82,4 +83,26 @@ def _optional_int(val) -> int | None:
         return None
     return int(float(val))
 
+
+def parse_payment_kind(
+    value: object,
+    *,
+    default: PaymentKind = PaymentKind.SALARY,
+) -> PaymentKind:
+    """Вид выплаты из ячейки Excel (код или русское название)."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return default
+    if isinstance(value, PaymentKind):
+        return value
+    if isinstance(value, int):
+        return PaymentKind(value)
+    text = str(value).strip().lower().replace("ё", "е")
+    if not text:
+        return default
+    if text.isdigit():
+        return PaymentKind(int(text))
+    kind = PAYMENT_KIND_INPUT_ALIASES.get(text)
+    if kind is None:
+        raise ValueError(f"Неизвестный вид выплаты: {value!r}")
+    return kind
 

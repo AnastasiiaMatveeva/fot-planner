@@ -4,6 +4,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from fot_planner.defaults.position_limits import (
+    P4_LIMIT_BY_CATEGORY_2025,
+    P4_PERSONNEL_CATEGORIES,
+    POSITION_SALARY_LIMIT_ROWS,
+)
+
+__all__ = [
+    "P4_LIMIT_BY_CATEGORY_2025",
+    "P4_PERSONNEL_CATEGORIES",
+    "PositionSalaryLimit",
+    "default_position_salary_limits",
+    "effective_p4_limit",
+    "normalize_personnel_category",
+    "p4_applies_to_category",
+]
+
 
 @dataclass(frozen=True)
 class PositionSalaryLimit:
@@ -12,77 +28,36 @@ class PositionSalaryLimit:
     position: str
     personnel_category: str
     order_2556_limit: float | None = None
-    p3_average: float | None = None
+    p4_limit: float | None = None
     note: str | None = None
 
 
-# П2556 взят из колонки «I категория» приложения к приказу, как в примере
-# «инженер / программист / специалист — 110 000 руб.». Если должности нет в
-# приложении или соответствие неоднозначно, значение намеренно оставлено пустым.
-_DEFAULT_POSITION_LIMITS = [
-    ("Аналитик", "НТП", 110_000, None),
-    ("Ведущий аналитик", "НТП", 140_000, None),
-    ("Ведущий инженер", "НТП", 140_000, None),
-    ("Ведущий научный сотрудник", "НР", None, "Нет отдельной строки в приказе № 2556"),
-    ("Ведущий программист", "НТП", 140_000, None),
-    ("Ведущий специалист", "НТП", 140_000, None),
-    ("Главный инженер проекта", "НТП", 175_000, None),
-    ("Главный научный сотрудник", "НР", None, "Нет отдельной строки в приказе № 2556"),
-    ("Главный специалист", "НТП", 175_000, None),
-    ("Директор", "ППС", 175_000, "Строка приказа: директор, начальник центра, службы, отдела"),
-    ("Директор центра", "АУП", 175_000, None),
-    ("Заведующий лабораторией", "НР", 175_000, None),
-    ("Заместитель директора", "АУП", None, "Нет отдельной строки в приказе № 2556"),
-    (
-        "Заместитель директора по административным вопросам",
-        "АУП",
-        None,
-        "Нет отдельной строки в приказе № 2556",
-    ),
-    (
-        "Заместитель директора по информационно-аналитической работе",
-        "АУП",
-        None,
-        "Нет отдельной строки в приказе № 2556",
-    ),
-    (
-        "Заместитель директора по информационным технологиям",
-        "АУП",
-        None,
-        "Нет отдельной строки в приказе № 2556",
-    ),
-    ("Заместитель руководителя", "АУП", None, "Нет отдельной строки в приказе № 2556"),
-    ("Инженер", "НТП", 110_000, None),
-    ("Инженер 1 категории", "НТП", 120_000, "Строка специалистов с внутридолжностной категорией"),
-    ("Инженер 2 категории", "НТП", 120_000, "Строка специалистов с внутридолжностной категорией"),
-    ("Инженер-исследователь", "НР", 110_000, "Сопоставлено со строкой «инженер»"),
-    ("Лаборант", "НТП", 95_000, None),
-    ("Лаборант-исследователь", "НТП", 95_000, "Сопоставлено со строкой «лаборант»"),
-    ("Младший научный сотрудник", "НР", None, "Нет отдельной строки в приказе № 2556"),
-    ("Научный сотрудник", "НР", None, "Нет отдельной строки в приказе № 2556"),
-    ("Начальник отдела", "АУП", 175_000, None),
-    ("Программист", "НТП", 110_000, None),
-    ("Редактор", "ПП", 95_000, None),
-    ("Системный аналитик", "НТП", 110_000, "Сопоставлено со строкой «аналитик»"),
-    ("Специалист", "НТП", 110_000, None),
-    ("Старший научный сотрудник", "НР", None, "Нет отдельной строки в приказе № 2556"),
-    ("Техник", "НТП", 95_000, None),
-    ("Эксперт", "НТП", 110_000, "Сопоставлено со строкой специалистов"),
-]
+def normalize_personnel_category(value: object) -> str:
+    return str(value or "").strip().upper().replace("Ё", "Е")
+
+
+def p4_applies_to_category(personnel_category: object) -> bool:
+    return normalize_personnel_category(personnel_category) in P4_PERSONNEL_CATEGORIES
+
+
+def effective_p4_limit(row: PositionSalaryLimit | None) -> float | None:
+    """П4 для расчёта: только НТП/НР и только при заданном значении в справочнике."""
+    if row is None or not p4_applies_to_category(row.personnel_category):
+        return None
+    limit = row.p4_limit
+    if limit is None or limit <= 0:
+        return None
+    return float(limit)
 
 
 def default_position_salary_limits() -> list[PositionSalaryLimit]:
-    p3_by_category = {
-        "НР": 280_023.62,
-        "НТП": 162_638.30,
-    }
     return [
         PositionSalaryLimit(
             position=position,
             personnel_category=personnel_category,
             order_2556_limit=order_2556_limit,
-            p3_average=p3_by_category.get(personnel_category),
+            p4_limit=P4_LIMIT_BY_CATEGORY_2025.get(personnel_category),
             note=note,
         )
-        for position, personnel_category, order_2556_limit, note in _DEFAULT_POSITION_LIMITS
+        for position, personnel_category, order_2556_limit, note in POSITION_SALARY_LIMIT_ROWS
     ]

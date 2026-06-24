@@ -27,9 +27,10 @@ from fot_planner.excel.constants import (
 )
 from fot_planner.excel.load import _month_from_column
 from fot_planner.excel.workbook_format import format_workbook
-from fot_planner.fot_schedule import default_fot_inflow_at_start
+from fot_planner.defaults.contract_types import CONTRACT_TYPE_PRESETS
+from fot_planner.defaults.settings import DEFAULT_SETTINGS_ROW
 from fot_planner.position_reference import default_position_reference, default_position_synonyms
-from fot_planner.salary_limits_2556 import default_position_salary_limits
+from fot_planner.salary_limits_2556 import default_position_salary_limits, effective_p4_limit
 
 
 def create_template(path: str | Path) -> None:
@@ -52,45 +53,7 @@ def create_template(path: str | Path) -> None:
             }
         ]
     )
-    contract_types = pd.DataFrame(
-        [
-            {
-                "code": "goszakaz",
-                "name": "Государственный заказ",
-                "allow_salary": True,
-                "allow_allowance": True,
-                "allow_incentive": True,
-            },
-            {
-                "code": "goz",
-                "name": "ГОЗ / оборонный заказ",
-                "allow_salary": True,
-                "allow_allowance": True,
-                "allow_incentive": True,
-            },
-            {
-                "code": "grant",
-                "name": "Грант",
-                "allow_salary": True,
-                "allow_allowance": True,
-                "allow_incentive": True,
-            },
-            {
-                "code": "minprom",
-                "name": "Минпромторг",
-                "allow_salary": True,
-                "allow_allowance": True,
-                "allow_incentive": True,
-            },
-            {
-                "code": "off_budget",
-                "name": "Внебюджет",
-                "allow_salary": True,
-                "allow_allowance": True,
-                "allow_incentive": True,
-            },
-        ]
-    )
+    contract_types = pd.DataFrame(CONTRACT_TYPE_PRESETS)
     contract_labor = pd.DataFrame(
         columns=[
             "договор",
@@ -106,18 +69,20 @@ def create_template(path: str | Path) -> None:
                 "код": "C001",
                 "название": "НИОКР Альфа",
                 "номер": "123/2025",
-                "тип договора": "goszakaz",
-                "ГОЗ / оборонный заказ": "да",
+                "тип договора": "goz",
                 "дата начала": f"{year}-01-01",
                 "дата окончания": f"{year}-12-31",
                 "фот": 1_200_000,
                 "оклад разрешен": True,
+                "120 разрешена": False,
                 "надбавка разрешена": True,
-                "стимулирующая разрешена": True,
-                "срок выплат оклада": f"{year}-12-31",
-                "срок выплат надбавки": f"{year}-12-31",
-                "срок выплат стимулирующей": f"{year}-12-31",
+                "124 разрешена": False,
+                "152 разрешена": False,
+                "стимулирующая приказом разрешена": False,
+                "конечная дата выплат оклада": f"{year}-12-31",
+                "конечная дата выплат надбавок": f"{year}-12-31",
                 "перенос остатков": True,
+                "приоритет окладного якоря": 0,
             }
         ]
     )
@@ -127,7 +92,6 @@ def create_template(path: str | Path) -> None:
                 "договор": "C001",
                 "должность": "инженер",
                 "макс ставки": 2,
-                "макс выплата": 120000,
             }
         ]
     )
@@ -135,21 +99,7 @@ def create_template(path: str | Path) -> None:
     for m in range(1, 13):
         min_balance_matrix[str(m)] = [""]
 
-    settings = pd.DataFrame(
-        [
-            {
-                "год": year,
-                "разрешить дефицит": "нет",
-                "макс договоров оклада в год": 2,
-                "штраф смены договора оклада": 500_000,
-                "штраф административной сложности выплат": 50_000,
-                "штраф отклонения от равномерного освоения": 10_000,
-                "допуск трудоёмкости": 0.05,
-                "средняя зарплата ГОЗ": 112_261,
-                "штраф отклонения трудоёмкости": 100_000,
-            }
-        ]
-    )
+    settings = pd.DataFrame([{"год": year, **DEFAULT_SETTINGS_ROW}])
     fot_matrix = pd.DataFrame({"договор": ["C001"]})
     for m in range(1, 13):
         fot_matrix[str(m)] = [1_200_000 if m == 1 else ""]
@@ -207,7 +157,7 @@ def create_template(path: str | Path) -> None:
                     "должность": row.position,
                     "категория персонала": row.personnel_category,
                     "П2556": row.order_2556_limit if row.order_2556_limit is not None else "",
-                    "П3": row.p3_average if row.p3_average is not None else "",
+                    "П4": effective_p4_limit(row) or "",
                     "примечание к П2556": row.note or "",
                 }
                 for row in default_position_salary_limits()

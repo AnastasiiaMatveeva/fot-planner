@@ -7,28 +7,29 @@ from datetime import date
 from fot_planner.models import PAYMENT_KINDS, Contract, PaymentKind
 
 
-def _terms_for_kind(contract: Contract, kind: PaymentKind):
-    if kind == "salary":
-        return contract.salary_terms
-    if kind == "allowance":
-        return contract.allowance_terms
-    return contract.incentive_terms
-
-
 def payment_deadline_date(contract: Contract, kind: PaymentKind) -> date:
     """Последний день выплат вида с договора (явная дата или end_date)."""
-    terms = _terms_for_kind(contract, kind)
-    if terms.payment_deadline is not None:
-        return terms.payment_deadline
+    if kind is PaymentKind.SALARY:
+        deadline = contract.salary_payment_deadline
+    else:
+        deadline = contract.allowances_payment_deadline
+    if deadline is not None:
+        return deadline
     return contract.end_date
 
 
 def payment_kind_enabled(contract: Contract, kind: PaymentKind) -> bool:
-    if kind == "salary":
+    if kind is PaymentKind.SALARY:
         return contract.allow_salary
-    if kind == "allowance":
+    if kind is PaymentKind.K120:
+        return contract.allow_secret
+    if kind is PaymentKind.K122:
         return contract.allow_allowance
-    return contract.allow_incentive
+    if kind is PaymentKind.K124:
+        return contract.allow_incentive
+    if kind is PaymentKind.K152:
+        return contract.allow_extra_work
+    return contract.allow_order_incentive
 
 
 def _month_period(year: int, month: int) -> tuple[date, date]:

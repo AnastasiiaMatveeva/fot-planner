@@ -47,7 +47,6 @@ def _grant_workbook(path: Path, monthly_inflow: float, min_balance_jan: float = 
                 "probability": 1,
                 "use_after_end": False,
                 "opening_balance": 0,
-                "require_salary_reserve": False,
                 "min_monthly_balance": "",
             }
         ]

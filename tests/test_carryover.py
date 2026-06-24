@@ -46,7 +46,6 @@ def _build_workbook(path: Path, *, allow_carryover: bool, budget_rows: list[dict
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "require_salary_reserve": False,
             }
         ]
     )
@@ -62,7 +61,6 @@ def _build_workbook(path: Path, *, allow_carryover: bool, budget_rows: list[dict
             {
                 "year": year,
                 "max_salary_contracts_per_year": 2,
-                "min_fot_months_for_salary_reserve": 6,
                 "goz_labor_tolerance": 0.05,
             }
         ]
@@ -128,5 +126,4 @@ def test_forward_carry_january_surplus_to_february(tmp_path: Path):
     bal_feb = next(b for b in result.contract_balances if b.month == 2)
     assert bal_jan.carried_forward == pytest.approx(50000, abs=1)
     assert bal_feb.opening_balance == pytest.approx(50000, abs=1)
-
 

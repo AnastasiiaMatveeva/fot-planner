@@ -1,10 +1,9 @@
-"""Резерв оклада: legacy-поле в отчёте, не жёсткое ограничение модели."""
+"""Остатки договора считаются без отдельного резерва оклада."""
 
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from fot_planner.excel import create_template
 from fot_planner.planner import run_planning
@@ -16,7 +15,6 @@ def _grant_workbook(
     *,
     contract_type: str = "grant",
     months_with_inflow: list[int] | None = None,
-    require_salary_reserve: bool | None = True,
 ) -> None:
     create_template(path)
     year = date.today().year
@@ -47,7 +45,6 @@ def _grant_workbook(
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": False,
-                "require_salary_reserve": require_salary_reserve,
             }
         ]
     )
@@ -62,8 +59,7 @@ def _grant_workbook(
         fot_matrix.to_excel(w, sheet_name="fot_matrix", index=False)
 
 
-def test_salary_reserve_not_enforced_in_model(tmp_path: Path):
-    """Флаг резерва оклада не создаёт отдельное жёсткое ограничение close >= reserve."""
+def test_plan_feasible_without_salary_reserve_field(tmp_path: Path):
     inp = tmp_path / "input.xlsx"
     out = tmp_path / "result.xlsx"
     _grant_workbook(inp, monthly_inflow=150_000)
@@ -72,7 +68,6 @@ def test_salary_reserve_not_enforced_in_model(tmp_path: Path):
     assert result.solver_status in ("OPTIMAL", "FEASIBLE")
 
     jan = next(b for b in result.contract_balances if b.month == 1)
-    assert jan.salary_reserve_required == 0.0
     assert jan.closing_balance >= 0
 
 
@@ -84,10 +79,9 @@ def test_plan_feasible_without_salary_reserve_constraint(tmp_path: Path):
         monthly_inflow=500_000,
         contract_type="grant",
         months_with_inflow=[1, 2, 3, 4, 5, 6],
-        require_salary_reserve=False,
     )
 
     result = run_planning(inp, out, time_limit_sec=60)
     assert result.solver_status in ("OPTIMAL", "FEASIBLE")
     jan = next(b for b in result.contract_balances if b.month == 1)
-    assert jan.salary_reserve_required == 0.0
+    assert jan.closing_balance >= 0

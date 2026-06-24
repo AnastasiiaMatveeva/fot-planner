@@ -7,7 +7,11 @@ from collections import defaultdict
 import pandas as pd
 
 from fot_planner.excel.constants import PAYMENT_KIND_RU, RU_MONTHS
-from fot_planner.labor_rules import labor_rows_for_contract, planned_labor_groups
+from fot_planner.labor_rules import (
+    employee_compatible_with_position_rule,
+    labor_rows_for_contract,
+    planned_labor_groups,
+)
 from fot_planner.models import PlanningContext, PlanningResult, labor_row_id
 
 def position_control_dataframe(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
@@ -22,15 +26,11 @@ def position_control_dataframe(ctx: PlanningContext, result: PlanningResult) -> 
             continue
 
         compatible_rules = []
-        if contract.position_rules and employee.equivalence_group:
+        if contract.position_rules:
             compatible_rules = [
                 pr
                 for pr in contract.position_rules
-                if pr.equivalence_group == employee.equivalence_group
-            ]
-        elif contract.position_rules:
-            compatible_rules = [
-                pr for pr in contract.position_rules if pr.position == employee.position
+                if employee_compatible_with_position_rule(employee, pr)
             ]
 
         if contract.position_rules:
@@ -39,10 +39,7 @@ def position_control_dataframe(ctx: PlanningContext, result: PlanningResult) -> 
             compatible = True
 
         if compatible_rules:
-            salary_cap_1_rate = max(
-                (pr.max_monthly_payment or pr.reference_salary_for_rate or 0.0)
-                for pr in compatible_rules
-            )
+            salary_cap_1_rate = employee.reference_salary_for_rate
             contract_positions = "; ".join(sorted({pr.position for pr in compatible_rules}))
             contract_groups = "; ".join(
                 sorted({pr.equivalence_group or "" for pr in compatible_rules if pr.equivalence_group})
@@ -63,7 +60,7 @@ def position_control_dataframe(ctx: PlanningContext, result: PlanningResult) -> 
                 "группа по договору": contract_groups,
                 "месяц": RU_MONTHS.get(allocation.month, allocation.month),
                 "вид выплаты": PAYMENT_KIND_RU.get(
-                    allocation.payment_kind, allocation.payment_kind
+                    allocation.payment_kind, str(allocation.payment_kind.value)
                 ),
                 "сумма": allocation.amount,
                 "совместимость": "да" if compatible else "нет",
@@ -84,7 +81,7 @@ def labor_by_group_dataframe(ctx: PlanningContext, result: PlanningResult) -> pd
     employees = {e.id: e for e in ctx.employees}
     facts: dict[tuple[str, str | None], float] = {}
     for allocation in result.allocations:
-        if allocation.payment_kind != "salary" or allocation.amount < 0.01:
+        if allocation.payment_kind is not PaymentKind.SALARY or allocation.amount < 0.01:
             continue
         employee = employees.get(allocation.employee_id)
         if employee is None:
@@ -181,7 +178,6 @@ def labor_payment_report_dataframe(ctx: PlanningContext, result: PlanningResult)
             )
             payment_totals[key] += allocation.amount
 
-    kind_labels = {"salary": "оклад", "allowance": "надбавка", "incentive": "стимулирующая"}
     rows: list[dict] = []
     for rec in result.labor_payment_attributions:
         employee = employees.get(rec.employee_id)
@@ -194,7 +190,7 @@ def labor_payment_report_dataframe(ctx: PlanningContext, result: PlanningResult)
                 "фио": employee.full_name if employee else "",
                 "договор": rec.contract_id,
                 "месяц": RU_MONTHS.get(rec.month, rec.month),
-                "вид выплаты": kind_labels.get(rec.payment_kind, rec.payment_kind),
+                "вид выплаты": PAYMENT_KIND_RU.get(rec.payment_kind, str(rec.payment_kind.value)),
                 "выплачено всего": round(total_paid, 2),
                 "на строку трудоёмкости": round(rec.amount, 2),
                 "должность строки": rec.position or "",
@@ -243,15 +239,6 @@ def result_readable_tables(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     employees = {e.id: e for e in ctx.employees}
     contracts = {c.id: c for c in ctx.contracts}
-    outgoing_transfers: dict[tuple[str, int], list[str]] = {}
-    incoming_transfers: dict[tuple[str, int], list[str]] = {}
-    for transfer in result.month_transfers:
-        outgoing_transfers.setdefault((transfer.contract_id, transfer.from_month), []).append(
-            f"{RU_MONTHS[transfer.to_month]}: {transfer.amount:,.0f}".replace(",", " ")
-        )
-        incoming_transfers.setdefault((transfer.contract_id, transfer.to_month), []).append(
-            f"{RU_MONTHS[transfer.from_month]}: {transfer.amount:,.0f}".replace(",", " ")
-        )
 
     plan_rows = []
     for allocation in result.allocations:
@@ -267,7 +254,7 @@ def result_readable_tables(
                 "год": allocation.year,
                 "месяц": RU_MONTHS[allocation.month],
                 "вид выплаты": PAYMENT_KIND_RU.get(
-                    allocation.payment_kind, allocation.payment_kind
+                    allocation.payment_kind, str(allocation.payment_kind.value)
                 ),
                 "сумма": allocation.amount,
                 "зафиксировано": "да" if allocation.is_manual else "нет",
@@ -291,55 +278,11 @@ def result_readable_tables(
         }
         if balance.min_balance_required > 0.005:
             row["мин. остаток на конец"] = balance.min_balance_required
-        if balance.transfer_in > 0.005 or balance.transfer_out > 0.005:
-            row["перенос пришел"] = balance.transfer_in
-            row["откуда пришло"] = "; ".join(
-                incoming_transfers.get((balance.contract_id, balance.month), [])
-            )
-            row["перенос ушел"] = balance.transfer_out
-            row["куда перенесено"] = "; ".join(
-                outgoing_transfers.get((balance.contract_id, balance.month), [])
-            )
         balance_rows.append(row)
 
-    transfer_rows = []
-    matrix_rows: dict[tuple[str, int], dict] = {}
-    for transfer in result.month_transfers:
-        contract = contracts.get(transfer.contract_id)
-        transfer_rows.append(
-            {
-                "договор": transfer.contract_id,
-                "проект": contract.name if contract else "",
-                "из месяца": RU_MONTHS[transfer.from_month],
-                "в месяц": RU_MONTHS[transfer.to_month],
-                "сумма": transfer.amount,
-            }
-        )
-        key = (transfer.contract_id, transfer.from_month)
-        row = matrix_rows.setdefault(
-            key,
-            {
-                "договор": transfer.contract_id,
-                "проект": contract.name if contract else "",
-                "из месяца": RU_MONTHS[transfer.from_month],
-            },
-        )
-        col = f"в {RU_MONTHS[transfer.to_month]}"
-        row[col] = row.get(col, 0.0) + transfer.amount
-
     month_cols = [f"в {RU_MONTHS[month]}" for month in range(1, 13)]
-    matrix_df = pd.DataFrame(matrix_rows.values())
-    if matrix_df.empty:
-        matrix_df = pd.DataFrame(columns=["договор", "проект", "из месяца", *month_cols])
-    else:
-        for col in month_cols:
-            if col not in matrix_df.columns:
-                matrix_df[col] = 0.0
-        matrix_df = matrix_df[["договор", "проект", "из месяца", *month_cols]]
-
-    transfers_df = pd.DataFrame(transfer_rows)
-    if transfers_df.empty:
-        transfers_df = pd.DataFrame(columns=["договор", "проект", "из месяца", "в месяц", "сумма"])
+    matrix_df = pd.DataFrame(columns=["договор", "проект", "из месяца", *month_cols])
+    transfers_df = pd.DataFrame(columns=["договор", "проект", "из месяца", "в месяц", "сумма"])
 
     return pd.DataFrame(plan_rows), pd.DataFrame(balance_rows), transfers_df, matrix_df
 
@@ -356,28 +299,17 @@ _BALANCE_CORE_COLUMNS = [
     "перенос на будущий месяц",
 ]
 
-_LEGACY_BACKWARD_TRANSFER_COLUMNS = [
-    "перенос пришел",
-    "откуда пришло",
-    "перенос ушел",
-    "куда перенесено",
-]
-
-
 def balance_export_columns(balances_df: pd.DataFrame) -> list[str]:
     cols = list(_BALANCE_CORE_COLUMNS)
     if balances_df.empty:
         return cols
     if "мин. остаток на конец" in balances_df.columns:
         cols.append("мин. остаток на конец")
-    for col in _LEGACY_BACKWARD_TRANSFER_COLUMNS:
-        if col in balances_df.columns:
-            cols.append(col)
     return cols
 
 
 def export_balances_sheet(writer: pd.ExcelWriter, balances_df: pd.DataFrame) -> None:
-    export_cols = _balance_export_columns(balances_df)
+    export_cols = balance_export_columns(balances_df)
     if balances_df.empty:
         pd.DataFrame(columns=export_cols).to_excel(
             writer, sheet_name="остатки_и_переносы", index=False

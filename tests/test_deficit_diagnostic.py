@@ -46,7 +46,6 @@ def _workbook(
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": False,
-                "require_salary_reserve": False,
             }
         ]
     )

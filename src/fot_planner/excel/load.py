@@ -9,11 +9,16 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 
-from fot_planner.contract_types import CONTRACT_TYPE_DEFAULTS, KNOWN_CONTRACT_TYPES
+from fot_planner.defaults.contract_types import (
+    CONTRACT_TYPE_DEFAULTS,
+    GENERIC_CONTRACT_TYPE_DEFAULT,
+    normalize_contract_type,
+)
 from fot_planner.excel.constants import (
     SHEET_CONTRACT_BUDGET,
     SHEET_CONTRACT_LABOR,
     SHEET_CONTRACT_POSITIONS,
+    SHEET_CONTRACT_TYPES,
     SHEET_CONTRACTS,
     SHEET_EMPLOYEES,
     SHEET_FOT_LOCK_MATRIX,
@@ -38,9 +43,9 @@ from fot_planner.excel.parsing import (
     _parse_date,
     _resolve_monthly_wage,
     _split_list,
+    parse_payment_kind,
 )
 from fot_planner.fot_schedule import default_fot_inflow_at_start
-from fot_planner.labor_rules import employee_compatible_with_labor_row
 from fot_planner.open_rate_rules import normalize_employment_category
 from fot_planner.models import (
     AllocationRecord,
@@ -49,7 +54,6 @@ from fot_planner.models import (
     ContractMonthlyBudget,
     ContractPositionRule,
     Employee,
-    PaymentKindTerms,
     ManualAssignment,
     ManualProhibition,
     OptimizationWeights,
@@ -70,6 +74,7 @@ from fot_planner.position_reference import (
 from fot_planner.salary_limits_2556 import (
     PositionSalaryLimit,
     default_position_salary_limits,
+    p4_applies_to_category,
 )
 
 def load_context(path: str | Path, plan_path: str | Path | None = None) -> PlanningContext:
@@ -101,7 +106,11 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         _canonicalize_columns(pd.read_excel(xl, SHEET_EMPLOYEES)),
         position_index,
     )
-    contracts = _load_contracts(_canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACTS)))
+    contract_type_defaults = _load_contract_type_defaults(xl)
+    contracts = _load_contracts(
+        _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACTS)),
+        contract_type_defaults,
+    )
 
     if SHEET_CONTRACT_POSITIONS in xl.sheet_names:
         _apply_positions(
@@ -170,7 +179,6 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
 
     weights = OptimizationWeights()
     salary_stability = SalaryStabilityRules()
-    allow_backward_reallocation = False
     allow_deficit = False
     if settings_df is not None:
         weights = _load_weights(settings_df)
@@ -179,8 +187,6 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             row = settings_df.iloc[0]
             if "allow_deficit" in row and pd.notna(row["allow_deficit"]):
                 allow_deficit = _bool(row["allow_deficit"])
-            if "allow_backward_reallocation" in row and pd.notna(row["allow_backward_reallocation"]):
-                allow_backward_reallocation = _bool(row["allow_backward_reallocation"])
 
     return PlanningContext(
         year=year,
@@ -195,7 +201,6 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         labor_plans=labor_plans,
         baseline_plan=baseline_plan,
         allow_deficit=allow_deficit,
-        allow_backward_reallocation=allow_backward_reallocation,
     )
 
 
@@ -223,7 +228,7 @@ def _load_position_salary_limits(xl: pd.ExcelFile) -> list[PositionSalaryLimit]:
                 position=position,
                 personnel_category=personnel_category,
                 order_2556_limit=_optional_float(r.get("order_2556_limit")),
-                p3_average=_optional_float(r.get("p3_average")),
+                p4_limit=_optional_float(r.get("p4_limit")),
                 note=_clean_optional_text(r.get("salary_limit_note")),
             )
         )
@@ -299,50 +304,126 @@ def _load_employees(
     return rows
 
 
-def _type_defaults(contract_type: str) -> dict[str, bool]:
-    generic = {
-        "allow_salary": True,
-        "allow_allowance": True,
-        "allow_incentive": True,
-    }
-    known = CONTRACT_TYPE_DEFAULTS.get(contract_type)
+_CONTRACT_TYPE_BOOL_FIELDS = (
+    "allow_salary",
+    "allow_secret",
+    "allow_allowance",
+    "allow_incentive",
+    "allow_extra_work",
+    "allow_order_incentive",
+    "allowance_requires_salary_contract",
+    "priority_payment_mode",
+)
+_CONTRACT_TYPE_TEXT_FIELDS = (
+    "staff_limit_sources",
+    "salary_allowance_limit_sources",
+)
+_CONTRACT_TYPE_FLOAT_FIELDS = (
+    "agreement_staff_limit",
+    "secret_rate",
+)
+_CONTRACT_TYPE_INT_FIELDS = (
+    "salary_anchor_priority",
+)
+
+
+def _has_value(value: object) -> bool:
+    return value is not None and not pd.isna(value) and str(value).strip() != ""
+
+
+def _load_contract_type_defaults(xl: pd.ExcelFile) -> dict[str, dict[str, object]]:
+    defaults = {key: dict(value) for key, value in CONTRACT_TYPE_DEFAULTS.items()}
+    if SHEET_CONTRACT_TYPES not in xl.sheet_names:
+        return defaults
+
+    df = _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACT_TYPES))
+    for _, r in df.iterrows():
+        raw_code = r.get("code", r.get("contract_type", r.get("id")))
+        if not _has_value(raw_code):
+            continue
+        code = normalize_contract_type(raw_code)
+        row_defaults = dict(defaults.get(code, {}))
+        for field_name in _CONTRACT_TYPE_BOOL_FIELDS:
+            if field_name in r.index and _has_value(r.get(field_name)):
+                row_defaults[field_name] = _bool(r.get(field_name))
+        for field_name in _CONTRACT_TYPE_TEXT_FIELDS:
+            if field_name in r.index and _has_value(r.get(field_name)):
+                row_defaults[field_name] = str(r.get(field_name)).strip()
+        for field_name in _CONTRACT_TYPE_FLOAT_FIELDS:
+            if field_name in r.index and _has_value(r.get(field_name)):
+                row_defaults[field_name] = float(r.get(field_name))
+        for field_name in _CONTRACT_TYPE_INT_FIELDS:
+            if field_name in r.index and _has_value(r.get(field_name)):
+                row_defaults[field_name] = int(float(r.get(field_name)))
+        defaults[code] = row_defaults
+    return defaults
+
+
+def _type_defaults(
+    contract_type: str, contract_type_defaults: dict[str, dict[str, object]]
+) -> dict[str, object]:
+    generic = dict(GENERIC_CONTRACT_TYPE_DEFAULT)
+    known = contract_type_defaults.get(contract_type)
     if known is None:
         return generic
     return {**generic, **known}
 
 
-def _goz_defense_order_flag(row: pd.Series, contract_type: str) -> bool:
-    """БЭП 550 ВП применяется только к ГОЗ/оборонным заказам, не ко всем госзаказам."""
-    explicit = _optional_bool(row.get("is_goz_defense_order"))
-    if explicit is not None:
-        return explicit
-    return contract_type in {"goz", "gosoboronzakaz", "defense_order"}
+def _resolve_is_goz_defense_order(contract_type: str, staff_limit_sources: str) -> bool:
+    if contract_type == "goz":
+        return True
+    return "bep" in staff_limit_sources.lower()
 
 
-def _parse_payment_kind_terms(row: pd.Series, kind: str) -> PaymentKindTerms:
-    deadline_col = f"{kind}_payment_deadline"
-    payment_deadline = None
-    if deadline_col in row.index:
-        payment_deadline = _parse_date(row.get(deadline_col))
-    return PaymentKindTerms(payment_deadline=payment_deadline)
+def _optional_deadline(row: pd.Series, column: str) -> date | None:
+    if column not in row.index or not _has_value(row.get(column)):
+        return None
+    return _parse_date(row.get(column))
+
+
+def _legacy_allowances_payment_deadline(row: pd.Series) -> date | None:
+    """Старые файлы: отдельные колонки по 120/122/124/152 — берём самую позднюю дату."""
+    legacy_cols = (
+        "allowances_payment_deadline",
+        "flex_payment_deadline",
+        "allowance_payment_deadline",
+        "incentive_payment_deadline",
+        "secret_payment_deadline",
+        "extra_work_payment_deadline",
+    )
+    dates = [d for col in legacy_cols if (d := _optional_deadline(row, col)) is not None]
+    return max(dates) if dates else None
+
+
+def _parse_contract_payment_deadlines(row: pd.Series) -> tuple[date | None, date | None]:
+    return (
+        _optional_deadline(row, "salary_payment_deadline"),
+        _legacy_allowances_payment_deadline(row),
+    )
 
 
 def _apply_payment_deadlines(contract: Contract) -> None:
     """Пустые даты в Excel → дата окончания договора (в срок)."""
-    for terms in (
-        contract.salary_terms,
-        contract.allowance_terms,
-        contract.incentive_terms,
-    ):
-        if terms.payment_deadline is None:
-            terms.payment_deadline = contract.end_date
+    if contract.salary_payment_deadline is None:
+        contract.salary_payment_deadline = contract.end_date
+    if contract.allowances_payment_deadline is None:
+        contract.allowances_payment_deadline = contract.end_date
 
 
-def _load_contracts(df: pd.DataFrame) -> list[Contract]:
+def _load_contracts(
+    df: pd.DataFrame, contract_type_defaults: dict[str, dict[str, object]]
+) -> list[Contract]:
     rows: list[Contract] = []
     for _, r in df.iterrows():
-        ctype = str(r["contract_type"]).strip()
-        defaults = _type_defaults(ctype)
+        ctype = normalize_contract_type(r["contract_type"])
+        defaults = _type_defaults(ctype, contract_type_defaults)
+        staff_limit_sources = (
+            str(r.get("staff_limit_sources")).strip()
+            if "staff_limit_sources" in r.index and _has_value(r.get("staff_limit_sources"))
+            else str(defaults.get("staff_limit_sources", "") or "")
+        )
+        is_goz = _resolve_is_goz_defense_order(ctype, staff_limit_sources)
+        salary_payment_deadline, allowances_payment_deadline = _parse_contract_payment_deadlines(r)
         rows.append(
             Contract(
                 id=str(r["id"]).strip(),
@@ -352,18 +433,58 @@ def _load_contracts(df: pd.DataFrame) -> list[Contract]:
                 start_date=_parse_date(r["start_date"]),
                 end_date=_parse_date(r["end_date"]),
                 total_fot=float(r["total_fot"]),
-                is_goz_defense_order=_goz_defense_order_flag(r, ctype),
+                is_goz_defense_order=is_goz,
                 allow_salary=_bool(r.get("allow_salary"), bool(defaults["allow_salary"])),
+                allow_secret=_bool(
+                    r.get("allow_secret"), bool(defaults["allow_secret"])
+                ),
                 allow_allowance=_bool(
                     r.get("allow_allowance"), bool(defaults["allow_allowance"])
                 ),
                 allow_incentive=_bool(
                     r.get("allow_incentive"), bool(defaults["allow_incentive"])
                 ),
-                require_salary_reserve=_optional_bool(r.get("require_salary_reserve")),
-                salary_terms=_parse_payment_kind_terms(r, "salary"),
-                allowance_terms=_parse_payment_kind_terms(r, "allowance"),
-                incentive_terms=_parse_payment_kind_terms(r, "incentive"),
+                allow_extra_work=_bool(
+                    r.get("allow_extra_work"), bool(defaults["allow_extra_work"])
+                ),
+                allow_order_incentive=_bool(
+                    r.get("allow_order_incentive"),
+                    bool(defaults.get("allow_order_incentive", False)),
+                ),
+                staff_limit_sources=staff_limit_sources,
+                salary_allowance_limit_sources=(
+                    str(r.get("salary_allowance_limit_sources")).strip()
+                    if "salary_allowance_limit_sources" in r.index
+                    and _has_value(r.get("salary_allowance_limit_sources"))
+                    else str(defaults.get("salary_allowance_limit_sources", "") or "")
+                ),
+                agreement_staff_limit=(
+                    _optional_float(r.get("agreement_staff_limit"))
+                    if "agreement_staff_limit" in r.index
+                    and _has_value(r.get("agreement_staff_limit"))
+                    else defaults.get("agreement_staff_limit")
+                ),
+                allowance_requires_salary_contract=_bool(
+                    r.get("allowance_requires_salary_contract"),
+                    bool(defaults.get("allowance_requires_salary_contract", True)),
+                ),
+                secret_rate=(
+                    _optional_float(r.get("secret_rate"))
+                    if "secret_rate" in r.index and _has_value(r.get("secret_rate"))
+                    else float(defaults.get("secret_rate", 0.05) or 0.05)
+                ),
+                priority_payment_mode=_bool(
+                    r.get("priority_payment_mode"),
+                    bool(defaults.get("priority_payment_mode", False)),
+                ),
+                salary_anchor_priority=(
+                    int(float(r.get("salary_anchor_priority")))
+                    if "salary_anchor_priority" in r.index
+                    and _has_value(r.get("salary_anchor_priority"))
+                    else int(defaults.get("salary_anchor_priority", 0) or 0)
+                ),
+                salary_payment_deadline=salary_payment_deadline,
+                allowances_payment_deadline=allowances_payment_deadline,
                 allow_main_employment=_bool(r.get("allow_main_employment"), True),
                 allow_part_time=_bool(r.get("allow_part_time"), True),
             )
@@ -385,15 +506,12 @@ def _apply_positions(
 
         position = str(r["position"]).strip()
         ref = resolve_position(position, position_index)
-        max_pay = r.get("max_monthly_payment")
-        if pd.isna(max_pay) and ref is not None:
-            max_pay = ref.reference_salary_for_rate
 
         by_id[cid].position_rules.append(
             ContractPositionRule(
                 contract_id=cid,
                 position=position,
-                max_monthly_payment=float(max_pay) if pd.notna(max_pay) else None,
+                max_monthly_payment=None,
                 max_positions=_optional_float(r.get("max_positions")),
                 equivalence_group=ref.equivalence_group if ref else None,
                 position_level=ref.level if ref else None,
@@ -573,7 +691,7 @@ def _apply_matrix_budgets(
     *,
     fill_locks: dict[tuple[str, int], bool] | None = None,
 ) -> None:
-    """Матрица: строки = проекты, столбцы = месяцы. Lock: заливка, * в ячейке или legacy fot_lock_matrix."""
+    """Матрица: строки = проекты, столбцы = месяцы. Lock: заливка, * в ячейке или fot_lock_matrix."""
     by_id = {c.id: c for c in contracts}
     id_col = amounts.columns[0]
     month_cols = _matrix_month_columns(amounts)
@@ -702,7 +820,7 @@ def _load_manual_assignments(df: pd.DataFrame) -> list[ManualAssignment]:
                 year=int(r.get("year", date.today().year)),
                 month_from=int(r["month_from"]),
                 month_to=int(r["month_to"]),
-                payment_kind=str(r.get("payment_kind", "salary")).strip().lower(),
+                payment_kind=parse_payment_kind(r.get("payment_kind")),
                 fixed_amount=float(fixed) if pd.notna(fixed) else None,
             )
         )
@@ -720,7 +838,7 @@ def _load_manual_prohibitions(df: pd.DataFrame) -> list[ManualProhibition]:
                 year=int(r.get("year", date.today().year)),
                 month_from=int(r.get("month_from", 1)),
                 month_to=int(r.get("month_to", 12)),
-                payment_kind=str(pk).strip().lower() if pd.notna(pk) else None,
+                payment_kind=parse_payment_kind(pk) if pd.notna(pk) else None,
             )
         )
     return rows
@@ -739,7 +857,7 @@ def _load_plan_overrides(df: pd.DataFrame, default_year: int) -> list[Allocation
                 contract_id=str(r["contract_id"]).strip(),
                 year=int(r.get("year", default_year)),
                 month=int(r["month"]),
-                payment_kind=str(r["payment_kind"]).strip().lower(),
+                payment_kind=parse_payment_kind(r["payment_kind"]),
                 amount=float(r["amount"]),
                 is_manual=True,
                 source="excel_lock",
@@ -787,15 +905,11 @@ def _load_salary_stability(settings: pd.DataFrame) -> SalaryStabilityRules:
     row = settings.iloc[0]
     if "max_salary_contracts_per_year" in row and pd.notna(row["max_salary_contracts_per_year"]):
         rules.max_contracts_per_year = int(row["max_salary_contracts_per_year"])
-    if "min_fot_months_for_salary_reserve" in row and pd.notna(row["min_fot_months_for_salary_reserve"]):
-        rules.min_fot_months_for_salary_reserve = int(row["min_fot_months_for_salary_reserve"])
     if "goz_labor_tolerance" in row and pd.notna(row["goz_labor_tolerance"]):
         rules.goz_labor_tolerance = float(row["goz_labor_tolerance"])
     if "goz_average_salary_limit" in row and pd.notna(row["goz_average_salary_limit"]):
         rules.goz_average_salary_limit = float(row["goz_average_salary_limit"])
-    if "labor_pm_payment_multiplier" in row and pd.notna(row["labor_pm_payment_multiplier"]):
-        rules.labor_pm_payment_multiplier = float(row["labor_pm_payment_multiplier"])
-    # Открытые ставки всегда включены; столбец в Excel игнорируется (legacy).
+    # Открытые ставки всегда включены; столбец в Excel не управляет расчетом.
     rules.enable_open_rates = True
     return rules
 
@@ -807,7 +921,6 @@ def _load_weights(settings: pd.DataFrame) -> OptimizationWeights:
         "weight_admin_complexity": "admin_complexity",
         "weight_plan_deviation": "plan_deviation",
         "weight_uniform_spend_deviation": "uniform_spend_deviation",
-        "weight_salary_compensation_via_flex": "salary_compensation_via_flex",
         "weight_labor_deviation": "labor_deviation",
         "weight_rate_below_staff": "rate_below_staff",
     }

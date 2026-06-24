@@ -79,6 +79,5 @@ def test_empty_payment_deadlines_default_to_contract_end_date(tmp_path):
     ctx = load_context(path)
     c = next(x for x in ctx.contracts if x.id == "VB01")
     end = date(year, 12, 31)
-    assert c.salary_terms.payment_deadline == end
-    assert c.allowance_terms.payment_deadline == end
-    assert c.incentive_terms.payment_deadline == end
+    assert c.salary_payment_deadline == end
+    assert c.allowances_payment_deadline == end

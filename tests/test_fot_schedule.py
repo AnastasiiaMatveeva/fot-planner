@@ -6,7 +6,7 @@ from fot_planner.fot_schedule import (
     active_months_in_year,
     default_fot_inflow_at_start,
 )
-from fot_planner.models import Contract, PaymentKindTerms
+from fot_planner.models import Contract
 
 
 def test_default_inflow_at_contract_start():
@@ -19,9 +19,8 @@ def test_default_inflow_at_contract_start():
         start_date=date(year, 3, 1),
         end_date=date(year, 6, 30),
         total_fot=600_000,
-        salary_terms=PaymentKindTerms(payment_deadline=date(year, 6, 30)),
-        allowance_terms=PaymentKindTerms(payment_deadline=date(year, 8, 31)),
-        incentive_terms=PaymentKindTerms(payment_deadline=date(year, 8, 31)),
+        salary_payment_deadline=date(year, 6, 30),
+        allowances_payment_deadline=date(year, 8, 31),
     )
     default_fot_inflow_at_start([contract], year)
     months = active_months_in_year(contract, year)

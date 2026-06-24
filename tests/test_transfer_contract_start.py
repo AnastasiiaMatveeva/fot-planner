@@ -44,7 +44,6 @@ def _goszakaz_march_start_workbook(path: Path) -> None:
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": True,
-                "require_salary_reserve": False,
             }
         ]
     )
@@ -107,7 +106,6 @@ def test_december_inflow_cannot_pay_before_december(tmp_path: Path):
     result = run_planning(inp, out, time_limit_sec=120)
     assert result.solver_status == "INFEASIBLE"
     assert not result.allocations
-    assert not result.month_transfers
 
 
 def test_march_inflow_carries_forward(tmp_path: Path):
@@ -145,7 +143,6 @@ def test_march_inflow_carries_forward(tmp_path: Path):
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": False,
-                "require_salary_reserve": False,
             }
         ]
     )
@@ -164,7 +161,6 @@ def test_march_inflow_carries_forward(tmp_path: Path):
 
     result = run_planning(inp, out, time_limit_sec=120)
     assert result.solver_status in ("OPTIMAL", "FEASIBLE")
-    assert not result.month_transfers
 
     mar = next(b for b in result.contract_balances if b.contract_id == "C001" and b.month == 3)
     apr = next(b for b in result.contract_balances if b.contract_id == "C001" and b.month == 4)

@@ -43,7 +43,6 @@ def _gos_early_spend_workbook(path: Path) -> None:
                 "allow_salary": True,
                 "allow_allowance": True,
                 "allow_incentive": False,
-                "require_salary_reserve": False,
             }
         ]
     )

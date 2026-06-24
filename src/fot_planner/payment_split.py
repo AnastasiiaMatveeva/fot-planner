@@ -1,9 +1,10 @@
-"""Разделение месячной зарплаты: оклад с договора и добор гибкими видами выплат."""
+"""Окладная часть зарплаты: потолок оклада по должности и совместимость с договором."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from fot_planner.labor_rules import employee_compatible_with_position_rule
 from fot_planner.models import Contract, Employee
 
 
@@ -12,70 +13,67 @@ def employee_monthly_payment_due(employee: Employee) -> float:
     return max(0.0, employee.monthly_wage)
 
 
+def employee_reference_salary_cap(employee: Employee) -> float:
+    """Потолок оклада: справочник должностей × ставка (не зависит от договора)."""
+    org_rate = employee.reference_salary_for_rate
+    if org_rate is None or org_rate <= 0:
+        return 0.0
+    return org_rate * employee.rate
+
+
+def employee_max_salary_amount(employee: Employee) -> float:
+    """Оклад не больше зарплаты и справочного потолка."""
+    cap = employee_reference_salary_cap(employee)
+    if cap <= 0:
+        return 0.0
+    return min(employee_monthly_payment_due(employee), cap)
+
+
 @dataclass(frozen=True)
 class SalaryPositionOption:
-    """
-    Вариант "посадки" сотрудника на позицию договора для выплат salary.
-
-    Каждая строка contract_positions — отдельный вариант.
-    """
+    """Вариант посадки на строку contract_positions (должность/группа договора)."""
 
     position_rule_index: int
     position: str | None
     equivalence_group: str | None
-    organization_cap: float
-    contract_cap: float
-    final_cap: float
 
 
 def salary_position_options(contract: Contract, employee: Employee) -> list[SalaryPositionOption]:
     """
-    Возможные варианты по строкам contract_positions для выплат salary.
+    Строки договора, на которые можно посадить сотрудника (должность / группа).
 
-    Должность сотрудника не блокирует назначение.
-    Организационный потолок берётся из справочника должностей для позиции строки
-    (ContractPositionRule.reference_salary_for_rate).
+    Потолок оклада здесь не задаётся — он только в справочнике на сотруднике.
     """
-    opts: list[SalaryPositionOption] = []
-    for idx, pr in enumerate(contract.position_rules):
-        contract_cap = pr.max_monthly_payment
-        organization_cap = pr.reference_salary_for_rate
-        if contract_cap is None or contract_cap <= 0:
-            continue
-        if organization_cap is None or organization_cap <= 0:
-            continue
+    if employee_reference_salary_cap(employee) <= 0:
+        return []
 
-        cap_org = organization_cap * employee.rate
-        cap_contract = contract_cap * employee.rate
-        final = min(cap_org, cap_contract)
-        opts.append(
+    if not contract.position_rules:
+        return [
             SalaryPositionOption(
-                position_rule_index=idx,
-                position=pr.position,
-                equivalence_group=pr.equivalence_group,
-                organization_cap=cap_org,
-                contract_cap=cap_contract,
-                final_cap=final,
+                position_rule_index=0,
+                position=employee.position,
+                equivalence_group=employee.equivalence_group,
             )
+        ]
+
+    return [
+        SalaryPositionOption(
+            position_rule_index=idx,
+            position=pr.position,
+            equivalence_group=pr.equivalence_group,
         )
-    return opts
+        for idx, pr in enumerate(contract.position_rules)
+        if employee_compatible_with_position_rule(employee, pr)
+    ]
 
 
 def max_salary_amount_if_contract_used(contract: Contract, employee: Employee) -> float:
-    """Верхняя граница salary на договоре (до выбора позиции в оптимизаторе)."""
-    due = employee_monthly_payment_due(employee)
-    if due <= 0:
-        return 0.0
-    opts = salary_position_options(contract, employee)
-    if not opts:
-        return 0.0
-    return min(due, max(o.final_cap for o in opts))
-
-
-def flex_remainder_after_salary(employee: Employee, salary_paid: float) -> float:
     """
-    Остаток полной зарплаты после salary — только для отчётов и тестов.
+    Верхняя граница оклада с договора для оптимизатора.
 
-    В оптимизаторе: salary + allowance + incentive == employee_monthly_payment_due.
+    Договор влияет только на посадку (есть ли совместимая строка).
+    Сумма потолка — из справочника сотрудника, не из договора.
     """
-    return max(0.0, employee_monthly_payment_due(employee) - salary_paid)
+    if not salary_position_options(contract, employee):
+        return 0.0
+    return employee_max_salary_amount(employee)

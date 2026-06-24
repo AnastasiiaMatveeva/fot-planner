@@ -7,17 +7,19 @@ from datetime import date
 from typing import Literal
 
 from fot_planner.salary_limits_2556 import PositionSalaryLimit
+from fot_planner.defaults.settings import (
+    DEFAULT_GOZ_AVERAGE_SALARY_LIMIT,
+    DEFAULT_GOZ_LABOR_TOLERANCE,
+)
 
-PaymentKind = Literal["salary", "allowance", "incentive"]
-PAYMENT_KINDS: tuple[PaymentKind, ...] = ("salary", "allowance", "incentive")
+from fot_planner.payment_kind import (
+    PAYMENT_KINDS,
+    STAFF_LIMIT_KINDS,
+    SUPPLEMENT_KINDS,
+    PaymentKind,
+)
+
 EmploymentCategory = Literal["regular", "student", "graduate_student"]
-
-
-@dataclass
-class PaymentKindTerms:
-    """Срок выплат по виду с договора (последний допустимый день)."""
-
-    payment_deadline: date | None = None
 
 
 @dataclass
@@ -57,7 +59,7 @@ class ContractPositionRule:
 
     contract_id: str
     position: str
-    max_monthly_payment: float | None = None
+    max_monthly_payment: float | None = None  # не используется: потолок оклада — в справочнике должностей
     max_positions: float | None = None
     equivalence_group: str | None = None
     position_level: int | None = None
@@ -79,18 +81,27 @@ class Contract:
     id: str
     name: str
     number: str
-    contract_type: str  # справочная метка (goszakaz, grant, off_budget…); правила — в колонках ниже
+    contract_type: str  # свободная метка; правила задаются колонками договора/contract_types
     start_date: date
     end_date: date
     total_fot: float
-    is_goz_defense_order: bool = False  # ГОЗ/оборонный заказ: включает норматив БЭП 550 ВП
+    is_goz_defense_order: bool = False
     allow_salary: bool = True
-    allow_allowance: bool = True
-    allow_incentive: bool = True
-    require_salary_reserve: bool | None = None  # legacy: читается из старых Excel
-    salary_terms: PaymentKindTerms = field(default_factory=PaymentKindTerms)
-    allowance_terms: PaymentKindTerms = field(default_factory=PaymentKindTerms)
-    incentive_terms: PaymentKindTerms = field(default_factory=PaymentKindTerms)
+    allow_secret: bool = False
+    allow_allowance: bool = True  # код 122
+    allow_incentive: bool = True  # код 124
+    allow_extra_work: bool = False
+    allow_order_incentive: bool = False  # стимулирующая приказом (верхний уровень зарплаты)
+    staff_limit_sources: str = ""
+    salary_allowance_limit_sources: str = ""
+    agreement_staff_limit: float | None = None
+    allowance_requires_salary_contract: bool = True
+    secret_rate: float = 0.05
+    priority_payment_mode: bool = False
+    salary_anchor_priority: int = 0
+    # Конечная дата выплат с договора (последний допустимый день; None → end_date при загрузке).
+    salary_payment_deadline: date | None = None
+    allowances_payment_deadline: date | None = None
     position_rules: list[ContractPositionRule] = field(default_factory=list)
     monthly_budgets: list[ContractMonthlyBudget] = field(default_factory=list)
     allow_main_employment: bool = True
@@ -163,14 +174,14 @@ class LaborPaymentAttribution:
 
 @dataclass
 class ManualAssignment:
-    """Фиксация: сотрудник на договоре в периоде (оклад и/или стимулирующие)."""
+    """Фиксация: сотрудник на договоре в периоде (оклад и/или 122/124)."""
 
     employee_id: str
     contract_id: str
     year: int
     month_from: int
     month_to: int
-    payment_kind: PaymentKind = "salary"
+    payment_kind: PaymentKind = PaymentKind.SALARY
     fixed_amount: float | None = None
 
 
@@ -193,8 +204,6 @@ ADMIN_COMPLEXITY_FRAGMENT_FACTOR = 0.1
 @dataclass
 class OptimizationWeights:
     # Штрафы в целевой функции (не жёсткие ограничения)
-    # Штраф за вынужденный добор оклада через allowance/incentive (низкий salary_cap)
-    salary_compensation_via_flex: float = 3_000.0
     # Мягкий штраф смены договора оклада
     salary_contract_switch: float = 500_000.0
     # Связи сотрудник–договор и смены схемы между месяцами
@@ -211,16 +220,12 @@ class OptimizationWeights:
 class SalaryStabilityRules:
     """Ограничения и допуски по окладу (salary)."""
 
-    # Legacy: опциональное жёсткое ограничение из старых Excel; None — выключено
+    # Опциональное жёсткое ограничение: сколько договоров с окладом допустимо за год.
     max_contracts_per_year: int | None = None
-    # Legacy: читается из старых Excel (ограничение в модели снято)
-    min_fot_months_for_salary_reserve: int = 6
     # Допуск ±% по чел.-мес. и сумме строки трудоёмкости (все типы договоров)
-    goz_labor_tolerance: float = 0.05
+    goz_labor_tolerance: float = DEFAULT_GOZ_LABOR_TOLERANCE
     # БЭП 550 ВП: предельная средняя зарплата на 1 чел.-мес. по договору ГОЗ.
-    goz_average_salary_limit: float = 112_261.0
-    # Верхняя граница отнесённой суммы на строку в месяце: multiplier × средняя × чел.-мес.
-    labor_pm_payment_multiplier: float = 5.0
+    goz_average_salary_limit: float = DEFAULT_GOZ_AVERAGE_SALARY_LIMIT
     # Открытые ставки и мультиоклад — всегда включены (не настраиваются).
     enable_open_rates: bool = True
 
@@ -240,8 +245,6 @@ class PlanningContext:
     baseline_plan: list[AllocationRecord] | None = None
     # Диагностический режим: разрешить недоплату с большим штрафом (см. allow_deficit)
     allow_deficit: bool = False
-    # Legacy: перенос из будущего в прошлое отключён; флаг читается из старых Excel
-    allow_backward_reallocation: bool = False
 
 
 @dataclass
@@ -252,7 +255,7 @@ class AllocationRecord:
     contract_id: str  # код договора / проекта
     year: int
     month: int  # 1–12
-    payment_kind: PaymentKind  # оклад, надбавка или стимулирующая
+    payment_kind: PaymentKind  # оклад, 122, 124, 120, 152
     amount: float  # сумма с этого договора
     is_manual: bool = False  # зафиксировано вручную (manual_assignments / lock в plan)
     source: str = "optimizer"
@@ -289,7 +292,7 @@ class ContractBalanceRecord:
     """
     Касса договора за месяц (не лимит ФОТ по договору).
 
-    Поступления из fot_matrix, расход по плану, остаток и переносы между месяцами.
+    Поступления из fot_matrix, расход по плану и остаток между месяцами.
     В отчёте «проекты_помесячно» другая величина — остаток лимита total_fot.
     """
 
@@ -302,28 +305,13 @@ class ContractBalanceRecord:
     closing_balance: float  # на конец месяца на «счёте» договора
     carried_forward: float = 0.0
     forfeited: float = 0.0
-    salary_reserve_required: float = 0.0  # legacy: в отчёте не выводится
     min_balance_required: float = 0.0  # минимальный остаток на конец месяца (min_balance_matrix)
-    transfer_in: float = 0.0  # legacy: перенос назад отключён
-    transfer_out: float = 0.0  # legacy: перенос назад отключён
-    movable_balance: float = 0.0  # legacy: лимит переноса назад
     carryover_allowed: bool = True
 
     @property
     def balance(self) -> float:
         """Остаток на конец месяца (alias для closing_balance)."""
         return self.closing_balance
-
-
-@dataclass
-class MonthTransfer:
-    """Legacy: перенос из будущего в прошлое; в новых отчётах не выводится."""
-
-    contract_id: str
-    year: int
-    from_month: int  # откуда «взяли» кассу
-    to_month: int  # куда зачли (обычно to_month < from_month)
-    amount: float
 
 
 @dataclass
@@ -338,7 +326,7 @@ class PlanningResult:
     solver_status: str  # OPTIMAL, FEASIBLE, INFEASIBLE, …
     objective_value: float  # значение целевой функции (сумма штрафов)
     solve_time_sec: float
-    month_transfers: list[MonthTransfer] = field(default_factory=list)
+    payroll_limit_mode: str = "planning_cap"
     labor_pm_attributions: list[LaborPmAttribution] = field(default_factory=list)
     labor_payment_attributions: list[LaborPaymentAttribution] = field(default_factory=list)
     open_rate_attributions: list[OpenRateAttribution] = field(default_factory=list)

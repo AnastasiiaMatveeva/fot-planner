@@ -13,13 +13,18 @@ from fot_planner.labor_rules import (
     labor_rows_for_contract,
     planned_labor_amount,
 )
-from fot_planner.models import PlanningContext, PlanningResult, labor_row_id
+from fot_planner.excel.constants import PAYMENT_KIND_RU
+from fot_planner.models import (
+    PAYMENT_KINDS,
+    PaymentKind,
+    PlanningContext,
+    PlanningResult,
+    labor_row_id,
+)
 from fot_planner.optimizer import MIN_FLEX_FRAGMENT_AMOUNT
 from fot_planner.payment_split import employee_monthly_payment_due
 from fot_planner.excel.reports.spend_plan import build_spend_plan_fact_dataframe
 from fot_planner.validation import employee_active_in_month
-
-FLEX_KINDS = frozenset({"allowance", "incentive"})
 
 MONTH_SHORT: dict[int, str] = {
     1: "Янв",
@@ -54,12 +59,6 @@ RU_MONTHS: dict[int, str] = {
 MONTH_RU_TO_SHORT = {v: MONTH_SHORT[k] for k, v in RU_MONTHS.items()}
 MONTH_RU_TO_NUM = {v: k for k, v in RU_MONTHS.items()}
 
-PAYMENT_KIND_RU = {
-    "salary": "оклад",
-    "allowance": "надбавка",
-    "incentive": "стимулирующая",
-}
-
 SHEET_README = "Как читать файл"
 SHEET_SUMMARY = "Итог расчета"
 SHEET_ISSUES = "Проблемы и предупреждения"
@@ -68,8 +67,6 @@ SHEET_CONTRACT_PAYMENTS = "Выплаты по договорам"
 SHEET_BALANCES = "Остатки по договорам"
 SHEET_SPEND_PLAN = "Освоение план-факт"
 SHEET_LABOR_CONTROL = "Контроль трудоёмкости"
-SHEET_LABOR = "Трудоёмкость по строкам"  # legacy, не экспортируется
-SHEET_LABOR_BREAKDOWN = "Расшифровка трудоёмкости"  # legacy, не экспортируется
 SHEET_PLAN = "План выплат"
 SHEET_LABOR_PAYMENTS = "Выплаты в трудоёмкость"
 SHEET_POSITION = "Контроль должностей"
@@ -107,7 +104,7 @@ def _sum_matrix_row(values: dict[int, float]) -> dict[str, float | str]:
 def _salary_contracts_by_month(allocations, employee_id: str) -> dict[int, str]:
     by_month: dict[int, str] = {}
     for a in allocations:
-        if a.employee_id != employee_id or a.payment_kind != "salary" or a.amount < 0.01:
+        if a.employee_id != employee_id or a.payment_kind != PaymentKind.SALARY or a.amount < 0.01:
             continue
         by_month[a.month] = a.contract_id
     return by_month
@@ -178,8 +175,12 @@ def build_readme_sheet() -> pd.DataFrame:
             "описание": "Обязательная часть зарплаты. Должен быть назначен каждый месяц активному сотруднику.",
         },
         {
-            "раздел": "Надбавка / стимулирующая",
-            "описание": "Переменная часть выплаты. Может идти с другого договора; дробление нежелательно.",
+            "раздел": "Надбавка",
+            "описание": "Составные коды 120, 122, 124, 152. Могут идти с другого договора; дробление нежелательно.",
+        },
+        {
+            "раздел": "Стимулирующая приказом",
+            "описание": "Отдельная часть зарплаты, не входит в надбавочные коды.",
         },
         {
             "раздел": "Остаток договора",
@@ -338,7 +339,7 @@ def _split_payment_issues(ctx: PlanningContext, result: PlanningResult) -> list[
     grouped: dict[tuple[str, int, str], list] = defaultdict(list)
     employees = {e.id: e for e in ctx.employees}
     for a in result.allocations:
-        if a.payment_kind not in FLEX_KINDS or a.amount <= 0.005:
+        if not a.payment_kind.is_non_salary or a.amount <= 0.005:
             continue
         grouped[(a.employee_id, a.month, a.payment_kind)].append(a)
 
@@ -612,20 +613,20 @@ def build_employee_payments_matrix(ctx: PlanningContext, result: PlanningResult)
             m: sum(
                 a.amount
                 for a in result.allocations
-                if a.employee_id == e.id and a.month == m and a.payment_kind == "salary"
+                if a.employee_id == e.id and a.month == m and a.payment_kind == PaymentKind.SALARY
             )
             for m in range(1, 13)
         }
         for label, fn in [
             ("Оклад: договор", lambda m: sal_c.get(m, "")),
             ("Оклад: сумма", lambda m: sal_amt.get(m, 0.0)),
-            ("Надбавка: договор", lambda m: _flex_contracts_text(result.allocations, e.id, m, "allowance")),
-            ("Надбавка: сумма", lambda m: _flex_total(result.allocations, e.id, m, "allowance")),
+            ("122: договор", lambda m: _flex_contracts_text(result.allocations, e.id, m, PaymentKind.K122)),
+            ("122: сумма", lambda m: _flex_total(result.allocations, e.id, m, PaymentKind.K122)),
             (
-                "Стимулирующая: договор",
-                lambda m: _flex_contracts_text(result.allocations, e.id, m, "incentive"),
+                "124: договор",
+                lambda m: _flex_contracts_text(result.allocations, e.id, m, PaymentKind.K124),
             ),
-            ("Стимулирующая: сумма", lambda m: _flex_total(result.allocations, e.id, m, "incentive")),
+            ("124: сумма", lambda m: _flex_total(result.allocations, e.id, m, PaymentKind.K124)),
             ("Количество договоров в месяце", lambda m: len(_contracts_by_month(result.allocations, e.id, m))),
         ]:
             vals = {m: fn(m) for m in range(1, 13)}
@@ -763,8 +764,11 @@ LABOR_BREAKDOWN_COLUMNS = [
     "ставка сотрудника",
     "закрыто чел.-мес.",
     "оклад с договора",
-    "надбавка с договора",
-    "стимулирующая с договора",
+    "120 с договора",
+    "122 с договора",
+    "124 с договора",
+    "152 с договора",
+    "приказ с договора",
     "всего отнесено на строку",
     "плановая средняя",
     "фактическая средняя",
@@ -1043,7 +1047,7 @@ def _detail_attribution_status(
             )
     if not contract_has_labor_plan(ctx, contract_id):
         return "ОК", ""
-    for kind in ("salary", "allowance", "incentive"):
+    for kind in PAYMENT_KINDS:
         paid = _paid_on_contract(result, employee_id, contract_id, month, kind)
         if paid <= 0.005:
             continue
@@ -1110,23 +1114,17 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
             if rid == row_id and pay_by[(rid, e_id, month, _kind)] > 0.005
         }
         total_pm = 0.0
-        total_amount = 0.0
-        total_salary = 0.0
-        total_allowance = 0.0
-        total_incentive = 0.0
+        total_by_kind = {kind: 0.0 for kind in PAYMENT_KINDS}
         for (_rid, e_id, month) in detail_keys:
             total_pm += pm_by.get((row_id, e_id, month), 0.0)
-            total_salary += pay_by.get((row_id, e_id, month, "salary"), 0.0)
-            total_allowance += pay_by.get((row_id, e_id, month, "allowance"), 0.0)
-            total_incentive += pay_by.get((row_id, e_id, month, "incentive"), 0.0)
-        total_amount = total_salary + total_allowance + total_incentive
+            for kind in PAYMENT_KINDS:
+                total_by_kind[kind] += pay_by.get((row_id, e_id, month, kind), 0.0)
+        total_amount = sum(total_by_kind.values())
         spec["detail_keys"] = detail_keys
         spec["checks"] = _labor_row_checks(
             spec["plan_pm"], spec["plan_amount"], total_pm, total_amount, tol
         )
-        spec["total_salary"] = total_salary
-        spec["total_allowance"] = total_allowance
-        spec["total_incentive"] = total_incentive
+        spec["total_by_kind"] = total_by_kind
 
     group_ok_map: dict[tuple[str, str], bool] = {}
     group_all_row_ok: dict[tuple[str, str], bool] = {}
@@ -1151,10 +1149,13 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
 
         for _rid, e_id, month in sorted(spec["detail_keys"], key=lambda x: (x[2], x[1])):
             pm = pm_by.get((row_id, e_id, month), 0.0)
-            salary = pay_by.get((row_id, e_id, month, "salary"), 0.0)
-            allowance = pay_by.get((row_id, e_id, month, "allowance"), 0.0)
-            incentive = pay_by.get((row_id, e_id, month, "incentive"), 0.0)
-            total = salary + allowance + incentive
+            salary = pay_by.get((row_id, e_id, month, PaymentKind.SALARY), 0.0)
+            secret = pay_by.get((row_id, e_id, month, PaymentKind.K120), 0.0)
+            allowance = pay_by.get((row_id, e_id, month, PaymentKind.K122), 0.0)
+            incentive = pay_by.get((row_id, e_id, month, PaymentKind.K124), 0.0)
+            extra_work = pay_by.get((row_id, e_id, month, PaymentKind.K152), 0.0)
+            order_incentive = pay_by.get((row_id, e_id, month, PaymentKind.ORDER_INCENTIVE), 0.0)
+            total = salary + secret + allowance + incentive + extra_work + order_incentive
             if pm <= 0.005 and total <= 0.005:
                 continue
 
@@ -1182,8 +1183,11 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
                     "ставка сотрудника": emp.rate if emp else "",
                     "закрыто чел.-мес.": round(pm, 4),
                     "оклад с договора": round(salary, 2) if salary > 0.005 else "",
-                    "надбавка с договора": round(allowance, 2) if allowance > 0.005 else "",
-                    "стимулирующая с договора": round(incentive, 2) if incentive > 0.005 else "",
+                    "120 с договора": round(secret, 2) if secret > 0.005 else "",
+                    "122 с договора": round(allowance, 2) if allowance > 0.005 else "",
+                    "124 с договора": round(incentive, 2) if incentive > 0.005 else "",
+                    "152 с договора": round(extra_work, 2) if extra_work > 0.005 else "",
+                    "приказ с договора": round(order_incentive, 2) if order_incentive > 0.005 else "",
                     "всего отнесено на строку": round(total, 2),
                     "плановая средняя": "",
                     "фактическая средняя": "",
@@ -1216,9 +1220,24 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
                     "группа сотрудника": "",
                     "ставка сотрудника": "",
                     "закрыто чел.-мес.": round(checks["fact_pm"], 4),
-                    "оклад с договора": round(spec["total_salary"], 2) if spec["total_salary"] > 0.005 else "",
-                    "надбавка с договора": round(spec["total_allowance"], 2) if spec["total_allowance"] > 0.005 else "",
-                    "стимулирующая с договора": round(spec["total_incentive"], 2) if spec["total_incentive"] > 0.005 else "",
+                    "оклад с договора": round(spec["total_by_kind"][PaymentKind.SALARY], 2)
+                    if spec["total_by_kind"][PaymentKind.SALARY] > 0.005
+                    else "",
+                    "120 с договора": round(spec["total_by_kind"][PaymentKind.K120], 2)
+                    if spec["total_by_kind"][PaymentKind.K120] > 0.005
+                    else "",
+                    "122 с договора": round(spec["total_by_kind"][PaymentKind.K122], 2)
+                    if spec["total_by_kind"][PaymentKind.K122] > 0.005
+                    else "",
+                    "124 с договора": round(spec["total_by_kind"][PaymentKind.K124], 2)
+                    if spec["total_by_kind"][PaymentKind.K124] > 0.005
+                    else "",
+                    "152 с договора": round(spec["total_by_kind"][PaymentKind.K152], 2)
+                    if spec["total_by_kind"][PaymentKind.K152] > 0.005
+                    else "",
+                    "приказ с договора": round(spec["total_by_kind"][PaymentKind.ORDER_INCENTIVE], 2)
+                    if spec["total_by_kind"][PaymentKind.ORDER_INCENTIVE] > 0.005
+                    else "",
                     "всего отнесено на строку": round(checks["fact_amt"], 2),
                     "плановая средняя": _round_avg(spec["plan_avg"]),
                     "фактическая средняя": _round_avg(checks["fact_avg"]),
@@ -1251,7 +1270,7 @@ def build_plan_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> p
         status = "ОК"
         if (a.employee_id, a.month) in deficit_keys:
             status = "дефицит"
-        elif a.payment_kind in FLEX_KINDS and a.amount < MIN_FLEX_FRAGMENT_AMOUNT - 0.01:
+        elif a.payment_kind.is_non_salary and a.amount < MIN_FLEX_FRAGMENT_AMOUNT - 0.01:
             status = "ниже минимального фрагмента"
         elif contract_has_labor_plan(ctx, a.contract_id):
             key = (a.employee_id, a.contract_id, a.month, a.payment_kind)
@@ -1268,7 +1287,7 @@ def build_plan_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> p
                 "месяц": RU_MONTHS[a.month],
                 "договор": a.contract_id,
                 "название договора": c.name if c else "",
-                "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
+                "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, str(a.payment_kind.value)),
                 "сумма": round(a.amount, 2),
                 "источник решения": a.source,
                 "зафиксировано": "да" if a.is_manual else "нет",
@@ -1315,7 +1334,7 @@ def build_labor_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> 
                 "договор": rec.contract_id,
                 "название договора": c.name if c else "",
                 "месяц": RU_MONTHS[rec.month],
-                "вид выплаты": PAYMENT_KIND_RU.get(rec.payment_kind, rec.payment_kind),
+                "вид выплаты": PAYMENT_KIND_RU.get(rec.payment_kind, str(rec.payment_kind.value)),
                 "выплачено всего": round(total, 2),
                 "сумма, отнесенная на трудоёмкость": round(attr, 2),
                 "должность строки": rec.position or "",
@@ -1344,7 +1363,7 @@ def build_labor_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> 
                     "договор": a.contract_id,
                     "название договора": c.name if c else "",
                     "месяц": RU_MONTHS[a.month],
-                    "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
+                    "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, str(a.payment_kind.value)),
                     "выплачено всего": round(a.amount, 2),
                     "сумма, отнесенная на трудоёмкость": round(attributed_sum.get(key, 0.0), 2),
                     "должность строки": "",
@@ -1392,7 +1411,7 @@ def build_admin_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.DataFr
 
     split_count: dict[str, int] = defaultdict(int)
     for a in result.allocations:
-        if a.payment_kind in FLEX_KINDS and a.amount > 0.005:
+        if a.payment_kind.is_non_salary and a.amount > 0.005:
             split_count[(a.employee_id, a.month, a.payment_kind)] += 1
 
     rows: list[dict] = []
@@ -1412,7 +1431,10 @@ def build_admin_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.DataFr
                 "количество смен схемы выплат": r["смен схемы за год"],
                 "количество смен договора оклада": _count_salary_switches(result.allocations, eid),
                 "количество дроблений переменных выплат": splits,
-                "количество переменных выплат": r.get("фрагментов allowance/incentive", 0),
+                "количество переменных выплат": r.get(
+                    "фрагментов переменных выплат",
+                    0,
+                ),
                 "оценка сложности": "высокая"
                 if r["договоров за год"] > 2 or r["смен схемы за год"] > 2
                 else "нормальная",
@@ -1422,7 +1444,7 @@ def build_admin_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.DataFr
     note = (
         "Чем меньше договоров и смен схемы, тем проще план для сопровождения. "
         "Смена схемы — изменение набора договоров сотрудника между соседними месяцами. "
-        "Дробление — когда одна надбавка или стимулирующая в месяце выплачена с нескольких договоров."
+        "Дробление — когда 122 или 124 в месяце выплачены с нескольких договоров."
     )
     rows.insert(
         0,
@@ -1435,7 +1457,7 @@ def build_split_check_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.
     employees = {e.id: e for e in ctx.employees}
     grouped: dict[tuple[str, int, str], list] = defaultdict(list)
     for a in result.allocations:
-        if a.payment_kind in FLEX_KINDS and a.amount > 0.005:
+        if a.payment_kind.is_non_salary and a.amount > 0.005:
             grouped[(a.employee_id, a.month, a.payment_kind)].append(a)
 
     rows: list[dict] = []

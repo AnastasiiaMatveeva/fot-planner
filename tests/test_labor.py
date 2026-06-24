@@ -48,7 +48,6 @@ def _goz_with_labor(path: Path, plan_pm: float, positions: bool = True) -> None:
                 "allow_incentive": True,
                 "probability": 1,
                 "use_after_end": False,
-                "require_salary_reserve": False,
             }
         ]
     )

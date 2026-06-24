@@ -92,11 +92,3 @@ def min_balance_for_month(contract: Contract, month: int) -> float:
         if mb.month == month and mb.min_balance is not None:
             return mb.min_balance
     return 0.0
-
-
-def cumulative_inflow_through_month(contract: Contract, year: int, through_month: int) -> float:
-    """Сумма физических поступлений с января по through_month включительно."""
-    return sum(
-        month_inflow_amount(contract, year, m)
-        for m in range(1, through_month + 1)
-    )

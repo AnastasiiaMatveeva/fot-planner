@@ -40,9 +40,12 @@ STAFF_DETAIL_HEADERS = [
 ]
 
 _PAYMENT_PARAMETERS: dict[PaymentKind, tuple[str, str]] = {
-    "salary": ("1", "Оклад (должностной оклад)"),
-    "allowance": ("122", "За качество выполняемых работ"),
-    "incentive": ("124", "За интенсивность и высокие результаты работы"),
+    PaymentKind.SALARY: ("1", "Оклад (должностной оклад)"),
+    PaymentKind.K120: ("120", "За работу со сведениями, составляющими государственную тайну"),
+    PaymentKind.K122: ("122", "За качество выполняемых работ"),
+    PaymentKind.K124: ("124", "За интенсивность и высокие результаты работы"),
+    PaymentKind.K152: ("152", "За выполнение дополнительной работы"),
+    PaymentKind.ORDER_INCENTIVE: ("приказ", "Стимулирующая выплата приказом"),
 }
 
 
@@ -112,6 +115,9 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
         if employee is None or contract is None:
             continue
 
+        if allocation.payment_kind not in _PAYMENT_PARAMETERS:
+            continue
+
         rate, is_main = rates.get(
             (allocation.employee_id, allocation.contract_id, allocation.month),
             (employee.rate, True),
@@ -119,7 +125,7 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
         if rate <= 0:
             rate = employee.rate if employee.rate > 0 else 1.0
 
-        if allocation.payment_kind == "salary" and employee.reference_salary_for_rate:
+        if allocation.payment_kind is PaymentKind.SALARY and employee.reference_salary_for_rate:
             nominal = employee.reference_salary_for_rate
         else:
             nominal = allocation.amount / rate
@@ -168,7 +174,13 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
                         employee.full_name,
                         starts,
                         0 if is_main else 1,
-                        {"salary": 0, "allowance": 1, "incentive": 2}[kind],
+                        {
+                            PaymentKind.SALARY: 0,
+                            PaymentKind.K120: 1,
+                            PaymentKind.K122: 2,
+                            PaymentKind.K124: 3,
+                            PaymentKind.K152: 4,
+                        }[kind],
                         contract_id,
                     ),
                 }

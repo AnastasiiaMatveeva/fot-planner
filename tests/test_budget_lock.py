@@ -41,7 +41,6 @@ def test_budget_lock_in_result(tmp_path: Path):
             {
                 "year": year,
                 "max_salary_contracts_per_year": 2,
-                "min_fot_months_for_salary_reserve": 6,
                 "goz_labor_tolerance": 0.05,
             }
         ]

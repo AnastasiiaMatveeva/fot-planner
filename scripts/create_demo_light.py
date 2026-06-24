@@ -138,8 +138,7 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             year=year,
             end_date=f"{year}-06-30",
             total_fot=600_000,
-            allowance_payment_deadline=f"{year}-08-31",
-            incentive_payment_deadline=f"{year}-08-31",
+            flex_payment_deadline=f"{year}-08-31",
             carryover=True,
         ),
     ]

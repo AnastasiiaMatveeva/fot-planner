@@ -7,8 +7,6 @@ from collections import defaultdict
 from fot_planner.models import PlanningContext, PlanningResult
 from fot_planner.validation import employee_active_in_month
 
-FLEX_KINDS = frozenset({"allowance", "incentive"})
-
 
 def build_admin_complexity_dataframe(ctx: PlanningContext, result: PlanningResult):
     import pandas as pd
@@ -27,7 +25,7 @@ def build_admin_complexity_dataframe(ctx: PlanningContext, result: PlanningResul
             continue
         year_contracts[a.employee_id].add(a.contract_id)
         month_contracts[(a.employee_id, a.month)].add(a.contract_id)
-        if a.payment_kind in FLEX_KINDS:
+        if a.payment_kind.is_non_salary:
             emp = employees.get(a.employee_id)
             flex_fragments.append(
                 {
@@ -35,7 +33,7 @@ def build_admin_complexity_dataframe(ctx: PlanningContext, result: PlanningResul
                     "табельный номер": a.employee_id,
                     "месяц": RU_MONTHS.get(a.month, a.month),
                     "договор": a.contract_id,
-                    "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, a.payment_kind),
+                    "вид выплаты": PAYMENT_KIND_RU.get(a.payment_kind, str(a.payment_kind.value)),
                     "сумма": round(a.amount, 2),
                 }
             )
@@ -75,11 +73,11 @@ def build_admin_complexity_dataframe(ctx: PlanningContext, result: PlanningResul
                 "табельный номер": e.id,
                 "договоров за год": len(contracts),
                 "договоры": "; ".join(contracts) if contracts else "—",
-                "фрагментов allowance/incentive": sum(
+                "фрагментов переменных выплат": sum(
                     1
                     for a in result.allocations
                     if a.employee_id == e.id
-                    and a.payment_kind in FLEX_KINDS
+                    and a.payment_kind.is_non_salary
                     and a.amount > 0.005
                 ),
                 "смен схемы за год": sum(

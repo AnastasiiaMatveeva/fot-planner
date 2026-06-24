@@ -46,9 +46,6 @@ def test_demo_light_solve_covers_main_rules(demo_light_path: Path, tmp_path: Pat
         spent = sum(a.amount for a in result.allocations if a.contract_id == cid)
         assert spent >= fot - 2_000, f"{cid}: освоено {spent}, ожидалось ~{fot}"
 
-    # Физических переносов из будущего в прошлое нет
-    assert not result.month_transfers
-
     # Ручная привязка E001 → грант в Q1
     e001_q1 = [
         a
