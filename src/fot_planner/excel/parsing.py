@@ -6,25 +6,26 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from fot_planner.excel.constants import COLUMN_ALIASES, PAYMENT_KIND_INPUT_ALIASES
+from fot_planner.excel.constants import (
+    COLUMN_ALIASES_BY_SHEET,
+    PAYMENT_KIND_INPUT_ALIASES,
+)
 from fot_planner.payment_kind import PaymentKind
 
-def _canonical_column_name(col) -> str:
+
+def _canonical_column_name(col, sheet_name: str) -> str:
     raw = str(col).strip()
     key = raw.lower().replace("ё", "е")
-    return COLUMN_ALIASES.get(key, raw)
+    aliases = COLUMN_ALIASES_BY_SHEET.get(sheet_name)
+    if aliases is None:
+        raise KeyError(f"Не описаны алиасы колонок для листа {sheet_name!r}")
+    return aliases.get(key, raw)
 
 
-def _canonicalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    return df.rename(columns={col: _canonical_column_name(col) for col in df.columns})
-
-
-def _canonicalize_manual_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """На листах manual «сотрудник» — табельный номер, не ФИО."""
-    out = _canonicalize_columns(df)
-    if "employee_id" not in out.columns and "full_name" in out.columns:
-        out = out.rename(columns={"full_name": "employee_id"})
-    return out
+def _canonicalize_columns(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    return df.rename(
+        columns={col: _canonical_column_name(col, sheet_name) for col in df.columns}
+    )
 
 
 def _parse_date(val) -> date | None:

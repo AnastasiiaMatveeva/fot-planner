@@ -241,8 +241,8 @@ def _status_name(results) -> str:
 
 
 def _preferred_salary_anchor_contract_id(ctx: PlanningContext) -> str | None:
-    """Предпочтительный договор для окладов: настраиваемый приоритет, затем срок/ФОТ."""
-    candidates = [c for c in ctx.contracts if c.allow_salary is not False]
+    """Предпочтительный договор для окладов: самый длительный допустимый, затем больший ФОТ."""
+    candidates = [c for c in ctx.contracts if c.allow_salary]
     if not candidates:
         return None
 
@@ -253,7 +253,7 @@ def _preferred_salary_anchor_contract_id(ctx: PlanningContext) -> str | None:
 
     anchor = max(
         candidates,
-        key=lambda c: (c.salary_anchor_priority, span_days(c), c.total_fot),
+        key=lambda c: (span_days(c), c.total_fot),
     )
     return anchor.id
 

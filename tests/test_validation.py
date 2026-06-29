@@ -40,6 +40,59 @@ def test_validate_unknown_contract():
     assert any(e.code == "UNKNOWN_CONTRACT" for e in errors)
 
 
+def test_validate_contract_allowed_and_forbidden():
+    ctx = PlanningContext(
+        year=2025,
+        employees=[
+            Employee(
+                id="E1",
+                full_name="A",
+                position="инженер",
+                department="",
+                rate=1,
+                monthly_wage=100,
+                allowed_contracts=["C1", "C2"],
+                forbidden_contracts=["C2", "C3"],
+            )
+        ],
+        contracts=[
+            Contract(
+                id="C1",
+                name="",
+                number="",
+                contract_type="grant",
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 12, 31),
+                total_fot=1,
+            ),
+            Contract(
+                id="C2",
+                name="",
+                number="",
+                contract_type="grant",
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 12, 31),
+                total_fot=1,
+            ),
+            Contract(
+                id="C3",
+                name="",
+                number="",
+                contract_type="grant",
+                start_date=date(2025, 1, 1),
+                end_date=date(2025, 12, 31),
+                total_fot=1,
+            ),
+        ],
+    )
+    errors = validate_context(ctx)
+    overlap_errors = [
+        e for e in errors if e.code == "CONTRACT_ALLOWED_AND_FORBIDDEN"
+    ]
+    assert len(overlap_errors) == 1
+    assert overlap_errors[0].contract_id == "C2"
+
+
 def test_fot_below_planned_labor_cost_warning():
     year = 2026
     ctx = PlanningContext(

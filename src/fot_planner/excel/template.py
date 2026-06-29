@@ -12,6 +12,7 @@ from openpyxl.styles import PatternFill
 from fot_planner.excel.constants import (
     SHEET_CONTRACT_BUDGET,
     SHEET_CONTRACT_LABOR,
+    SHEET_CONTRACT_PAYMENT_LIMITS,
     SHEET_CONTRACT_POSITIONS,
     SHEET_CONTRACTS,
     SHEET_EMPLOYEES,
@@ -21,16 +22,14 @@ from fot_planner.excel.constants import (
     SHEET_MANUAL_PROHIBITIONS,
     SHEET_MIN_BALANCE_MATRIX,
     SHEET_POSITION_REFERENCE,
-    SHEET_POSITION_SALARY_LIMITS,
     SHEET_POSITION_SYNONYMS,
     SHEET_SETTINGS,
 )
 from fot_planner.excel.load import _month_from_column
 from fot_planner.excel.workbook_format import format_workbook
-from fot_planner.defaults.contract_types import CONTRACT_TYPE_PRESETS
 from fot_planner.defaults.settings import DEFAULT_SETTINGS_ROW
 from fot_planner.position_reference import default_position_reference, default_position_synonyms
-from fot_planner.salary_limits_2556 import default_position_salary_limits, effective_p4_limit
+from fot_planner.salary_limits_2556 import default_position_limit_tables
 
 
 def create_template(path: str | Path) -> None:
@@ -53,7 +52,6 @@ def create_template(path: str | Path) -> None:
             }
         ]
     )
-    contract_types = pd.DataFrame(CONTRACT_TYPE_PRESETS)
     contract_labor = pd.DataFrame(
         columns=[
             "договор",
@@ -82,8 +80,15 @@ def create_template(path: str | Path) -> None:
                 "конечная дата выплат оклада": f"{year}-12-31",
                 "конечная дата выплат надбавок": f"{year}-12-31",
                 "перенос остатков": True,
-                "приоритет окладного якоря": 0,
             }
+        ]
+    )
+    contract_payment_limits = pd.DataFrame(
+        [
+            {"договор": "C001", "выплата": "оклад", "ограничение": "БЭП"},
+            {"договор": "C001", "выплата": "122", "ограничение": "БЭП"},
+            {"договор": "C001", "выплата": "оклад", "ограничение": "2556"},
+            {"договор": "C001", "выплата": "122", "ограничение": "2556"},
         ]
     )
     positions = pd.DataFrame(
@@ -124,8 +129,10 @@ def create_template(path: str | Path) -> None:
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         employees.to_excel(writer, sheet_name=SHEET_EMPLOYEES, index=False)
-        contract_types.to_excel(writer, sheet_name="contract_types", index=False)
         contracts.to_excel(writer, sheet_name=SHEET_CONTRACTS, index=False)
+        contract_payment_limits.to_excel(
+            writer, sheet_name=SHEET_CONTRACT_PAYMENT_LIMITS, index=False
+        )
         positions.to_excel(writer, sheet_name=SHEET_CONTRACT_POSITIONS, index=False)
         contract_labor.to_excel(writer, sheet_name=SHEET_CONTRACT_LABOR, index=False)
         fot_matrix.to_excel(writer, sheet_name=SHEET_FOT_MATRIX, index=False)
@@ -151,18 +158,18 @@ def create_template(path: str | Path) -> None:
                 for raw, canonical in default_position_synonyms().items()
             ]
         ).to_excel(writer, sheet_name=SHEET_POSITION_SYNONYMS, index=False)
-        pd.DataFrame(
-            [
-                {
-                    "должность": row.position,
-                    "категория персонала": row.personnel_category,
-                    "П2556": row.order_2556_limit if row.order_2556_limit is not None else "",
-                    "П4": effective_p4_limit(row) or "",
-                    "примечание к П2556": row.note or "",
-                }
-                for row in default_position_salary_limits()
-            ]
-        ).to_excel(writer, sheet_name=SHEET_POSITION_SALARY_LIMITS, index=False)
+        for limit_code, rows in default_position_limit_tables().items():
+            pd.DataFrame(
+                [
+                    {
+                        "должность": row.position,
+                        "категория персонала": row.personnel_category or "",
+                        "лимит на 1 ставку": row.limit if row.limit is not None else "",
+                        "примечание": row.note or "",
+                    }
+                    for row in rows
+                ]
+            ).to_excel(writer, sheet_name=limit_code, index=False)
 
     wb = load_workbook(path)
     yellow = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")

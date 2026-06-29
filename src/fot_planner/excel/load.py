@@ -1,5 +1,3 @@
-"""Загрузка PlanningContext из Excel."""
-
 from __future__ import annotations
 
 from collections import defaultdict
@@ -9,16 +7,13 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 
-from fot_planner.defaults.contract_types import (
-    CONTRACT_TYPE_DEFAULTS,
-    GENERIC_CONTRACT_TYPE_DEFAULT,
-    normalize_contract_type,
-)
+from fot_planner.defaults.contract_types import normalize_contract_type
 from fot_planner.excel.constants import (
+    LIMIT_TABLE_COLUMN_ALIASES,
     SHEET_CONTRACT_BUDGET,
     SHEET_CONTRACT_LABOR,
+    SHEET_CONTRACT_PAYMENT_LIMITS,
     SHEET_CONTRACT_POSITIONS,
-    SHEET_CONTRACT_TYPES,
     SHEET_CONTRACTS,
     SHEET_EMPLOYEES,
     SHEET_FOT_LOCK_MATRIX,
@@ -29,14 +24,12 @@ from fot_planner.excel.constants import (
     SHEET_MIN_BALANCE_MATRIX,
     SHEET_PLAN,
     SHEET_POSITION_REFERENCE,
-    SHEET_POSITION_SALARY_LIMITS,
     SHEET_POSITION_SYNONYMS,
     SHEET_SETTINGS,
 )
 from fot_planner.excel.parsing import (
     _bool,
     _canonicalize_columns,
-    _canonicalize_manual_columns,
     _optional_bool,
     _optional_float,
     _optional_int,
@@ -46,12 +39,14 @@ from fot_planner.excel.parsing import (
     parse_payment_kind,
 )
 from fot_planner.fot_schedule import default_fot_inflow_at_start
+from fot_planner.limit_codes import normalize_limit_code
 from fot_planner.open_rate_rules import normalize_employment_category
 from fot_planner.models import (
     AllocationRecord,
     Contract,
     ContractLaborPlan,
     ContractMonthlyBudget,
+    ContractPaymentLimit,
     ContractPositionRule,
     Employee,
     ManualAssignment,
@@ -72,7 +67,9 @@ from fot_planner.position_reference import (
     resolve_position,
 )
 from fot_planner.salary_limits_2556 import (
+    PositionLimit,
     PositionSalaryLimit,
+    default_position_limit_tables,
     default_position_salary_limits,
     p4_applies_to_category,
 )
@@ -84,7 +81,10 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
     year = date.today().year
     settings_df: pd.DataFrame | None = None
     if SHEET_SETTINGS in xl.sheet_names:
-        settings_df = _canonicalize_columns(pd.read_excel(xl, SHEET_SETTINGS))
+        settings_df = _canonicalize_columns(
+            pd.read_excel(xl, SHEET_SETTINGS),
+            SHEET_SETTINGS,
+        )
         if not settings_df.empty and "year" in settings_df.columns:
             year = int(settings_df.iloc[0]["year"])
 
@@ -100,29 +100,49 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         )
         for row in position_reference_rows
     ]
-    position_salary_limits = _load_position_salary_limits(xl)
-
     employees = _load_employees(
-        _canonicalize_columns(pd.read_excel(xl, SHEET_EMPLOYEES)),
+        _canonicalize_columns(pd.read_excel(xl, SHEET_EMPLOYEES), SHEET_EMPLOYEES),
         position_index,
     )
-    contract_type_defaults = _load_contract_type_defaults(xl)
     contracts = _load_contracts(
-        _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACTS)),
-        contract_type_defaults,
+        _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACTS), SHEET_CONTRACTS),
     )
+    contract_payment_limits: list[ContractPaymentLimit] = []
+    if SHEET_CONTRACT_PAYMENT_LIMITS in xl.sheet_names:
+        contract_payment_limits = _load_contract_payment_limits(
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_CONTRACT_PAYMENT_LIMITS),
+                SHEET_CONTRACT_PAYMENT_LIMITS,
+            ),
+            contracts,
+        )
+    _apply_contract_limit_flags(contracts, contract_payment_limits)
+    position_limit_tables = _load_position_limit_tables(
+        xl,
+        {row.limit_code for row in contract_payment_limits},
+    )
+    position_salary_limits = _position_salary_limits_from_tables(position_limit_tables)
 
     if SHEET_CONTRACT_POSITIONS in xl.sheet_names:
         _apply_positions(
             contracts,
-            _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACT_POSITIONS)),
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_CONTRACT_POSITIONS),
+                SHEET_CONTRACT_POSITIONS,
+            ),
             position_index,
         )
     if SHEET_FOT_MATRIX in xl.sheet_names:
-        amounts_df = _canonicalize_columns(pd.read_excel(xl, SHEET_FOT_MATRIX))
+        amounts_df = _canonicalize_columns(
+            pd.read_excel(xl, SHEET_FOT_MATRIX),
+            SHEET_FOT_MATRIX,
+        )
         lock_df = None
         if SHEET_FOT_LOCK_MATRIX in xl.sheet_names:
-            lock_df = _canonicalize_columns(pd.read_excel(xl, SHEET_FOT_LOCK_MATRIX))
+            lock_df = _canonicalize_columns(
+                pd.read_excel(xl, SHEET_FOT_LOCK_MATRIX),
+                SHEET_FOT_LOCK_MATRIX,
+            )
         fill_locks = _read_fot_matrix_fill_locks(path)
         for c in contracts:
             c.monthly_budgets = []
@@ -138,7 +158,10 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             c.monthly_budgets = []
         _apply_budgets(
             contracts,
-            _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACT_BUDGET)),
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_CONTRACT_BUDGET),
+                SHEET_CONTRACT_BUDGET,
+            ),
         )
     else:
         default_fot_inflow_at_start(contracts, year)
@@ -146,14 +169,20 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
     if SHEET_MIN_BALANCE_MATRIX in xl.sheet_names:
         _apply_matrix_min_balances(
             contracts,
-            _canonicalize_columns(pd.read_excel(xl, SHEET_MIN_BALANCE_MATRIX)),
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_MIN_BALANCE_MATRIX),
+                SHEET_MIN_BALANCE_MATRIX,
+            ),
             year,
         )
 
     labor_plans: list[ContractLaborPlan] = []
     if SHEET_CONTRACT_LABOR in xl.sheet_names:
         labor_plans = _load_contract_labor(
-            _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACT_LABOR)),
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_CONTRACT_LABOR),
+                SHEET_CONTRACT_LABOR,
+            ),
             year,
             position_index,
         )
@@ -162,11 +191,17 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
     manual_prohibitions: list[ManualProhibition] = []
     if SHEET_MANUAL_ASSIGNMENTS in xl.sheet_names:
         manual_assignments = _load_manual_assignments(
-            _canonicalize_manual_columns(pd.read_excel(xl, SHEET_MANUAL_ASSIGNMENTS))
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_MANUAL_ASSIGNMENTS),
+                SHEET_MANUAL_ASSIGNMENTS,
+            )
         )
     if SHEET_MANUAL_PROHIBITIONS in xl.sheet_names:
         manual_prohibitions = _load_manual_prohibitions(
-            _canonicalize_manual_columns(pd.read_excel(xl, SHEET_MANUAL_PROHIBITIONS))
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_MANUAL_PROHIBITIONS),
+                SHEET_MANUAL_PROHIBITIONS,
+            )
         )
 
     baseline_plan: list[AllocationRecord] | None = None
@@ -175,7 +210,10 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
     if plan_source.exists() and plan_source.suffix.lower() in (".xlsx", ".xlsm"):
         plan_xl = pd.ExcelFile(plan_source)
         if SHEET_PLAN in plan_xl.sheet_names:
-            baseline_plan = _load_plan_overrides(pd.read_excel(plan_xl, SHEET_PLAN), year)
+            baseline_plan = _load_plan_overrides(
+                _canonicalize_columns(pd.read_excel(plan_xl, SHEET_PLAN), SHEET_PLAN),
+                year,
+            )
 
     weights = OptimizationWeights()
     salary_stability = SalaryStabilityRules()
@@ -194,11 +232,13 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         contracts=contracts,
         position_reference=position_reference,
         position_salary_limits=position_salary_limits,
+        position_limit_tables=position_limit_tables,
         manual_assignments=manual_assignments,
         manual_prohibitions=manual_prohibitions,
         weights=weights,
         salary_stability=salary_stability,
         labor_plans=labor_plans,
+        contract_payment_limits=contract_payment_limits,
         baseline_plan=baseline_plan,
         allow_deficit=allow_deficit,
     )
@@ -211,25 +251,120 @@ def _clean_optional_text(value: object) -> str | None:
     return text or None
 
 
-def _load_position_salary_limits(xl: pd.ExcelFile) -> list[PositionSalaryLimit]:
-    """Лист заменяет встроенный справочник целиком, включая изменённые суммы."""
-    if SHEET_POSITION_SALARY_LIMITS not in xl.sheet_names:
-        return default_position_salary_limits()
+LIMIT_CODES_WITHOUT_POSITION_TABLE = {"bep"}
 
-    df = _canonicalize_columns(pd.read_excel(xl, SHEET_POSITION_SALARY_LIMITS))
-    rows: list[PositionSalaryLimit] = []
+
+def _canonicalize_limit_table_columns(df: pd.DataFrame) -> pd.DataFrame:
+    def canonical(col) -> str:
+        raw = str(col).strip()
+        key = raw.lower().replace("ё", "е")
+        return LIMIT_TABLE_COLUMN_ALIASES.get(key, raw)
+
+    return df.rename(columns={col: canonical(col) for col in df.columns})
+
+
+def _sheet_names_by_limit_code(xl: pd.ExcelFile) -> dict[str, str]:
+    return {normalize_limit_code(sheet_name): sheet_name for sheet_name in xl.sheet_names}
+
+
+def _load_position_limit_table(
+    xl: pd.ExcelFile,
+    *,
+    sheet_name: str,
+    limit_code: str,
+) -> list[PositionLimit]:
+    df = _canonicalize_limit_table_columns(pd.read_excel(xl, sheet_name))
+    rows: list[PositionLimit] = []
     for _, r in df.iterrows():
         position = _clean_optional_text(r.get("position"))
-        personnel_category = _clean_optional_text(r.get("personnel_category"))
-        if not position or not personnel_category:
+        if not position:
             continue
+        rows.append(
+            PositionLimit(
+                limit_code=limit_code,
+                position=position,
+                personnel_category=_clean_optional_text(r.get("personnel_category")),
+                limit=_optional_float(r.get("limit")),
+                note=_clean_optional_text(r.get("note")),
+            )
+        )
+    return rows
+
+
+def _load_position_limit_tables(
+    xl: pd.ExcelFile,
+    used_limit_codes: set[str],
+) -> dict[str, list[PositionLimit]]:
+    tables = {
+        code: list(rows)
+        for code, rows in default_position_limit_tables().items()
+    }
+    sheet_names_by_code = _sheet_names_by_limit_code(xl)
+    required_codes = {
+        normalize_limit_code(code)
+        for code in used_limit_codes
+        if normalize_limit_code(code)
+        and normalize_limit_code(code) not in LIMIT_CODES_WITHOUT_POSITION_TABLE
+    }
+    required_codes |= set(tables)
+
+    for code in sorted(required_codes):
+        sheet_name = sheet_names_by_code.get(code)
+        if sheet_name:
+            tables[code] = _load_position_limit_table(
+                xl,
+                sheet_name=sheet_name,
+                limit_code=code,
+            )
+        elif code not in tables:
+            raise ValueError(
+                f"Для ограничения {code!r} нужен лист Excel с таким же кодом"
+            )
+    return tables
+
+
+def _position_salary_limits_from_tables(
+    position_limit_tables: dict[str, list[PositionLimit]]
+) -> list[PositionSalaryLimit]:
+    defaults = {
+        normalize_position(row.position): row
+        for row in default_position_salary_limits()
+    }
+    by_code_and_position = {
+        (code, normalize_position(row.position)): row
+        for code, rows in position_limit_tables.items()
+        for row in rows
+    }
+    positions = set(defaults)
+    positions.update(position for code, position in by_code_and_position)
+
+    rows: list[PositionSalaryLimit] = []
+    for position_key in sorted(positions):
+        default = defaults.get(position_key)
+        row_2556 = by_code_and_position.get(("2556", position_key))
+        row_p4 = by_code_and_position.get(("p4", position_key))
+        position = (
+            row_2556.position
+            if row_2556 is not None
+            else row_p4.position
+            if row_p4 is not None
+            else default.position
+            if default is not None
+            else position_key
+        )
+        personnel_category = (
+            (row_2556.personnel_category if row_2556 else None)
+            or (row_p4.personnel_category if row_p4 else None)
+            or (default.personnel_category if default else "")
+        )
         rows.append(
             PositionSalaryLimit(
                 position=position,
                 personnel_category=personnel_category,
-                order_2556_limit=_optional_float(r.get("order_2556_limit")),
-                p4_limit=_optional_float(r.get("p4_limit")),
-                note=_clean_optional_text(r.get("salary_limit_note")),
+                order_2556_limit=row_2556.limit if row_2556 else None,
+                p4_limit=row_p4.limit if row_p4 else None,
+                note=(row_2556.note if row_2556 else None)
+                or (default.note if default else None),
             )
         )
     return rows
@@ -240,7 +375,10 @@ def _load_position_reference(xl: pd.ExcelFile) -> list[PositionReferenceRow]:
     if SHEET_POSITION_REFERENCE not in xl.sheet_names:
         return rows
 
-    df = _canonicalize_columns(pd.read_excel(xl, SHEET_POSITION_REFERENCE))
+    df = _canonicalize_columns(
+        pd.read_excel(xl, SHEET_POSITION_REFERENCE),
+        SHEET_POSITION_REFERENCE,
+    )
     for _, r in df.iterrows():
         raw_position = str(r.get("position", "")).strip()
         raw_group = str(r.get("equivalence_group", "")).strip()
@@ -264,7 +402,10 @@ def _load_position_synonyms(xl: pd.ExcelFile) -> dict[str, str]:
     if SHEET_POSITION_SYNONYMS not in xl.sheet_names:
         return synonyms
 
-    df = _canonicalize_columns(pd.read_excel(xl, SHEET_POSITION_SYNONYMS))
+    df = _canonicalize_columns(
+        pd.read_excel(xl, SHEET_POSITION_SYNONYMS),
+        SHEET_POSITION_SYNONYMS,
+    )
     for _, r in df.iterrows():
         raw = str(r.get("raw_position", "")).strip()
         canonical = str(r.get("canonical_position", "")).strip()
@@ -304,75 +445,8 @@ def _load_employees(
     return rows
 
 
-_CONTRACT_TYPE_BOOL_FIELDS = (
-    "allow_salary",
-    "allow_secret",
-    "allow_allowance",
-    "allow_incentive",
-    "allow_extra_work",
-    "allow_order_incentive",
-    "allowance_requires_salary_contract",
-    "priority_payment_mode",
-)
-_CONTRACT_TYPE_TEXT_FIELDS = (
-    "staff_limit_sources",
-    "salary_allowance_limit_sources",
-)
-_CONTRACT_TYPE_FLOAT_FIELDS = (
-    "agreement_staff_limit",
-    "secret_rate",
-)
-_CONTRACT_TYPE_INT_FIELDS = (
-    "salary_anchor_priority",
-)
-
-
 def _has_value(value: object) -> bool:
     return value is not None and not pd.isna(value) and str(value).strip() != ""
-
-
-def _load_contract_type_defaults(xl: pd.ExcelFile) -> dict[str, dict[str, object]]:
-    defaults = {key: dict(value) for key, value in CONTRACT_TYPE_DEFAULTS.items()}
-    if SHEET_CONTRACT_TYPES not in xl.sheet_names:
-        return defaults
-
-    df = _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACT_TYPES))
-    for _, r in df.iterrows():
-        raw_code = r.get("code", r.get("contract_type", r.get("id")))
-        if not _has_value(raw_code):
-            continue
-        code = normalize_contract_type(raw_code)
-        row_defaults = dict(defaults.get(code, {}))
-        for field_name in _CONTRACT_TYPE_BOOL_FIELDS:
-            if field_name in r.index and _has_value(r.get(field_name)):
-                row_defaults[field_name] = _bool(r.get(field_name))
-        for field_name in _CONTRACT_TYPE_TEXT_FIELDS:
-            if field_name in r.index and _has_value(r.get(field_name)):
-                row_defaults[field_name] = str(r.get(field_name)).strip()
-        for field_name in _CONTRACT_TYPE_FLOAT_FIELDS:
-            if field_name in r.index and _has_value(r.get(field_name)):
-                row_defaults[field_name] = float(r.get(field_name))
-        for field_name in _CONTRACT_TYPE_INT_FIELDS:
-            if field_name in r.index and _has_value(r.get(field_name)):
-                row_defaults[field_name] = int(float(r.get(field_name)))
-        defaults[code] = row_defaults
-    return defaults
-
-
-def _type_defaults(
-    contract_type: str, contract_type_defaults: dict[str, dict[str, object]]
-) -> dict[str, object]:
-    generic = dict(GENERIC_CONTRACT_TYPE_DEFAULT)
-    known = contract_type_defaults.get(contract_type)
-    if known is None:
-        return generic
-    return {**generic, **known}
-
-
-def _resolve_is_goz_defense_order(contract_type: str, staff_limit_sources: str) -> bool:
-    if contract_type == "goz":
-        return True
-    return "bep" in staff_limit_sources.lower()
 
 
 def _optional_deadline(row: pd.Series, column: str) -> date | None:
@@ -410,19 +484,10 @@ def _apply_payment_deadlines(contract: Contract) -> None:
         contract.allowances_payment_deadline = contract.end_date
 
 
-def _load_contracts(
-    df: pd.DataFrame, contract_type_defaults: dict[str, dict[str, object]]
-) -> list[Contract]:
+def _load_contracts(df: pd.DataFrame) -> list[Contract]:
     rows: list[Contract] = []
     for _, r in df.iterrows():
         ctype = normalize_contract_type(r["contract_type"])
-        defaults = _type_defaults(ctype, contract_type_defaults)
-        staff_limit_sources = (
-            str(r.get("staff_limit_sources")).strip()
-            if "staff_limit_sources" in r.index and _has_value(r.get("staff_limit_sources"))
-            else str(defaults.get("staff_limit_sources", "") or "")
-        )
-        is_goz = _resolve_is_goz_defense_order(ctype, staff_limit_sources)
         salary_payment_deadline, allowances_payment_deadline = _parse_contract_payment_deadlines(r)
         rows.append(
             Contract(
@@ -433,55 +498,28 @@ def _load_contracts(
                 start_date=_parse_date(r["start_date"]),
                 end_date=_parse_date(r["end_date"]),
                 total_fot=float(r["total_fot"]),
-                is_goz_defense_order=is_goz,
-                allow_salary=_bool(r.get("allow_salary"), bool(defaults["allow_salary"])),
-                allow_secret=_bool(
-                    r.get("allow_secret"), bool(defaults["allow_secret"])
-                ),
-                allow_allowance=_bool(
-                    r.get("allow_allowance"), bool(defaults["allow_allowance"])
-                ),
-                allow_incentive=_bool(
-                    r.get("allow_incentive"), bool(defaults["allow_incentive"])
-                ),
-                allow_extra_work=_bool(
-                    r.get("allow_extra_work"), bool(defaults["allow_extra_work"])
-                ),
+                is_goz_defense_order=(ctype == "goz"),
+                allow_salary=_bool(r.get("allow_salary"), True),
+                allow_secret=_bool(r.get("allow_secret"), False),
+                allow_allowance=_bool(r.get("allow_allowance"), True),
+                allow_incentive=_bool(r.get("allow_incentive"), False),
+                allow_extra_work=_bool(r.get("allow_extra_work"), False),
                 allow_order_incentive=_bool(
                     r.get("allow_order_incentive"),
-                    bool(defaults.get("allow_order_incentive", False)),
-                ),
-                staff_limit_sources=staff_limit_sources,
-                salary_allowance_limit_sources=(
-                    str(r.get("salary_allowance_limit_sources")).strip()
-                    if "salary_allowance_limit_sources" in r.index
-                    and _has_value(r.get("salary_allowance_limit_sources"))
-                    else str(defaults.get("salary_allowance_limit_sources", "") or "")
-                ),
-                agreement_staff_limit=(
-                    _optional_float(r.get("agreement_staff_limit"))
-                    if "agreement_staff_limit" in r.index
-                    and _has_value(r.get("agreement_staff_limit"))
-                    else defaults.get("agreement_staff_limit")
+                    False,
                 ),
                 allowance_requires_salary_contract=_bool(
                     r.get("allowance_requires_salary_contract"),
-                    bool(defaults.get("allowance_requires_salary_contract", True)),
+                    True,
                 ),
                 secret_rate=(
                     _optional_float(r.get("secret_rate"))
                     if "secret_rate" in r.index and _has_value(r.get("secret_rate"))
-                    else float(defaults.get("secret_rate", 0.05) or 0.05)
+                    else 0.05
                 ),
                 priority_payment_mode=_bool(
                     r.get("priority_payment_mode"),
-                    bool(defaults.get("priority_payment_mode", False)),
-                ),
-                salary_anchor_priority=(
-                    int(float(r.get("salary_anchor_priority")))
-                    if "salary_anchor_priority" in r.index
-                    and _has_value(r.get("salary_anchor_priority"))
-                    else int(defaults.get("salary_anchor_priority", 0) or 0)
+                    False,
                 ),
                 salary_payment_deadline=salary_payment_deadline,
                 allowances_payment_deadline=allowances_payment_deadline,
@@ -491,6 +529,58 @@ def _load_contracts(
         )
         _apply_payment_deadlines(rows[-1])
     return rows
+
+
+def _load_contract_payment_limits(
+    df: pd.DataFrame,
+    contracts: list[Contract],
+) -> list[ContractPaymentLimit]:
+    contract_ids = {contract.id for contract in contracts}
+    rows: list[ContractPaymentLimit] = []
+    for _, r in df.iterrows():
+        if not (
+            _has_value(r.get("contract_id"))
+            or _has_value(r.get("payment_kind"))
+            or _has_value(r.get("limit_code"))
+        ):
+            continue
+        contract_id = str(r.get("contract_id", "")).strip()
+        if contract_id not in contract_ids:
+            raise ValueError(
+                f"Неизвестный договор в листе {SHEET_CONTRACT_PAYMENT_LIMITS}: {contract_id!r}"
+            )
+        if not _has_value(r.get("payment_kind")):
+            raise ValueError(
+                f"Не указан вид выплаты для договора {contract_id!r} "
+                f"в листе {SHEET_CONTRACT_PAYMENT_LIMITS}"
+            )
+        if not _has_value(r.get("limit_code")):
+            raise ValueError(
+                f"Не указано ограничение для договора {contract_id!r} "
+                f"в листе {SHEET_CONTRACT_PAYMENT_LIMITS}"
+            )
+        rows.append(
+            ContractPaymentLimit(
+                contract_id=contract_id,
+                payment_kind=parse_payment_kind(r.get("payment_kind")),
+                limit_code=normalize_limit_code(r.get("limit_code")),
+            )
+        )
+    return rows
+
+
+def _apply_contract_limit_flags(
+    contracts: list[Contract],
+    contract_payment_limits: list[ContractPaymentLimit],
+) -> None:
+    bep_contract_ids = {
+        row.contract_id
+        for row in contract_payment_limits
+        if normalize_limit_code(row.limit_code) == "bep"
+    }
+    for contract in contracts:
+        if contract.id in bep_contract_ids:
+            contract.is_goz_defense_order = True
 
 
 def _apply_positions(

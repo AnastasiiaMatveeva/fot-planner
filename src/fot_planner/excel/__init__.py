@@ -1,11 +1,12 @@
 """Excel: чтение входа, шаблон, экспорт результата и пользовательские отчёты."""
 
 from fot_planner.excel.constants import (
-    COLUMN_ALIASES,
+    COLUMN_ALIASES_BY_SHEET,
     PAYMENT_KIND_RU,
     RU_MONTHS,
     SHEET_CONTRACT_BUDGET,
     SHEET_CONTRACT_LABOR,
+    SHEET_CONTRACT_PAYMENT_LIMITS,
     SHEET_CONTRACT_POSITIONS,
     SHEET_CONTRACTS,
     SHEET_EMPLOYEES,
@@ -15,7 +16,6 @@ from fot_planner.excel.constants import (
     SHEET_MANUAL_PROHIBITIONS,
     SHEET_META,
     SHEET_MIN_BALANCE_MATRIX,
-    SHEET_POSITION_SALARY_LIMITS,
     SHEET_SETTINGS,
 )
 from fot_planner.excel.export import export_result
@@ -35,11 +35,12 @@ _labor_by_row_dataframe = labor_by_row_dataframe
 _PAYMENT_KIND_RU = PAYMENT_KIND_RU
 
 __all__ = [
-    "COLUMN_ALIASES",
+    "COLUMN_ALIASES_BY_SHEET",
     "PAYMENT_KIND_RU",
     "RU_MONTHS",
     "SHEET_CONTRACT_BUDGET",
     "SHEET_CONTRACT_LABOR",
+    "SHEET_CONTRACT_PAYMENT_LIMITS",
     "SHEET_CONTRACT_POSITIONS",
     "SHEET_CONTRACTS",
     "SHEET_EMPLOYEES",
@@ -49,7 +50,6 @@ __all__ = [
     "SHEET_MANUAL_PROHIBITIONS",
     "SHEET_META",
     "SHEET_MIN_BALANCE_MATRIX",
-    "SHEET_POSITION_SALARY_LIMITS",
     "SHEET_SETTINGS",
     "create_template",
     "export_result",

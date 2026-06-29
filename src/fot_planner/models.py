@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
 
-from fot_planner.salary_limits_2556 import PositionSalaryLimit
+from fot_planner.salary_limits_2556 import PositionLimit, PositionSalaryLimit
 from fot_planner.defaults.settings import (
     DEFAULT_GOZ_AVERAGE_SALARY_LIMIT,
     DEFAULT_GOZ_LABOR_TOLERANCE,
@@ -81,7 +81,7 @@ class Contract:
     id: str
     name: str
     number: str
-    contract_type: str  # свободная метка; правила задаются колонками договора/contract_types
+    contract_type: str  # свободная метка; правила задаются колонками договора и листом договоры_ограничения
     start_date: date
     end_date: date
     total_fot: float
@@ -92,13 +92,9 @@ class Contract:
     allow_incentive: bool = True  # код 124
     allow_extra_work: bool = False
     allow_order_incentive: bool = False  # стимулирующая приказом (верхний уровень зарплаты)
-    staff_limit_sources: str = ""
-    salary_allowance_limit_sources: str = ""
-    agreement_staff_limit: float | None = None
     allowance_requires_salary_contract: bool = True
     secret_rate: float = 0.05
     priority_payment_mode: bool = False
-    salary_anchor_priority: int = 0
     # Конечная дата выплат с договора (последний допустимый день; None → end_date при загрузке).
     salary_payment_deadline: date | None = None
     allowances_payment_deadline: date | None = None
@@ -111,6 +107,15 @@ class Contract:
     def requires_full_fot_spend(self) -> bool:
         """Договор с положительным ФОТ должен быть полностью освоен моделью."""
         return self.total_fot > 0
+
+
+@dataclass
+class ContractPaymentLimit:
+    """Связка договора, вида выплаты и применяемого ограничения/документа."""
+
+    contract_id: str
+    payment_kind: PaymentKind
+    limit_code: str
 
 
 @dataclass
@@ -237,11 +242,13 @@ class PlanningContext:
     contracts: list[Contract]
     position_reference: list[PositionReference] = field(default_factory=list)
     position_salary_limits: list[PositionSalaryLimit] = field(default_factory=list)
+    position_limit_tables: dict[str, list[PositionLimit]] = field(default_factory=dict)
     manual_assignments: list[ManualAssignment] = field(default_factory=list)
     manual_prohibitions: list[ManualProhibition] = field(default_factory=list)
     weights: OptimizationWeights = field(default_factory=OptimizationWeights)
     salary_stability: SalaryStabilityRules = field(default_factory=SalaryStabilityRules)
     labor_plans: list[ContractLaborPlan] = field(default_factory=list)
+    contract_payment_limits: list[ContractPaymentLimit] = field(default_factory=list)
     baseline_plan: list[AllocationRecord] | None = None
     # Диагностический режим: разрешить недоплату с большим штрафом (см. allow_deficit)
     allow_deficit: bool = False

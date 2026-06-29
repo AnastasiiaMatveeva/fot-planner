@@ -40,6 +40,21 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                     employee_id=e.id,
                 )
             )
+        overlapping_contracts = sorted(
+            set(e.allowed_contracts) & set(e.forbidden_contracts)
+        )
+        for cid in overlapping_contracts:
+            conflicts.append(
+                ConflictRecord(
+                    code="CONTRACT_ALLOWED_AND_FORBIDDEN",
+                    message=(
+                        f"Сотрудник {e.id}: договор {cid} одновременно указан "
+                        "в разрешённых и запрещённых договорах"
+                    ),
+                    employee_id=e.id,
+                    contract_id=cid,
+                )
+            )
         for cid in e.allowed_contracts:
             if cid not in contract_ids:
                 conflicts.append(

@@ -13,12 +13,25 @@ from fot_planner.defaults.position_limits import (
 __all__ = [
     "P4_LIMIT_BY_CATEGORY_2025",
     "P4_PERSONNEL_CATEGORIES",
+    "PositionLimit",
     "PositionSalaryLimit",
+    "default_position_limit_tables",
     "default_position_salary_limits",
     "effective_p4_limit",
     "normalize_personnel_category",
     "p4_applies_to_category",
 ]
+
+
+@dataclass(frozen=True)
+class PositionLimit:
+    """Строка листа ограничения: должность и лимит на 1 ставку."""
+
+    limit_code: str
+    position: str
+    personnel_category: str | None = None
+    limit: float | None = None
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,3 +74,29 @@ def default_position_salary_limits() -> list[PositionSalaryLimit]:
         )
         for position, personnel_category, order_2556_limit, note in POSITION_SALARY_LIMIT_ROWS
     ]
+
+
+def default_position_limit_tables() -> dict[str, list[PositionLimit]]:
+    rows = default_position_salary_limits()
+    return {
+        "2556": [
+            PositionLimit(
+                limit_code="2556",
+                position=row.position,
+                personnel_category=row.personnel_category,
+                limit=row.order_2556_limit,
+                note=row.note,
+            )
+            for row in rows
+        ],
+        "p4": [
+            PositionLimit(
+                limit_code="p4",
+                position=row.position,
+                personnel_category=row.personnel_category,
+                limit=row.p4_limit,
+                note=None,
+            )
+            for row in rows
+        ],
+    }
