@@ -8,8 +8,11 @@ from fot_planner.open_rate_rules import (
     MAIN_QUARTERS_MAX,
     OPEN_RATE_STEP,
     PART_QUARTERS_MAX,
+    is_laboratory_assistant_position,
     max_total_quarters,
+    normalize_employment_type,
     quarters_to_rate,
+    row_max_total_quarters,
     staff_rate_min_quarters,
     normalize_employment_category,
 )
@@ -35,7 +38,26 @@ def test_quarters_to_rate():
 def test_normalize_employment_category():
     assert normalize_employment_category("студент") == "student"
     assert normalize_employment_category("аспирант") == "graduate_student"
+    assert normalize_employment_category("основной") == "regular"
     assert normalize_employment_category(None) == "regular"
+
+
+def test_normalize_employment_type():
+    assert normalize_employment_type("основное") == "main"
+    assert normalize_employment_type("совместительство") == "part_time"
+    assert normalize_employment_type(None) == "auto"
+
+
+def test_students_and_laboratory_assistants_keep_input_rate():
+    assert is_laboratory_assistant_position("лаборант")
+    assert is_laboratory_assistant_position("лаборант-исследователь")
+    assert not is_laboratory_assistant_position("техник")
+
+    assert row_max_total_quarters("student", "auto", 0.25, "инженер") == 1
+    assert row_max_total_quarters("student", "auto", 0.5, "техник") == 2
+    assert row_max_total_quarters("regular", "auto", 0.5, "лаборант") == 2
+    assert row_max_total_quarters("regular", "auto", 1.0, "лаборант") == 4
+    assert row_max_total_quarters("regular", "auto", 1.0, "инженер") == 6
 
 
 def test_main_and_part_quarter_limits():
@@ -43,10 +65,17 @@ def test_main_and_part_quarter_limits():
     assert PART_QUARTERS_MAX * OPEN_RATE_STEP == 0.5
 
 
-def test_rate_below_staff_shortfall_in_quarters():
-    """Дефицит до штатной: staff_q_min - sum(q), штрафуется в оптимизаторе."""
+def test_part_time_row_can_grow_to_half_rate():
+    assert (
+        row_max_total_quarters("regular", "part_time", 0.25, "engineer")
+        == PART_QUARTERS_MAX
+    )
+
+
+def test_staff_rate_is_converted_to_quarters():
+    """Штатная ставка хранится в шагах по 0.25."""
     assert staff_rate_min_quarters(1.0) == 4
-    assert staff_rate_min_quarters(1.0) - 3 == 1  # не хватает 0.25 ставки
+    assert staff_rate_min_quarters(0.75) == 3
 
 
 def test_open_rates_two_contracts_integration(tmp_path):

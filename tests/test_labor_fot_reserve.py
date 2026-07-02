@@ -37,6 +37,7 @@ def _gos_early_spend_workbook(path: Path) -> None:
                 "name": "ГОЗ",
                 "number": "1",
                 "contract_type": "goszakaz",
+                "is_goz_defense_order": True,
                 "start_date": f"{year}-03-01",
                 "end_date": f"{year}-12-31",
                 "total_fot": 1_500_000,

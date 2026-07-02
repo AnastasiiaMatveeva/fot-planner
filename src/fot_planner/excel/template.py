@@ -10,26 +10,78 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
 from fot_planner.excel.constants import (
-    SHEET_CONTRACT_BUDGET,
     SHEET_CONTRACT_LABOR,
     SHEET_CONTRACT_PAYMENT_LIMITS,
     SHEET_CONTRACT_POSITIONS,
     SHEET_CONTRACTS,
     SHEET_EMPLOYEES,
-    SHEET_FOT_LOCK_MATRIX,
     SHEET_FOT_MATRIX,
-    SHEET_MANUAL_ASSIGNMENTS,
-    SHEET_MANUAL_PROHIBITIONS,
-    SHEET_MIN_BALANCE_MATRIX,
-    SHEET_POSITION_REFERENCE,
-    SHEET_POSITION_SYNONYMS,
+    SHEET_POSITION_LIMITS,
+    SHEET_SECRET_ALLOWANCES,
     SHEET_SETTINGS,
 )
-from fot_planner.excel.load import _month_from_column
 from fot_planner.excel.workbook_format import format_workbook
-from fot_planner.defaults.settings import DEFAULT_SETTINGS_ROW
-from fot_planner.position_reference import default_position_reference, default_position_synonyms
-from fot_planner.salary_limits_2556 import default_position_limit_tables
+from fot_planner.defaults.settings import (
+    DEFAULT_GOZ_AVERAGE_SALARY_LIMIT,
+    DEFAULT_SETTINGS_ROW,
+)
+from fot_planner.position_reference import (
+    default_position_reference,
+    normalize_position,
+)
+from fot_planner.salary_limits_2556 import default_position_salary_limits
+
+
+def _default_position_limits_table() -> pd.DataFrame:
+    reference_by_position = {
+        normalize_position(row.position): row
+        for row in default_position_reference()
+    }
+    limits_by_position = {
+        normalize_position(row.position): row
+        for row in default_position_salary_limits()
+    }
+    rows: list[dict[str, object]] = []
+    for key in sorted(reference_by_position | limits_by_position):
+        reference = reference_by_position.get(key)
+        limits = limits_by_position.get(key)
+        position = (
+            limits.position
+            if limits is not None
+            else reference.position
+            if reference is not None
+            else key
+        )
+        rows.append(
+            {
+                "должность": position,
+                "категория персонала": limits.personnel_category if limits else "",
+                "источник оклада": reference.salary_source if reference else "",
+                "номер группы": reference.salary_group_number if reference else "",
+                "номер уровня": reference.level if reference else "",
+                "оклад": (
+                    reference.reference_salary_for_rate
+                    if reference and reference.reference_salary_for_rate is not None
+                    else ""
+                ),
+                "окладная группа": (
+                    reference.equivalence_group if reference else ""
+                ),
+                "П2556": (
+                    limits.order_2556_limit
+                    if limits and limits.order_2556_limit is not None
+                    else ""
+                ),
+                "П4": (
+                    limits.p4_limit
+                    if limits and limits.p4_limit is not None
+                    else ""
+                ),
+                "БЭП": DEFAULT_GOZ_AVERAGE_SALARY_LIMIT,
+                "примечание": limits.note if limits and limits.note else "",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def create_template(path: str | Path) -> None:
@@ -39,11 +91,13 @@ def create_template(path: str | Path) -> None:
     employees = pd.DataFrame(
         [
             {
-                "код": "E001",
+                "код строки": "E001-1",
                 "фио": "Иванов Иван Иванович",
                 "должность": "инженер",
                 "подразделение": "лаборатория",
                 "ставка": 1.0,
+                "тип занятости": "основное",
+                "категория занятости": "основной",
                 "зарплата": 100000,
                 "дата начала": f"{year}-01-01",
                 "дата окончания": "",
@@ -58,6 +112,11 @@ def create_template(path: str | Path) -> None:
             "год",
             "трудоемкость",
             "должность",
+            "источник оклада",
+            "номер группы",
+            "номер уровня",
+            "оклад",
+            "окладная группа",
             "средняя стоимость выполнения работ в месяц",
         ]
     )
@@ -67,13 +126,15 @@ def create_template(path: str | Path) -> None:
                 "код": "C001",
                 "название": "НИОКР Альфа",
                 "номер": "123/2025",
-                "тип договора": "goz",
+                "тип договора": "госзаказ",
+                "счет": "2301",
+                "ГОЗ": True,
                 "дата начала": f"{year}-01-01",
                 "дата окончания": f"{year}-12-31",
                 "фот": 1_200_000,
                 "оклад разрешен": True,
                 "120 разрешена": False,
-                "надбавка разрешена": True,
+                "122 разрешена": True,
                 "124 разрешена": False,
                 "152 разрешена": False,
                 "стимулирующая приказом разрешена": False,
@@ -83,12 +144,18 @@ def create_template(path: str | Path) -> None:
             }
         ]
     )
+    secret_allowances = pd.DataFrame(
+        columns=[
+            "сотрудник",
+            "договор секретности",
+            "ставка 120",
+        ]
+    )
     contract_payment_limits = pd.DataFrame(
-        [
-            {"договор": "C001", "выплата": "оклад", "ограничение": "БЭП"},
-            {"договор": "C001", "выплата": "122", "ограничение": "БЭП"},
-            {"договор": "C001", "выплата": "оклад", "ограничение": "2556"},
-            {"договор": "C001", "выплата": "122", "ограничение": "2556"},
+        columns=[
+            "договор",
+            "выплата",
+            "ограничение",
         ]
     )
     positions = pd.DataFrame(
@@ -96,84 +163,49 @@ def create_template(path: str | Path) -> None:
             {
                 "договор": "C001",
                 "должность": "инженер",
+                "источник оклада": "",
+                "номер группы": "",
+                "номер уровня": "",
+                "оклад": "",
+                "окладная группа": "",
                 "макс ставки": 2,
             }
         ]
     )
-    min_balance_matrix = pd.DataFrame({"договор": ["C001"]})
+    settings_row = {"год": year, **DEFAULT_SETTINGS_ROW}
+    settings_row.pop("средняя зарплата ГОЗ", None)
+    settings = pd.DataFrame([settings_row])
+    fot_by_month = pd.DataFrame({"договор": ["C001"]})
     for m in range(1, 13):
-        min_balance_matrix[str(m)] = [""]
-
-    settings = pd.DataFrame([{"год": year, **DEFAULT_SETTINGS_ROW}])
-    fot_matrix = pd.DataFrame({"договор": ["C001"]})
-    for m in range(1, 13):
-        fot_matrix[str(m)] = [1_200_000 if m == 1 else ""]
-
-    manual_assignments = pd.DataFrame(
-        columns=[
-            "сотрудник",
-            "договор",
-            "год",
-            "месяц_с",
-            "месяц_по",
-            "вид выплаты",
-            "сумма",
-        ]
-    )
-    manual_prohibitions = pd.DataFrame(
-        columns=["сотрудник", "договор", "год", "месяц_с", "месяц_по", "вид выплаты"]
-    )
-    fot_lock = pd.DataFrame({"договор": ["C001"]})
-    for m in range(1, 13):
-        fot_lock[str(m)] = [""]
+        fot_by_month[str(m)] = [1_200_000 if m == 1 else ""]
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         employees.to_excel(writer, sheet_name=SHEET_EMPLOYEES, index=False)
         contracts.to_excel(writer, sheet_name=SHEET_CONTRACTS, index=False)
+        secret_allowances.to_excel(writer, sheet_name=SHEET_SECRET_ALLOWANCES, index=False)
         contract_payment_limits.to_excel(
-            writer, sheet_name=SHEET_CONTRACT_PAYMENT_LIMITS, index=False
+            writer,
+            sheet_name=SHEET_CONTRACT_PAYMENT_LIMITS,
+            index=False,
         )
         positions.to_excel(writer, sheet_name=SHEET_CONTRACT_POSITIONS, index=False)
         contract_labor.to_excel(writer, sheet_name=SHEET_CONTRACT_LABOR, index=False)
-        fot_matrix.to_excel(writer, sheet_name=SHEET_FOT_MATRIX, index=False)
-        min_balance_matrix.to_excel(writer, sheet_name=SHEET_MIN_BALANCE_MATRIX, index=False)
-        fot_lock.to_excel(writer, sheet_name=SHEET_FOT_LOCK_MATRIX, index=False)
-        manual_assignments.to_excel(writer, sheet_name=SHEET_MANUAL_ASSIGNMENTS, index=False)
-        manual_prohibitions.to_excel(writer, sheet_name=SHEET_MANUAL_PROHIBITIONS, index=False)
+        fot_by_month.to_excel(writer, sheet_name=SHEET_FOT_MATRIX, index=False)
         settings.to_excel(writer, sheet_name=SHEET_SETTINGS, index=False)
-        pd.DataFrame(
-            [
-                {
-                    "должность": row.position,
-                    "группа взаимозаменяемости": row.equivalence_group,
-                    "уровень": row.level,
-                    "оклад по справочнику за 1 ставку": row.reference_salary_for_rate,
-                }
-                for row in default_position_reference()
-            ]
-        ).to_excel(writer, sheet_name=SHEET_POSITION_REFERENCE, index=False)
-        pd.DataFrame(
-            [
-                {"как написано": raw, "должность из справочника": canonical}
-                for raw, canonical in default_position_synonyms().items()
-            ]
-        ).to_excel(writer, sheet_name=SHEET_POSITION_SYNONYMS, index=False)
-        for limit_code, rows in default_position_limit_tables().items():
-            pd.DataFrame(
-                [
-                    {
-                        "должность": row.position,
-                        "категория персонала": row.personnel_category or "",
-                        "лимит на 1 ставку": row.limit if row.limit is not None else "",
-                        "примечание": row.note or "",
-                    }
-                    for row in rows
-                ]
-            ).to_excel(writer, sheet_name=limit_code, index=False)
+        _default_position_limits_table().to_excel(
+            writer,
+            sheet_name=SHEET_POSITION_LIMITS,
+            index=False,
+        )
 
     wb = load_workbook(path)
     yellow = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-    for sheet_name in (SHEET_CONTRACTS, SHEET_EMPLOYEES):
+    for sheet_name in (
+        SHEET_CONTRACTS,
+        SHEET_EMPLOYEES,
+        SHEET_SECRET_ALLOWANCES,
+        SHEET_CONTRACT_PAYMENT_LIMITS,
+    ):
         ws = wb[sheet_name]
         for cell in ws[1]:
             cell.fill = yellow

@@ -101,6 +101,7 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
         (record.employee_id, record.contract_id, record.month): (
             record.open_rate,
             record.is_main,
+            record.position,
         )
         for record in result.open_rate_attributions
         if record.open_rate > 0
@@ -118,10 +119,11 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
         if allocation.payment_kind not in _PAYMENT_PARAMETERS:
             continue
 
-        rate, is_main = rates.get(
+        rate, is_main, assigned_position = rates.get(
             (allocation.employee_id, allocation.contract_id, allocation.month),
-            (employee.rate, True),
+            (employee.rate, True, employee.position),
         )
+        assigned_position = assigned_position or employee.position
         if rate <= 0:
             rate = employee.rate if employee.rate > 0 else 1.0
 
@@ -136,6 +138,7 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
             allocation.contract_id,
             allocation.payment_kind,
             bool(is_main),
+            assigned_position,
             round(rate, 4),
             round(nominal, 2),
             round(value_by_rate, 2),
@@ -144,7 +147,7 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
 
     rows = []
     for key, allocated_months in grouped.items():
-        employee_id, contract_id, kind, is_main, rate, nominal, value_by_rate = key
+        employee_id, contract_id, kind, is_main, assigned_position, rate, nominal, value_by_rate = key
         employee = employees[employee_id]
         contract = contracts[contract_id]
         parameter_code, parameter_name = _PAYMENT_PARAMETERS[kind]
@@ -156,11 +159,11 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
             row.update(
                 {
                     "Фамилия И.О., уч. ст., уч. зван.": employee.full_name,
-                    "Должность": employee.position,
+                    "Должность": assigned_position,
                     "Категория\nперсонала": personnel_categories.get(
-                        normalize_position(employee.position)
+                        normalize_position(assigned_position)
                     )
-                    or personnel_category_for_position(employee.position)
+                    or personnel_category_for_position(assigned_position)
                     or "",
                     "Код \nпар-ра": parameter_code,
                     "Название параметра": parameter_name,

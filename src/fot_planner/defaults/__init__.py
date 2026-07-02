@@ -4,9 +4,6 @@
 собраны в подмодулях этого пакета. Логика расчёта остаётся в остальных модулях.
 """
 
-from fot_planner.defaults.contract_types import (
-    normalize_contract_type,
-)
 from fot_planner.defaults.position_limits import (
     P4_LIMIT_BY_CATEGORY_2025,
     P4_PERSONNEL_CATEGORIES,
@@ -33,5 +30,4 @@ __all__ = [
     "POSITION_REFERENCE_ROWS",
     "POSITION_SALARY_LIMIT_ROWS",
     "POSITION_SYNONYMS",
-    "normalize_contract_type",
 ]

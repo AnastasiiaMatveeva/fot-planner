@@ -10,6 +10,14 @@ from fot_planner.contract_calendar import (
     payment_month_count,
 )
 from fot_planner.models import ConflictRecord, PAYMENT_KINDS, PaymentKind, PlanningContext
+from fot_planner.open_rate_rules import (
+    MAIN_QUARTERS_MAX,
+    PART_QUARTERS_MAX,
+    keeps_staff_rate_without_opening_extra,
+    max_total_quarters,
+    quarters_to_rate,
+    staff_rate_min_quarters,
+)
 from fot_planner.salary_limits_2556 import p4_applies_to_category
 
 _DEADLINE_LABELS = {
@@ -37,6 +45,28 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                 ConflictRecord(
                     code="INVALID_PAYMENT",
                     message=f"Сотрудник {e.id}: отрицательная зарплата",
+                    employee_id=e.id,
+                )
+            )
+        staff_q = staff_rate_min_quarters(e.rate)
+        employment_max_q = (
+            PART_QUARTERS_MAX
+            if e.employment_type == "part_time"
+            else MAIN_QUARTERS_MAX
+        )
+        if keeps_staff_rate_without_opening_extra(e.employment_category, e.position):
+            max_q = employment_max_q
+        else:
+            max_q = min(employment_max_q, max_total_quarters(e.employment_category))
+        if staff_q > max_q:
+            conflicts.append(
+                ConflictRecord(
+                    code="INVALID_EMPLOYMENT_RATE",
+                    message=(
+                        f"Сотрудник {e.id}: ставка {e.rate:g} превышает максимум "
+                        f"{quarters_to_rate(max_q):g} для указанного типа и категории "
+                        "занятости"
+                    ),
                     employee_id=e.id,
                 )
             )
@@ -163,6 +193,37 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                         month=mb.month,
                     )
                 )
+
+    for row in ctx.secret_allowances:
+        if row.employee_id not in emp_ids:
+            conflicts.append(
+                ConflictRecord(
+                    code="UNKNOWN_EMPLOYEE",
+                    message=f"Лист 120_надбавка: неизвестный сотрудник {row.employee_id}",
+                    employee_id=row.employee_id,
+                )
+            )
+        if row.secret_contract_id not in contract_ids:
+            conflicts.append(
+                ConflictRecord(
+                    code="UNKNOWN_CONTRACT",
+                    message=f"Лист 120_надбавка: неизвестный договор секретности {row.secret_contract_id}",
+                    employee_id=row.employee_id,
+                    contract_id=row.secret_contract_id,
+                )
+            )
+        if row.rate <= 0:
+            conflicts.append(
+                ConflictRecord(
+                    code="INVALID_SECRET_ALLOWANCE_RATE",
+                    message=(
+                        f"Лист 120_надбавка: ставка 120 для сотрудника {row.employee_id} "
+                        f"должна быть > 0"
+                    ),
+                    employee_id=row.employee_id,
+                    contract_id=row.secret_contract_id,
+                )
+            )
 
     for e in ctx.employees:
         if e.monthly_wage > 0 and (

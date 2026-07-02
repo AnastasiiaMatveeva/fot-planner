@@ -58,7 +58,7 @@ def monthly_spend_targets(contract: Contract, year: int) -> dict[int, float]:
 
 def default_fot_inflow_at_start(contracts: list[Contract], year: int) -> None:
     """
-    Физическое поступление, если fot_matrix не задан: весь total_fot
+    Физическое поступление, если лист «фот_по_месяцам» не задан: весь total_fot
     в первый активный месяц договора, остальные месяцы — 0.
     """
     for contract in contracts:
@@ -87,7 +87,7 @@ def month_inflow_amount(contract: Contract, year: int, month: int) -> float:
 
 
 def min_balance_for_month(contract: Contract, month: int) -> float:
-    """Мин. остаток на конец месяца из min_balance_matrix (0, если не задан)."""
+    """Мин. остаток на конец месяца из «минимальные_остатки» (0, если не задан)."""
     for mb in contract.monthly_budgets:
         if mb.month == month and mb.min_balance is not None:
             return mb.min_balance

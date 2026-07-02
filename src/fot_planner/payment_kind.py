@@ -1,6 +1,6 @@
 """Виды выплат: коды приказа и иерархия зарплаты.
 
-``monthly_wage`` = оклад + надбавка (120/122/124/152) + стимулирующая приказом.
+``monthly_wage`` = оклад + надбавки (120/122/124/152) + отдельная стимулирующая приказом.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ class PaymentKind(IntEnum):
 
     @property
     def is_non_salary(self) -> bool:
-        """Не оклад: надбавки и стимулирующая приказом."""
+        """Не оклад: надбавки или отдельная стимулирующая приказом."""
         return not self.is_salary
 
 
@@ -46,6 +46,14 @@ PAYMENT_KINDS: tuple[PaymentKind, ...] = (
     PaymentKind.SALARY,
     *SUPPLEMENT_KINDS,
     PaymentKind.ORDER_INCENTIVE,
+)
+
+# Выплаты, которые закрывают денежную часть трудоёмкости договора:
+# оклад и кодовые выплаты с этого же договора. Стимулирующая приказом пока
+# не относится на трудоёмкость.
+LABOR_PAYMENT_KINDS: tuple[PaymentKind, ...] = (
+    PaymentKind.SALARY,
+    *SUPPLEMENT_KINDS,
 )
 
 # П4 и лимиты «оклад + 122» (П2556): только эти три вида.

@@ -8,7 +8,7 @@ from fot_planner.excel import export_result, load_context
 from fot_planner.models import ManualAssignment, PlanningResult
 from fot_planner.optimizer import solve
 from fot_planner.models import ConflictRecord
-from fot_planner.payroll_rules import AVERAGE_LIMIT_MODE, PLANNING_CAP_LIMIT_MODE
+from fot_planner.payroll_rules import AVERAGE_LIMIT_MODE
 from fot_planner.validation import validate_context
 
 
@@ -46,25 +46,8 @@ def run_planning(
     result = solve(
         ctx,
         time_limit_sec=time_limit_sec,
-        payroll_limit_mode=PLANNING_CAP_LIMIT_MODE,
+        payroll_limit_mode=AVERAGE_LIMIT_MODE,
     )
-    if result.solver_status == "INFEASIBLE":
-        fallback = solve(
-            ctx,
-            time_limit_sec=time_limit_sec,
-            payroll_limit_mode=AVERAGE_LIMIT_MODE,
-        )
-        fallback.conflicts = [
-            ConflictRecord(
-                code="PAYROLL_LIMIT_AVERAGE_FALLBACK_WARNING",
-                message=(
-                    "Первый расчёт с индивидуальными ориентирами БЭП/П4 не сошёлся; "
-                    "модель автоматически повторила расчёт по средним ограничениям."
-                ),
-            ),
-            *fallback.conflicts,
-        ]
-        result = fallback
     if validation_issues:
         result.conflicts = validation_issues + result.conflicts
     export_result(output_path, ctx, result)

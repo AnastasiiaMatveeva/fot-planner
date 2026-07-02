@@ -38,6 +38,7 @@ def _goszakaz_march_start_workbook(path: Path) -> None:
                 "name": "ГОЗ контрольный",
                 "number": "1",
                 "contract_type": "goszakaz",
+                "is_goz_defense_order": True,
                 "start_date": f"{year}-03-01",
                 "end_date": f"{year}-12-30",
                 "total_fot": 1_000_000,

@@ -52,6 +52,13 @@ def contract_allows_payment_month(
     """
     if not payment_kind_enabled(contract, kind):
         return False
+    return contract_payment_window_includes_month(contract, year, month, kind)
+
+
+def contract_payment_window_includes_month(
+    contract: Contract, year: int, month: int, kind: PaymentKind
+) -> bool:
+    """Месяц попадает в окно выплат вида: от начала договора до срока выплаты."""
     period_start, period_end = _month_period(year, month)
     if contract.start_date > period_end:
         return False

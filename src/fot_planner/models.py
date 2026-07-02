@@ -20,6 +20,7 @@ from fot_planner.payment_kind import (
 )
 
 EmploymentCategory = Literal["regular", "student", "graduate_student"]
+EmploymentType = Literal["auto", "main", "part_time"]
 
 
 @dataclass
@@ -39,7 +40,10 @@ class Employee:
     equivalence_group: str | None = None
     position_level: int | None = None
     reference_salary_for_rate: float | None = None
-    # regular — до 1.5 в сумме; student — 0.5; graduate_student — 0.75
+    # auto — оптимизатор выбирает; main — основное место; part_time — совместительство
+    employment_type: EmploymentType = "auto"
+    # regular — до 1.5 в сумме; student — входная ставка фиксируется без открытия доп. ставок;
+    # graduate_student — до 0.75.
     employment_category: EmploymentCategory = "regular"
 
 
@@ -48,9 +52,11 @@ class PositionReference:
     """Строка справочника должностей для совместимости и справочного оклада."""
 
     position: str
-    equivalence_group: str
+    equivalence_group: str  # окладная группа: раздел положения + уровень + оклад
     level: int | None = None
     reference_salary_for_rate: float | None = None
+    salary_source: str | None = None
+    salary_group_number: int | None = None
 
 
 @dataclass
@@ -85,6 +91,7 @@ class Contract:
     start_date: date
     end_date: date
     total_fot: float
+    account: str = ""
     is_goz_defense_order: bool = False
     allow_salary: bool = True
     allow_secret: bool = False
@@ -92,8 +99,6 @@ class Contract:
     allow_incentive: bool = True  # код 124
     allow_extra_work: bool = False
     allow_order_incentive: bool = False  # стимулирующая приказом (верхний уровень зарплаты)
-    allowance_requires_salary_contract: bool = True
-    secret_rate: float = 0.05
     priority_payment_mode: bool = False
     # Конечная дата выплат с договора (последний допустимый день; None → end_date при загрузке).
     salary_payment_deadline: date | None = None
@@ -119,8 +124,17 @@ class ContractPaymentLimit:
 
 
 @dataclass
+class SecretAllowance:
+    """Обязательная 120 надбавка сотруднику на период договора секретности."""
+
+    employee_id: str
+    secret_contract_id: str
+    rate: float = 0.05
+
+
+@dataclass
 class ContractLaborPlan:
-    """Строка плановой трудоёмкости по договору и должности/группе."""
+    """Строка плановой трудоёмкости по договору и должности/окладной группе."""
 
     contract_id: str
     year: int
@@ -146,6 +160,8 @@ class OpenRateAttribution:
     month: int
     open_rate: float
     is_main: bool
+    position: str | None = None
+    equivalence_group: str | None = None
 
 
 @dataclass
@@ -217,8 +233,8 @@ class OptimizationWeights:
     # Штраф за 100% отклонения от идеала (actual−ideal)/ideal; см. optimizer.UNIFORM_SPEND_TOLERANCE_*.
     uniform_spend_deviation: float = 50_000.0
     labor_deviation: float = 50_000.0
-    # Штраф за снижение суммарной открытой ставки ниже штатной (за 0.25 ставки)
-    rate_below_staff: float = 100_000.0
+    # Приказ — крайний инструмент: минимизируем число приказов сотрудник-месяц.
+    order_incentive_use: float = 1_000_000.0
 
 
 @dataclass
@@ -249,6 +265,7 @@ class PlanningContext:
     salary_stability: SalaryStabilityRules = field(default_factory=SalaryStabilityRules)
     labor_plans: list[ContractLaborPlan] = field(default_factory=list)
     contract_payment_limits: list[ContractPaymentLimit] = field(default_factory=list)
+    secret_allowances: list[SecretAllowance] = field(default_factory=list)
     baseline_plan: list[AllocationRecord] | None = None
     # Диагностический режим: разрешить недоплату с большим штрафом (см. allow_deficit)
     allow_deficit: bool = False
@@ -264,7 +281,7 @@ class AllocationRecord:
     month: int  # 1–12
     payment_kind: PaymentKind  # оклад, 122, 124, 120, 152
     amount: float  # сумма с этого договора
-    is_manual: bool = False  # зафиксировано вручную (manual_assignments / lock в plan)
+    is_manual: bool = False  # зафиксировано вручную через «ручные_назначения» или «План выплат»
     source: str = "optimizer"
 
 
@@ -299,7 +316,7 @@ class ContractBalanceRecord:
     """
     Касса договора за месяц (не лимит ФОТ по договору).
 
-    Поступления из fot_matrix, расход по плану и остаток между месяцами.
+    Поступления из «фот_по_месяцам», расход по плану и остаток между месяцами.
     В отчёте «проекты_помесячно» другая величина — остаток лимита total_fot.
     """
 
@@ -307,12 +324,12 @@ class ContractBalanceRecord:
     year: int
     month: int
     opening_balance: float  # на начало месяца (с переноса)
-    inflow: float  # поступило в месяце (fot_matrix)
+    inflow: float  # поступило в месяце («фот_по_месяцам»)
     spent: float  # ушло на выплаты по плану
     closing_balance: float  # на конец месяца на «счёте» договора
     carried_forward: float = 0.0
     forfeited: float = 0.0
-    min_balance_required: float = 0.0  # минимальный остаток на конец месяца (min_balance_matrix)
+    min_balance_required: float = 0.0  # минимальный остаток на конец месяца («минимальные_остатки»)
     carryover_allowed: bool = True
 
     @property
@@ -333,7 +350,7 @@ class PlanningResult:
     solver_status: str  # OPTIMAL, FEASIBLE, INFEASIBLE, …
     objective_value: float  # значение целевой функции (сумма штрафов)
     solve_time_sec: float
-    payroll_limit_mode: str = "planning_cap"
+    payroll_limit_mode: str = "average"
     labor_pm_attributions: list[LaborPmAttribution] = field(default_factory=list)
     labor_payment_attributions: list[LaborPaymentAttribution] = field(default_factory=list)
     open_rate_attributions: list[OpenRateAttribution] = field(default_factory=list)

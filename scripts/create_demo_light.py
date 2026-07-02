@@ -23,8 +23,8 @@ from fot_planner.excel import (
     SHEET_MANUAL_PROHIBITIONS,
     SHEET_MIN_BALANCE_MATRIX,
     SHEET_SETTINGS,
-    _format_workbook,
 )
+from fot_planner.excel.workbook_format import format_workbook
 
 from create_demo_input import (
     CONTRACT_SHEET_COLUMNS,
@@ -40,11 +40,12 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
 
     employees = [
         {
-            "код": "E001",
+            "код строки": "E001-1",
             "фио": "Иванов И.И.",
             "должность": "инженер",
             "подразделение": "отдел НИОКР",
             "ставка": 1.0,
+            "тип занятости": "основное",
             "зарплата": 50_000,
 
             "дата начала": f"{year}-01-01",
@@ -53,11 +54,12 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "запрещенные договоры": "",
         },
         {
-            "код": "E002",
+            "код строки": "E002-1",
             "фио": "Петров П.П.",
             "должность": "инженер",
             "подразделение": "отдел НИОКР",
             "ставка": 1.0,
+            "тип занятости": "основное",
             "зарплата": 42_000,
 
             "дата начала": f"{year}-01-01",
@@ -66,11 +68,12 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "запрещенные договоры": "",
         },
         {
-            "код": "E003",
+            "код строки": "E003-1",
             "фио": "Сидорова С.С.",
             "должность": "инженер-лаборант",
             "подразделение": "лаборатория",
             "ставка": 0.5,
+            "тип занятости": "совместительство",
             "зарплата": 44_000,
 
             "дата начала": f"{year}-01-01",
@@ -79,11 +82,12 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "запрещенные договоры": "C_VB",
         },
         {
-            "код": "E004",
+            "код строки": "E004-1",
             "фио": "Козлов К.К.",
             "должность": "инженер",
             "подразделение": "отдел НИОКР",
             "ставка": 1.0,
+            "тип занятости": "основное",
             "зарплата": 44_000,
 
             "дата начала": f"{year}-01-01",
@@ -92,11 +96,12 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             "запрещенные договоры": "",
         },
         {
-            "код": "E005",
+            "код строки": "E005-1",
             "фио": "Морозова М.М.",
             "должность": "инженер",
             "подразделение": "отдел НИОКР",
             "ставка": 1.0,
+            "тип занятости": "основное",
             "зарплата": 42_000,
 
             "дата начала": f"{year}-01-01",
@@ -111,6 +116,7 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
         name="ГОЗ (старт в марте)",
         number=f"ГЗ-{year}/1",
         contract_type="goszakaz",
+        is_goz=True,
         year=year,
         end_date=f"{year}-12-30",
         total_fot=580_000,
@@ -165,7 +171,7 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
 
     manual_assignments = [
         {
-            "employee_id": "E001",
+            "employee_id": "E001-1",
             "contract_id": "C_GRANT",
             "year": year,
             "month_from": 1,
@@ -177,7 +183,7 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
 
     readme = pd.DataFrame(
         [
-            {"раздел": "Сотрудники", "содержание": "5 чел.: инженер и лаборант (E003 запрещён на C_VB)"},
+            {"раздел": "Сотрудники", "содержание": "5 строк назначений: инженер и лаборант (E003-1 запрещён на C_VB)"},
             {
                 "раздел": "C_GOS",
                 "содержание": "ГОЗ: март–дек, освоение за 20 дн. до конца, перенос; касса в дек.; труд ±5%",
@@ -233,7 +239,7 @@ def create_demo_light(path: str | Path = "data/demo_light.xlsx", *, year: int | 
             writer, sheet_name=SHEET_MANUAL_PROHIBITIONS, index=False
         )
 
-    _format_workbook(path)
+    format_workbook(path)
     return path
 
 

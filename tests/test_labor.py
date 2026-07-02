@@ -38,6 +38,7 @@ def _goz_with_labor(path: Path, plan_pm: float, positions: bool = True) -> None:
                 "name": "ГОЗ",
                 "number": "1",
                 "contract_type": "goszakaz",
+                "is_goz_defense_order": True,
                 "status": "active",
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",

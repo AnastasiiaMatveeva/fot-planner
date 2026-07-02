@@ -15,13 +15,13 @@ from fot_planner.labor_rules import (
 )
 from fot_planner.excel.constants import PAYMENT_KIND_RU
 from fot_planner.models import (
-    PAYMENT_KINDS,
     PaymentKind,
     PlanningContext,
     PlanningResult,
     labor_row_id,
 )
 from fot_planner.optimizer import MIN_FLEX_FRAGMENT_AMOUNT
+from fot_planner.payment_kind import LABOR_PAYMENT_KINDS
 from fot_planner.payment_split import employee_monthly_payment_due
 from fot_planner.excel.reports.spend_plan import build_spend_plan_fact_dataframe
 from fot_planner.validation import employee_active_in_month
@@ -59,20 +59,11 @@ RU_MONTHS: dict[int, str] = {
 MONTH_RU_TO_SHORT = {v: MONTH_SHORT[k] for k, v in RU_MONTHS.items()}
 MONTH_RU_TO_NUM = {v: k for k, v in RU_MONTHS.items()}
 
-SHEET_README = "Как читать файл"
 SHEET_SUMMARY = "Итог расчета"
 SHEET_ISSUES = "Проблемы и предупреждения"
-SHEET_EMPLOYEE_PAYMENTS = "Выплаты по сотрудникам"
-SHEET_CONTRACT_PAYMENTS = "Выплаты по договорам"
-SHEET_BALANCES = "Остатки по договорам"
-SHEET_SPEND_PLAN = "Освоение план-факт"
+SHEET_CONTRACT_FOT = "ФОТ по договорам"
 SHEET_LABOR_CONTROL = "Контроль трудоёмкости"
 SHEET_PLAN = "План выплат"
-SHEET_LABOR_PAYMENTS = "Выплаты в трудоёмкость"
-SHEET_POSITION = "Контроль должностей"
-SHEET_ADMIN = "Административная сложность"
-SHEET_SPLIT = "Проверка дробления выплат"
-SHEET_SCHEME = "Смены схемы выплат"
 SHEET_DEFICITS = "Дефициты"
 SHEET_DEFICIT_MONTH = "Дефицит по месяцам"
 
@@ -168,6 +159,10 @@ def build_readme_sheet() -> pd.DataFrame:
         {"раздел": "4", "описание": "Остатки по договорам — хватает ли денег по договорам."},
         {"раздел": "5", "описание": "Контроль трудоёмкости — главный лист: план/факт по договорам, месяцам и сотрудникам."},
         {"раздел": "6", "описание": "Дефициты — кому, когда и сколько не хватило, если дефицит разрешён."},
+        {
+            "раздел": "Скрытые листы",
+            "описание": "Технические проверки остаются внутри файла, но скрыты, чтобы основной отчёт не расползался по лишним вкладкам.",
+        },
         {"раздел": "", "описание": ""},
         {"раздел": "Термины", "описание": ""},
         {
@@ -192,7 +187,7 @@ def build_readme_sheet() -> pd.DataFrame:
         },
         {
             "раздел": "Трудоёмкость по строке",
-            "описание": "Плановая и фактическая средняя = сумма / чел.-мес. Статус «выполнено по группе» — отклонение компенсировано внутри группы взаимозаменяемости.",
+            "описание": "Плановая и фактическая средняя = сумма / чел.-мес. Статус «выполнено по группе» — отклонение компенсировано внутри окладной группы.",
         },
         {
             "раздел": "Административная сложность",
@@ -287,7 +282,11 @@ def _labor_attribution_gaps(ctx: PlanningContext, result: PlanningResult) -> lis
 
     gaps: list[dict] = []
     for a in result.allocations:
-        if a.amount <= 0.005 or not has_labor(ctx, a.contract_id):
+        if (
+            a.amount <= 0.005
+            or a.payment_kind not in LABOR_PAYMENT_KINDS
+            or not has_labor(ctx, a.contract_id)
+        ):
             continue
         key = (a.employee_id, a.contract_id, a.month, a.payment_kind)
         attr = attributed.get(key, 0.0)
@@ -362,7 +361,7 @@ def _split_payment_issues(ctx: PlanningContext, result: PlanningResult) -> list[
                 "месяц": RU_MONTHS[month],
                 "описание проблемы": f"{PAYMENT_KIND_RU[kind]} разбита между {len(contracts)} договорами",
                 "отклонение / сумма": len(contracts),
-                "куда смотреть": SHEET_SPLIT,
+                "куда смотреть": SHEET_PLAN,
                 "рекомендация": "Проверить необходимость дробления",
             }
         )
@@ -382,7 +381,7 @@ def _cash_issues(result: PlanningResult, contracts: dict) -> list[dict]:
                     "месяц": RU_MONTHS[b.month],
                     "описание проблемы": "Отрицательный остаток договора",
                     "отклонение / сумма": round(b.closing_balance, 2),
-                    "куда смотреть": SHEET_BALANCES,
+                    "куда смотреть": SHEET_CONTRACT_FOT,
                     "рекомендация": "Проверить поступления и выплаты по договору",
                 }
             )
@@ -395,8 +394,8 @@ def _cash_issues(result: PlanningResult, contracts: dict) -> list[dict]:
                     "месяц": RU_MONTHS[b.month],
                     "описание проблемы": "Остаток ниже минимального",
                     "отклонение / сумма": round(b.closing_balance - b.min_balance_required, 2),
-                    "куда смотреть": SHEET_BALANCES,
-                    "рекомендация": "Проверить min_balance_matrix",
+                    "куда смотреть": SHEET_CONTRACT_FOT,
+                    "рекомендация": "Проверить лист «минимальные_остатки»",
                 }
             )
     return issues
@@ -587,10 +586,10 @@ def build_summary_sheet(
 
 
 def build_employee_payments_matrix(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
-    id_cols = ["сотрудник", "ФИО", "должность", "показатель"]
+    id_cols = ["код строки", "ФИО", "должность", "показатель"]
     rows: list[dict] = []
     for e in ctx.employees:
-        base = {"сотрудник": e.id, "ФИО": e.full_name, "должность": e.position}
+        base = {"код строки": e.id, "ФИО": e.full_name, "должность": e.position}
         due: dict[int, float] = {}
         paid: dict[int, float] = {}
         deficit: dict[int, float] = {}
@@ -734,11 +733,40 @@ def build_spend_plan_matrix(ctx: PlanningContext, result: PlanningResult) -> pd.
     return pd.DataFrame(rows)[cols]
 
 
+def _contract_fot_section(df: pd.DataFrame, section: str) -> pd.DataFrame:
+    renamed = df.rename(columns={"название": "название договора"}).copy()
+    if "договор" not in renamed.columns:
+        return pd.DataFrame(columns=["раздел", "договор", "название договора", "показатель"] + MONTH_COLS)
+    if "название договора" not in renamed.columns:
+        renamed["название договора"] = ""
+    if "показатель" not in renamed.columns:
+        renamed["показатель"] = ""
+    renamed.insert(0, "раздел", section)
+    cols = ["раздел", "договор", "название договора", "показатель"] + MONTH_COLS
+    for col in cols:
+        if col not in renamed.columns:
+            renamed[col] = ""
+    return renamed[cols]
+
+
+def build_contract_fot_matrix(ctx: PlanningContext, result: PlanningResult) -> pd.DataFrame:
+    parts = [
+        _contract_fot_section(build_contract_payments_matrix(ctx, result), "Поступления и выплаты"),
+        _contract_fot_section(build_balances_matrix(ctx, result), "Остатки"),
+        _contract_fot_section(build_spend_plan_matrix(ctx, result), "Освоение план-факт"),
+    ]
+    df = pd.concat(parts, ignore_index=True)
+    return df if not df.empty else _empty_matrix_row(
+        ["раздел", "договор", "название договора", "показатель"],
+        "Нет данных по ФОТ договоров",
+    )
+
+
 LABOR_SUMMARY_COLUMNS = [
     "договор",
     "название договора",
     "должность / категория",
-    "группа взаимозаменяемости",
+    "окладная группа",
     "план чел.-мес.",
     "факт чел.-мес.",
     "отклонение чел.-мес.",
@@ -755,12 +783,12 @@ LABOR_BREAKDOWN_COLUMNS = [
     "договор",
     "название договора",
     "должность / категория строки",
-    "группа строки",
+    "окладная группа строки",
     "месяц",
     "табельный номер",
     "ФИО",
     "должность сотрудника",
-    "группа сотрудника",
+    "окладная группа сотрудника",
     "ставка сотрудника",
     "закрыто чел.-мес.",
     "оклад с договора",
@@ -768,7 +796,6 @@ LABOR_BREAKDOWN_COLUMNS = [
     "122 с договора",
     "124 с договора",
     "152 с договора",
-    "приказ с договора",
     "всего отнесено на строку",
     "плановая средняя",
     "фактическая средняя",
@@ -857,7 +884,7 @@ def _labor_summary_row_dict(
         "договор": contract_id,
         "название договора": contract_name,
         "должность / категория": position,
-        "группа взаимозаменяемости": group,
+        "окладная группа": group,
         "план чел.-мес.": round(checks["plan_pm"], 4),
         "факт чел.-мес.": round(checks["fact_pm"], 4),
         "отклонение чел.-мес.": round(checks["pm_dev"], 4),
@@ -888,7 +915,12 @@ def _build_labor_summary_rows(ctx: PlanningContext, result: PlanningResult) -> l
         plan_amt = float(r["плановая сумма по строке"] or 0)
         fact_pm = float(r["факт чел.-мес."] or 0)
         fact_amt = float(r["факт сумма по строке"] or 0)
-        group = str(r["группа взаимозаменяемости"] or "")
+        group_col = (
+            "окладная группа"
+            if "окладная группа" in df.columns
+            else "группа взаимозаменяемости"
+        )
+        group = str(r[group_col] or "")
         checks = _labor_row_checks(plan_pm, plan_amt, fact_pm, fact_amt, tol)
         c = contracts.get(r["договор"])
         row_records.append(
@@ -1047,7 +1079,7 @@ def _detail_attribution_status(
             )
     if not contract_has_labor_plan(ctx, contract_id):
         return "ОК", ""
-    for kind in PAYMENT_KINDS:
+    for kind in LABOR_PAYMENT_KINDS:
         paid = _paid_on_contract(result, employee_id, contract_id, month, kind)
         if paid <= 0.005:
             continue
@@ -1114,10 +1146,10 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
             if rid == row_id and pay_by[(rid, e_id, month, _kind)] > 0.005
         }
         total_pm = 0.0
-        total_by_kind = {kind: 0.0 for kind in PAYMENT_KINDS}
+        total_by_kind = {kind: 0.0 for kind in LABOR_PAYMENT_KINDS}
         for (_rid, e_id, month) in detail_keys:
             total_pm += pm_by.get((row_id, e_id, month), 0.0)
-            for kind in PAYMENT_KINDS:
+            for kind in LABOR_PAYMENT_KINDS:
                 total_by_kind[kind] += pay_by.get((row_id, e_id, month, kind), 0.0)
         total_amount = sum(total_by_kind.values())
         spec["detail_keys"] = detail_keys
@@ -1154,8 +1186,7 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
             allowance = pay_by.get((row_id, e_id, month, PaymentKind.K122), 0.0)
             incentive = pay_by.get((row_id, e_id, month, PaymentKind.K124), 0.0)
             extra_work = pay_by.get((row_id, e_id, month, PaymentKind.K152), 0.0)
-            order_incentive = pay_by.get((row_id, e_id, month, PaymentKind.ORDER_INCENTIVE), 0.0)
-            total = salary + secret + allowance + incentive + extra_work + order_incentive
+            total = salary + secret + allowance + incentive + extra_work
             if pm <= 0.005 and total <= 0.005:
                 continue
 
@@ -1174,12 +1205,12 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
                     "договор": contract.id,
                     "название договора": c.name if c else "",
                     "должность / категория строки": pos,
-                    "группа строки": group,
+                    "окладная группа строки": group,
                     "месяц": RU_MONTHS[month],
                     "табельный номер": e_id,
                     "ФИО": emp.full_name if emp else "",
                     "должность сотрудника": emp.position if emp else "",
-                    "группа сотрудника": emp.equivalence_group if emp else "",
+                    "окладная группа сотрудника": emp.equivalence_group if emp else "",
                     "ставка сотрудника": emp.rate if emp else "",
                     "закрыто чел.-мес.": round(pm, 4),
                     "оклад с договора": round(salary, 2) if salary > 0.005 else "",
@@ -1187,7 +1218,6 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
                     "122 с договора": round(allowance, 2) if allowance > 0.005 else "",
                     "124 с договора": round(incentive, 2) if incentive > 0.005 else "",
                     "152 с договора": round(extra_work, 2) if extra_work > 0.005 else "",
-                    "приказ с договора": round(order_incentive, 2) if order_incentive > 0.005 else "",
                     "всего отнесено на строку": round(total, 2),
                     "плановая средняя": "",
                     "фактическая средняя": "",
@@ -1212,12 +1242,12 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
                     "договор": contract.id,
                     "название договора": c.name if c else "",
                     "должность / категория строки": pos,
-                    "группа строки": group,
+                    "окладная группа строки": group,
                     "месяц": "ИТОГО",
                     "табельный номер": "",
                     "ФИО": "",
                     "должность сотрудника": "",
-                    "группа сотрудника": "",
+                    "окладная группа сотрудника": "",
                     "ставка сотрудника": "",
                     "закрыто чел.-мес.": round(checks["fact_pm"], 4),
                     "оклад с договора": round(spec["total_by_kind"][PaymentKind.SALARY], 2)
@@ -1234,9 +1264,6 @@ def build_labor_breakdown_sheet(ctx: PlanningContext, result: PlanningResult) ->
                     else "",
                     "152 с договора": round(spec["total_by_kind"][PaymentKind.K152], 2)
                     if spec["total_by_kind"][PaymentKind.K152] > 0.005
-                    else "",
-                    "приказ с договора": round(spec["total_by_kind"][PaymentKind.ORDER_INCENTIVE], 2)
-                    if spec["total_by_kind"][PaymentKind.ORDER_INCENTIVE] > 0.005
                     else "",
                     "всего отнесено на строку": round(checks["fact_amt"], 2),
                     "плановая средняя": _round_avg(spec["plan_avg"]),
@@ -1279,10 +1306,10 @@ def build_plan_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> p
 
         rows.append(
             {
-                "табельный номер": a.employee_id,
+                "код строки": a.employee_id,
                 "ФИО": emp.full_name if emp else "",
                 "должность": emp.position if emp else "",
-                "группа должности": emp.equivalence_group if emp else "",
+                "окладная группа должности": emp.equivalence_group if emp else "",
                 "год": a.year,
                 "месяц": RU_MONTHS[a.month],
                 "договор": a.contract_id,
@@ -1338,7 +1365,7 @@ def build_labor_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> 
                 "выплачено всего": round(total, 2),
                 "сумма, отнесенная на трудоёмкость": round(attr, 2),
                 "должность строки": rec.position or "",
-                "группа строки": rec.equivalence_group or "",
+                "окладная группа строки": rec.equivalence_group or "",
                 "чел.-мес., отнесенные на строку": round(pm, 4),
                 "статус": st,
             }
@@ -1350,7 +1377,11 @@ def build_labor_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> 
         key = (rec.employee_id, rec.contract_id, rec.month, rec.payment_kind)
         attributed_sum[key] += rec.amount
     for a in result.allocations:
-        if a.amount <= 0.005 or not contract_has_labor_plan(ctx, a.contract_id):
+        if (
+            a.amount <= 0.005
+            or a.payment_kind not in LABOR_PAYMENT_KINDS
+            or not contract_has_labor_plan(ctx, a.contract_id)
+        ):
             continue
         key = (a.employee_id, a.contract_id, a.month, a.payment_kind)
         if attributed_sum.get(key, 0.0) < a.amount - 0.02:
@@ -1367,7 +1398,7 @@ def build_labor_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> 
                     "выплачено всего": round(a.amount, 2),
                     "сумма, отнесенная на трудоёмкость": round(attributed_sum.get(key, 0.0), 2),
                     "должность строки": "",
-                    "группа строки": "",
+                    "окладная группа строки": "",
                     "чел.-мес., отнесенные на строку": "",
                     "статус": "нет совместимой строки"
                     if not any(
@@ -1397,7 +1428,7 @@ def build_position_control_sheet(ctx: PlanningContext, result: PlanningResult) -
     out = df.rename(columns=rename)
     if "причина" not in out.columns:
         out["причина совместимости / несовместимости"] = out["совместимость"].map(
-            lambda x: "группа должностей совпадает" if str(x).lower() in ("да", "yes") else "нет подходящей строки"
+            lambda x: "окладная группа совпадает" if str(x).lower() in ("да", "yes") else "нет подходящей строки"
         )
     return out
 
@@ -1570,7 +1601,7 @@ def build_deficits_sheet(ctx: PlanningContext, result: PlanningResult) -> pd.Dat
         fm = first_by_emp.get(eid)
         rows.append(
             {
-                "табельный номер": eid,
+                "код строки": eid,
                 "ФИО": r["сотрудник"],
                 "месяц": r["месяц"],
                 "требовалось выплатить": r["требовалось выплатить"],
@@ -1616,19 +1647,10 @@ def build_deficit_by_month_matrix(ctx: PlanningContext, result: PlanningResult) 
 
 @dataclass
 class UserExcelReport:
-    readme: pd.DataFrame
     summary: pd.DataFrame
     issues: pd.DataFrame
-    employee_payments: pd.DataFrame
-    contract_payments: pd.DataFrame
-    balances: pd.DataFrame
-    spend_plan: pd.DataFrame
+    contract_fot: pd.DataFrame
     plan: pd.DataFrame
-    labor_payments: pd.DataFrame
-    position_control: pd.DataFrame
-    admin: pd.DataFrame
-    split_check: pd.DataFrame
-    scheme_changes: pd.DataFrame
     deficits: pd.DataFrame
     deficit_by_month: pd.DataFrame
 
@@ -1636,19 +1658,10 @@ class UserExcelReport:
 def build_user_excel_report(ctx: PlanningContext, result: PlanningResult) -> UserExcelReport:
     issues = collect_issues(ctx, result)
     return UserExcelReport(
-        readme=build_readme_sheet(),
         summary=build_summary_sheet(ctx, result, issues),
         issues=issues,
-        employee_payments=build_employee_payments_matrix(ctx, result),
-        contract_payments=build_contract_payments_matrix(ctx, result),
-        balances=build_balances_matrix(ctx, result),
-        spend_plan=build_spend_plan_matrix(ctx, result),
+        contract_fot=build_contract_fot_matrix(ctx, result),
         plan=build_plan_payments_sheet(ctx, result),
-        labor_payments=build_labor_payments_sheet(ctx, result),
-        position_control=build_position_control_sheet(ctx, result),
-        admin=build_admin_sheet(ctx, result),
-        split_check=build_split_check_sheet(ctx, result),
-        scheme_changes=build_scheme_changes_sheet(ctx, result),
         deficits=build_deficits_sheet(ctx, result),
         deficit_by_month=build_deficit_by_month_matrix(ctx, result),
     )

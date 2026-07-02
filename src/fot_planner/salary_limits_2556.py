@@ -1,4 +1,4 @@
-"""Редактируемые лимиты зарплаты по должностям."""
+"""Лимиты зарплаты по должностям: дефолты для шаблона и структуры загрузки."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ __all__ = [
     "effective_p4_limit",
     "normalize_personnel_category",
     "p4_applies_to_category",
+    "position_limit_tables_from_salary_limits",
 ]
 
 
@@ -42,6 +43,7 @@ class PositionSalaryLimit:
     personnel_category: str
     order_2556_limit: float | None = None
     p4_limit: float | None = None
+    bep_limit: float | None = None
     note: str | None = None
 
 
@@ -70,15 +72,17 @@ def default_position_salary_limits() -> list[PositionSalaryLimit]:
             personnel_category=personnel_category,
             order_2556_limit=order_2556_limit,
             p4_limit=P4_LIMIT_BY_CATEGORY_2025.get(personnel_category),
+            bep_limit=None,
             note=note,
         )
         for position, personnel_category, order_2556_limit, note in POSITION_SALARY_LIMIT_ROWS
     ]
 
 
-def default_position_limit_tables() -> dict[str, list[PositionLimit]]:
-    rows = default_position_salary_limits()
-    return {
+def position_limit_tables_from_salary_limits(
+    rows: list[PositionSalaryLimit],
+) -> dict[str, list[PositionLimit]]:
+    tables = {
         "2556": [
             PositionLimit(
                 limit_code="2556",
@@ -100,3 +104,8 @@ def default_position_limit_tables() -> dict[str, list[PositionLimit]]:
             for row in rows
         ],
     }
+    return tables
+
+
+def default_position_limit_tables() -> dict[str, list[PositionLimit]]:
+    return position_limit_tables_from_salary_limits(default_position_salary_limits())

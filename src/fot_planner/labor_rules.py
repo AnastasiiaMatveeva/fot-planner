@@ -9,6 +9,13 @@ from fot_planner.models import (
     Employee,
     PlanningContext,
 )
+from fot_planner.position_reference import normalize_position
+
+
+def _same_position_text(left: str | None, right: str | None) -> bool:
+    left_key = normalize_position(left)
+    right_key = normalize_position(right)
+    return bool(left_key and right_key and left_key == right_key)
 
 
 def employee_matches_position_spec(
@@ -26,9 +33,9 @@ def employee_matches_position_spec(
     """
     if not position and not equivalence_group:
         return True
-    if position and employee.position == position:
+    if _same_position_text(employee.position, position):
         return True
-    if equivalence_group and employee.equivalence_group == equivalence_group:
+    if _same_position_text(employee.equivalence_group, equivalence_group):
         return True
     return False
 

@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     solve_p.add_argument("-o", "--output", required=True, help="Файл результата")
     solve_p.add_argument(
         "--plan",
-        help="Excel с листом plan (lock=yes) для пересчёта с фиксациями; по умолчанию = --output",
+        help="Excel с листом «План выплат» для пересчёта с фиксациями; по умолчанию = --output",
     )
     solve_p.add_argument("--time-limit", type=int, default=120, help="Лимит решателя, сек")
 

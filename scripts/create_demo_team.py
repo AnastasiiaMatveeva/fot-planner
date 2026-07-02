@@ -24,8 +24,7 @@ from fot_planner.excel import (
     SHEET_MIN_BALANCE_MATRIX,
     SHEET_SETTINGS,
 )
-
-from fot_planner.excel import _format_workbook
+from fot_planner.excel.workbook_format import format_workbook
 
 from create_demo_input import (
     _contracts_sheet_dataframe,
@@ -48,11 +47,12 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
 
     employees = [
         {
-            "код": "E001",
+            "код строки": "E001-1",
             "фио": "Иванов И.И.",
             "должность": "ведущий инженер",
             "подразделение": "НИОКР",
             "ставка": 1.0,
+            "тип занятости": "основное",
             "зарплата": 180_000,
 
             "дата начала": f"{year}-01-01",
@@ -61,11 +61,12 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "запрещенные договоры": "",
         },
         {
-            "код": "E002",
+            "код строки": "E002-1",
             "фио": "Петров П.П.",
             "должность": "инженер-помощник",
             "подразделение": "НИОКР",
             "ставка": 1.0,
+            "тип занятости": "основное",
             "зарплата": 120_000,
 
             "дата начала": f"{year}-01-01",
@@ -74,11 +75,12 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "запрещенные договоры": "",
         },
         {
-            "код": "E003",
+            "код строки": "E003-1",
             "фио": "Сидоров С.С.",
             "должность": "аналитик",
             "подразделение": "аналитика",
             "ставка": 1.0,
+            "тип занятости": "основное",
             "зарплата": 110_000,
 
             "дата начала": f"{year}-01-01",
@@ -87,11 +89,12 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "запрещенные договоры": "",
         },
         {
-            "код": "E004",
+            "код строки": "E004-1",
             "фио": "Орлова О.О.",
             "должность": "конструктор",
             "подразделение": "КБ",
             "ставка": 1.0,
+            "тип занятости": "основное",
             "зарплата": 100_000,
 
             "дата начала": f"{year}-01-01",
@@ -100,11 +103,12 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             "запрещенные договоры": "",
         },
         {
-            "код": "E005",
+            "код строки": "E005-1",
             "фио": "Кузнецов К.К.",
             "должность": "младший инженер",
             "подразделение": "НИОКР",
             "ставка": 0.5,
+            "тип занятости": "совместительство",
             # Итого 50k/мес; потолок по должности ×0.5 — оклад и надбавка отдельными строками
             "зарплата": 50_000,
 
@@ -135,6 +139,7 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
                 name="ГОЗ (март–дек)",
                 number=f"ГЗ-{year}",
                 contract_type="goszakaz",
+                is_goz=True,
                 year=year,
                 end_date=f"{year}-12-30",
                 total_fot=1_500_000,
@@ -241,15 +246,15 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
     # Оклад — договор; надбавка — фикс. на том же договоре (кроме MINPROM у Иванова/Петрова: иначе >2.6M ФОТ).
     manual_assignments: list[dict] = []
     for emp, contract, m_from, m_to, allowance, fix_allow in (
-        ("E001", "C_BASE", 1, 2, 30_000, True),
-        ("E001", "C_GOS", 3, 7, 30_000, True),
-        ("E001", "C_MINPROM", 8, 12, 30_000, False),
-        ("E002", "C_BASE", 1, 2, 30_000, True),
-        ("E002", "C_GOS", 3, 7, 30_000, True),
-        ("E002", "C_MINPROM", 8, 12, 30_000, False),
-        ("E003", "C_GRANT", 1, 12, 30_000, False),
-        ("E004", "C_MINPROM", 4, 12, 30_000, True),
-        ("E005", "C_MINPROM", 4, 7, 20_000, True),
+        ("E001-1", "C_BASE", 1, 2, 30_000, True),
+        ("E001-1", "C_GOS", 3, 7, 30_000, True),
+        ("E001-1", "C_MINPROM", 8, 12, 30_000, False),
+        ("E002-1", "C_BASE", 1, 2, 30_000, True),
+        ("E002-1", "C_GOS", 3, 7, 30_000, True),
+        ("E002-1", "C_MINPROM", 8, 12, 30_000, False),
+        ("E003-1", "C_GRANT", 1, 12, 30_000, False),
+        ("E004-1", "C_MINPROM", 4, 12, 30_000, True),
+        ("E005-1", "C_MINPROM", 4, 7, 20_000, True),
     ):
         manual_assignments.extend(_pay_binds(emp, contract, m_from, m_to, allowance, fix_allowance=fix_allow))
 
@@ -263,7 +268,7 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
                 "раздел": "C_MINPROM",
                 "содержание": "2.6M в апр.; Орлова апр–дек; Кузнецов апр–июль (0.5 ставки); Иванов/Петров с авг.",
             },
-            {"раздел": "E005", "содержание": "Кузнецов активен только апр–июль (2 чел.-мес. на Минпромторг)"},
+            {"раздел": "E005-1", "содержание": "Кузнецов активен только апр–июль (2 чел.-мес. на Минпромторг)"},
             {
                 "раздел": "Выплаты",
                 "содержание": "Оклад+надбавка; потолок contract_positions < оклада → две строки на договоре",
@@ -316,7 +321,7 @@ def create_demo_team(path: str | Path = "data/demo_team.xlsx", *, year: int | No
             writer, sheet_name=SHEET_MANUAL_PROHIBITIONS, index=False
         )
 
-    _format_workbook(path)
+    format_workbook(path)
     return path
 
 

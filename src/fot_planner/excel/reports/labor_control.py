@@ -11,7 +11,8 @@ from openpyxl.utils import get_column_letter
 
 from fot_planner.fot_schedule import active_months_in_year
 from fot_planner.labor_rules import labor_rows_for_contract, planned_labor_amount
-from fot_planner.models import PAYMENT_KINDS, PaymentKind, PlanningContext, PlanningResult, labor_row_id
+from fot_planner.models import PaymentKind, PlanningContext, PlanningResult, labor_row_id
+from fot_planner.payment_kind import LABOR_PAYMENT_KINDS
 from fot_planner.excel.reports.user_report import (
     GROUP_DONE_COMMENT,
     MONTH_SHORT,
@@ -52,7 +53,6 @@ EMPLOYEE_METRICS = (
     (PaymentKind.K122, "122 с договора"),
     (PaymentKind.K124, "124 с договора"),
     (PaymentKind.K152, "152 с договора"),
-    (PaymentKind.ORDER_INCENTIVE, "приказ с договора"),
     ("total", "Всего денег на строку"),
 )
 
@@ -367,9 +367,9 @@ def _collect_employee_rows(
                 )
                 for m in MONTHS
             }
-            for kind in PAYMENT_KINDS
+            for kind in LABOR_PAYMENT_KINDS
         }
-        tot_m = {m: sum(pay_m[kind][m] for kind in PAYMENT_KINDS) for m in MONTHS}
+        tot_m = {m: sum(pay_m[kind][m] for kind in LABOR_PAYMENT_KINDS) for m in MONTHS}
         metrics = {
             "pm": pm_m,
             **pay_m,

@@ -67,6 +67,7 @@ class ContractSpec:
     total_fot: float
     inflows: dict[int, float]
     positions: tuple[ContractPositionSpec, ...]
+    is_goz: bool = False
     labor: tuple[LaborRowSpec, ...] = ()
 
     def active_months(self, year: int) -> tuple[int, ...]:

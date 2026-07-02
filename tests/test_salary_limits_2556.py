@@ -3,68 +3,62 @@ from __future__ import annotations
 import pandas as pd
 
 from fot_planner.excel import create_template, load_context
+from fot_planner.excel.constants import SHEET_POSITION_LIMITS
 
 
-def test_template_contains_position_categories_and_order_2556_limits(tmp_path):
+def test_template_contains_position_limits_sheet(tmp_path):
     path = tmp_path / "input.xlsx"
     create_template(path)
 
-    table_2556 = pd.read_excel(path, sheet_name="2556")
-    table_p4 = pd.read_excel(path, sheet_name="p4")
-    assert list(table_2556.columns) == [
+    limits = pd.read_excel(path, sheet_name=SHEET_POSITION_LIMITS)
+    assert list(limits.columns) == [
         "должность",
         "категория персонала",
-        "лимит на 1 ставку",
+        "группа взаимозаменяемости",
+        "уровень",
+        "оклад",
+        "П2556",
+        "П4",
+        "БЭП",
         "примечание",
     ]
-    assert list(table_p4.columns) == [
-        "должность",
-        "категория персонала",
-        "лимит на 1 ставку",
-        "примечание",
-    ]
-    assert len(table_2556) == 33
-    assert len(table_p4) == 33
 
-    engineer = table_2556.loc[table_2556["должность"] == "Инженер"].iloc[0]
+    engineer = limits.loc[limits["должность"] == "Инженер"].iloc[0]
     assert engineer["категория персонала"] == "НТП"
-    assert engineer["лимит на 1 ставку"] == 110_000
+    assert engineer["оклад"] == 40_400
+    assert engineer["П2556"] == 110_000
+    assert engineer["П4"] == 149_648.90
+    assert engineer["БЭП"] == 112_261
 
-    engineer_p4 = table_p4.loc[table_p4["должность"] == "Инженер"].iloc[0]
-    assert engineer_p4["лимит на 1 ставку"] == 162_648.30
-
-    engineer_i = table_2556.loc[table_2556["должность"] == "Инженер 1 категории"].iloc[0]
-    assert engineer_i["лимит на 1 ставку"] == 120_000
-
-    researcher = table_2556.loc[table_2556["должность"] == "Научный сотрудник"].iloc[0]
+    researcher = limits.loc[limits["должность"] == "Научный сотрудник"].iloc[0]
     assert researcher["категория персонала"] == "НР"
-    assert pd.isna(researcher["лимит на 1 ставку"])
+    assert researcher["оклад"] == 55_700
+    assert pd.isna(researcher["П2556"])
+    assert researcher["П4"] == 257_643.19
 
-    researcher_p4 = table_p4.loc[table_p4["должность"] == "Научный сотрудник"].iloc[0]
-    assert researcher_p4["лимит на 1 ставку"] == 280_023.62
-
-    director = table_p4.loc[table_p4["должность"] == "Директор центра"].iloc[0]
-    assert pd.isna(director["лимит на 1 ставку"])
+    director = limits.loc[limits["должность"] == "Директор центра"].iloc[0]
+    assert pd.isna(director["П4"])
 
 
-def test_changed_order_2556_limit_is_loaded_from_excel(tmp_path):
+def test_changed_position_limits_are_loaded_from_excel(tmp_path):
     path = tmp_path / "input.xlsx"
     create_template(path)
 
-    table_2556 = pd.read_excel(path, sheet_name="2556")
-    table_p4 = pd.read_excel(path, sheet_name="p4")
-    table_2556.loc[
-        table_2556["должность"] == "Инженер", "лимит на 1 ставку"
-    ] = 111_111
-    table_p4.loc[
-        table_p4["должность"] == "Инженер", "лимит на 1 ставку"
-    ] = 166_000
+    limits = pd.read_excel(path, sheet_name=SHEET_POSITION_LIMITS)
+    engineer_mask = limits["должность"] == "Инженер"
+    limits.loc[engineer_mask, "оклад"] = 41_111
+    limits.loc[engineer_mask, "П2556"] = 111_111
+    limits.loc[engineer_mask, "П4"] = 166_000
+    limits.loc[engineer_mask, "БЭП"] = 100_000
     with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
-        table_2556.to_excel(writer, sheet_name="2556", index=False)
-        table_p4.to_excel(writer, sheet_name="p4", index=False)
+        limits.to_excel(writer, sheet_name=SHEET_POSITION_LIMITS, index=False)
 
     ctx = load_context(path)
+    position = next(row for row in ctx.position_reference if row.position == "Инженер")
     engineer = next(row for row in ctx.position_salary_limits if row.position == "Инженер")
+    assert position.reference_salary_for_rate == 41_111
     assert engineer.personnel_category == "НТП"
     assert engineer.order_2556_limit == 111_111
     assert engineer.p4_limit == 166_000
+    assert engineer.bep_limit == 100_000
+    assert ctx.salary_stability.goz_average_salary_limit == 100_000

@@ -7,10 +7,8 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 
-from fot_planner.defaults.contract_types import normalize_contract_type
 from fot_planner.excel.constants import (
     LIMIT_TABLE_COLUMN_ALIASES,
-    SHEET_CONTRACT_BUDGET,
     SHEET_CONTRACT_LABOR,
     SHEET_CONTRACT_PAYMENT_LIMITS,
     SHEET_CONTRACT_POSITIONS,
@@ -20,11 +18,10 @@ from fot_planner.excel.constants import (
     SHEET_FOT_MATRIX,
     SHEET_MANUAL_ASSIGNMENTS,
     SHEET_MANUAL_PROHIBITIONS,
-    SHEET_META,
     SHEET_MIN_BALANCE_MATRIX,
     SHEET_PLAN,
-    SHEET_POSITION_REFERENCE,
-    SHEET_POSITION_SYNONYMS,
+    SHEET_POSITION_LIMITS,
+    SHEET_SECRET_ALLOWANCES,
     SHEET_SETTINGS,
 )
 from fot_planner.excel.parsing import (
@@ -40,7 +37,10 @@ from fot_planner.excel.parsing import (
 )
 from fot_planner.fot_schedule import default_fot_inflow_at_start
 from fot_planner.limit_codes import normalize_limit_code
-from fot_planner.open_rate_rules import normalize_employment_category
+from fot_planner.open_rate_rules import (
+    normalize_employment_category,
+    normalize_employment_type,
+)
 from fot_planner.models import (
     AllocationRecord,
     Contract,
@@ -56,6 +56,7 @@ from fot_planner.models import (
     PlanningContext,
     PositionReference,
     SalaryStabilityRules,
+    SecretAllowance,
     labor_row_id,
 )
 from fot_planner.position_reference import (
@@ -65,13 +66,14 @@ from fot_planner.position_reference import (
     default_position_synonyms,
     normalize_position,
     resolve_position,
+    salary_equivalence_group,
 )
 from fot_planner.salary_limits_2556 import (
     PositionLimit,
     PositionSalaryLimit,
     default_position_limit_tables,
     default_position_salary_limits,
-    p4_applies_to_category,
+    position_limit_tables_from_salary_limits,
 )
 
 def load_context(path: str | Path, plan_path: str | Path | None = None) -> PlanningContext:
@@ -88,8 +90,20 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         if not settings_df.empty and "year" in settings_df.columns:
             year = int(settings_df.iloc[0]["year"])
 
-    position_reference_rows = _load_position_reference(xl)
-    position_synonyms = _load_position_synonyms(xl)
+    position_limits_df = _load_position_limits_sheet(xl)
+    if position_limits_df is not None:
+        position_reference_rows = _position_reference_from_limits_sheet(position_limits_df)
+        position_salary_limit_defaults = _position_salary_limits_from_limits_sheet(
+            position_limits_df
+        )
+        base_position_limit_tables = position_limit_tables_from_salary_limits(
+            position_salary_limit_defaults
+        )
+    else:
+        position_reference_rows = list(default_position_reference())
+        position_salary_limit_defaults = None
+        base_position_limit_tables = None
+    position_synonyms = default_position_synonyms()
     position_index = build_position_index(position_reference_rows, position_synonyms)
     position_reference = [
         PositionReference(
@@ -97,6 +111,8 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             equivalence_group=row.equivalence_group,
             level=row.level,
             reference_salary_for_rate=row.reference_salary_for_rate,
+            salary_source=row.salary_source,
+            salary_group_number=row.salary_group_number,
         )
         for row in position_reference_rows
     ]
@@ -107,6 +123,14 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
     contracts = _load_contracts(
         _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACTS), SHEET_CONTRACTS),
     )
+    secret_allowances: list[SecretAllowance] = []
+    if SHEET_SECRET_ALLOWANCES in xl.sheet_names:
+        secret_allowances = _load_secret_allowances(
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_SECRET_ALLOWANCES),
+                SHEET_SECRET_ALLOWANCES,
+            )
+        )
     contract_payment_limits: list[ContractPaymentLimit] = []
     if SHEET_CONTRACT_PAYMENT_LIMITS in xl.sheet_names:
         contract_payment_limits = _load_contract_payment_limits(
@@ -116,12 +140,15 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             ),
             contracts,
         )
-    _apply_contract_limit_flags(contracts, contract_payment_limits)
     position_limit_tables = _load_position_limit_tables(
         xl,
         {row.limit_code for row in contract_payment_limits},
+        base_tables=base_position_limit_tables,
     )
-    position_salary_limits = _position_salary_limits_from_tables(position_limit_tables)
+    position_salary_limits = _position_salary_limits_from_tables(
+        position_limit_tables,
+        default_rows=position_salary_limit_defaults,
+    )
 
     if SHEET_CONTRACT_POSITIONS in xl.sheet_names:
         _apply_positions(
@@ -143,7 +170,7 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
                 pd.read_excel(xl, SHEET_FOT_LOCK_MATRIX),
                 SHEET_FOT_LOCK_MATRIX,
             )
-        fill_locks = _read_fot_matrix_fill_locks(path)
+        fill_locks = _read_fot_fill_locks(path, SHEET_FOT_MATRIX)
         for c in contracts:
             c.monthly_budgets = []
         _apply_matrix_budgets(
@@ -152,16 +179,6 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             lock_df,
             year,
             fill_locks=fill_locks,
-        )
-    elif SHEET_CONTRACT_BUDGET in xl.sheet_names:
-        for c in contracts:
-            c.monthly_budgets = []
-        _apply_budgets(
-            contracts,
-            _canonicalize_columns(
-                pd.read_excel(xl, SHEET_CONTRACT_BUDGET),
-                SHEET_CONTRACT_BUDGET,
-            ),
         )
     else:
         default_fot_inflow_at_start(contracts, year)
@@ -208,12 +225,12 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
     plan_source = plan_path or path
     plan_source = Path(plan_source)
     if plan_source.exists() and plan_source.suffix.lower() in (".xlsx", ".xlsm"):
-        plan_xl = pd.ExcelFile(plan_source)
-        if SHEET_PLAN in plan_xl.sheet_names:
-            baseline_plan = _load_plan_overrides(
-                _canonicalize_columns(pd.read_excel(plan_xl, SHEET_PLAN), SHEET_PLAN),
-                year,
-            )
+        with pd.ExcelFile(plan_source) as plan_xl:
+            if SHEET_PLAN in plan_xl.sheet_names:
+                baseline_plan = _load_plan_overrides(
+                    _canonicalize_columns(pd.read_excel(plan_xl, SHEET_PLAN), SHEET_PLAN),
+                    year,
+                )
 
     weights = OptimizationWeights()
     salary_stability = SalaryStabilityRules()
@@ -225,8 +242,11 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             row = settings_df.iloc[0]
             if "allow_deficit" in row and pd.notna(row["allow_deficit"]):
                 allow_deficit = _bool(row["allow_deficit"])
+    position_bep_limit = _bep_limit_from_position_limits(position_salary_limits)
+    if position_bep_limit is not None:
+        salary_stability.goz_average_salary_limit = position_bep_limit
 
-    return PlanningContext(
+    ctx = PlanningContext(
         year=year,
         employees=employees,
         contracts=contracts,
@@ -239,9 +259,12 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         salary_stability=salary_stability,
         labor_plans=labor_plans,
         contract_payment_limits=contract_payment_limits,
+        secret_allowances=secret_allowances,
         baseline_plan=baseline_plan,
         allow_deficit=allow_deficit,
     )
+    xl.close()
+    return ctx
 
 
 def _clean_optional_text(value: object) -> str | None:
@@ -249,6 +272,141 @@ def _clean_optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _load_position_limits_sheet(xl: pd.ExcelFile) -> pd.DataFrame | None:
+    if SHEET_POSITION_LIMITS not in xl.sheet_names:
+        return None
+    return _canonicalize_columns(
+        pd.read_excel(xl, SHEET_POSITION_LIMITS),
+        SHEET_POSITION_LIMITS,
+    )
+
+
+def _reference_group_from_fields(
+    *,
+    explicit_group: str | None,
+    salary_source: str | None,
+    salary_group_number: int | None,
+    level: int | None,
+    reference_salary_for_rate: float | None,
+    default: PositionReferenceRow | None = None,
+    fallback: str | None = None,
+) -> str:
+    if explicit_group:
+        return explicit_group
+    if salary_source or salary_group_number is not None or level is not None or reference_salary_for_rate is not None:
+        return salary_equivalence_group(
+            salary_source,
+            salary_group_number,
+            level,
+            reference_salary_for_rate,
+        )
+    if default is not None and default.equivalence_group:
+        return default.equivalence_group
+    return fallback or "без окладной группы"
+
+
+def _position_reference_from_limits_sheet(df: pd.DataFrame) -> list[PositionReferenceRow]:
+    defaults = {
+        normalize_position(row.position): row
+        for row in default_position_reference()
+    }
+    rows: list[PositionReferenceRow] = []
+    for _, r in df.iterrows():
+        position = _clean_optional_text(r.get("position"))
+        if not position:
+            continue
+        default = defaults.get(normalize_position(position))
+        salary_source = (
+            _clean_optional_text(r.get("salary_source"))
+            if "salary_source" in r.index
+            else (default.salary_source if default else None)
+        )
+        salary_group_number = (
+            _optional_int(r.get("salary_group_number"))
+            if "salary_group_number" in r.index
+            else (default.salary_group_number if default else None)
+        )
+        level = (
+            _optional_int(r.get("position_level"))
+            if "position_level" in r.index
+            else (default.level if default else None)
+        )
+        reference_salary_for_rate = (
+            _optional_float(r.get("reference_salary_for_rate"))
+            if "reference_salary_for_rate" in r.index
+            else (default.reference_salary_for_rate if default else None)
+        )
+        group = _reference_group_from_fields(
+            explicit_group=_clean_optional_text(r.get("equivalence_group")),
+            salary_source=salary_source,
+            salary_group_number=salary_group_number,
+            level=level,
+            reference_salary_for_rate=reference_salary_for_rate,
+            default=default,
+            fallback=position,
+        )
+        rows.append(
+            PositionReferenceRow(
+                position=position,
+                equivalence_group=group,
+                level=level,
+                reference_salary_for_rate=reference_salary_for_rate,
+                salary_source=salary_source,
+                salary_group_number=salary_group_number,
+            )
+        )
+    return rows
+
+
+def _position_salary_limits_from_limits_sheet(
+    df: pd.DataFrame,
+) -> list[PositionSalaryLimit]:
+    defaults = {
+        normalize_position(row.position): row
+        for row in default_position_salary_limits()
+    }
+    rows: list[PositionSalaryLimit] = []
+    for _, r in df.iterrows():
+        position = _clean_optional_text(r.get("position"))
+        if not position:
+            continue
+        default = defaults.get(normalize_position(position))
+        rows.append(
+            PositionSalaryLimit(
+                position=position,
+                personnel_category=(
+                    (
+                        _clean_optional_text(r.get("personnel_category"))
+                        if "personnel_category" in r.index
+                        else (default.personnel_category if default else "")
+                    )
+                    or ""
+                ),
+                order_2556_limit=(
+                    _optional_float(r.get("order_2556_limit"))
+                    if "order_2556_limit" in r.index
+                    else (default.order_2556_limit if default else None)
+                ),
+                p4_limit=(
+                    _optional_float(r.get("p4_limit"))
+                    if "p4_limit" in r.index
+                    else (default.p4_limit if default else None)
+                ),
+                bep_limit=(
+                    _optional_float(r.get("bep_limit"))
+                    if "bep_limit" in r.index
+                    else (default.bep_limit if default else None)
+                ),
+                note=(
+                    _clean_optional_text(r.get("note"))
+                    if "note" in r.index
+                    else (default.note if default else None)
+                ),
+            )
+        )
+    return rows
 
 
 LIMIT_CODES_WITHOUT_POSITION_TABLE = {"bep"}
@@ -294,10 +452,12 @@ def _load_position_limit_table(
 def _load_position_limit_tables(
     xl: pd.ExcelFile,
     used_limit_codes: set[str],
+    *,
+    base_tables: dict[str, list[PositionLimit]] | None = None,
 ) -> dict[str, list[PositionLimit]]:
     tables = {
         code: list(rows)
-        for code, rows in default_position_limit_tables().items()
+        for code, rows in (base_tables or default_position_limit_tables()).items()
     }
     sheet_names_by_code = _sheet_names_by_limit_code(xl)
     required_codes = {
@@ -324,11 +484,13 @@ def _load_position_limit_tables(
 
 
 def _position_salary_limits_from_tables(
-    position_limit_tables: dict[str, list[PositionLimit]]
+    position_limit_tables: dict[str, list[PositionLimit]],
+    *,
+    default_rows: list[PositionSalaryLimit] | None = None,
 ) -> list[PositionSalaryLimit]:
     defaults = {
         normalize_position(row.position): row
-        for row in default_position_salary_limits()
+        for row in (default_rows or default_position_salary_limits())
     }
     by_code_and_position = {
         (code, normalize_position(row.position)): row
@@ -361,8 +523,19 @@ def _position_salary_limits_from_tables(
             PositionSalaryLimit(
                 position=position,
                 personnel_category=personnel_category,
-                order_2556_limit=row_2556.limit if row_2556 else None,
-                p4_limit=row_p4.limit if row_p4 else None,
+                order_2556_limit=(
+                    row_2556.limit
+                    if row_2556
+                    else (default.order_2556_limit if default else None)
+                ),
+                p4_limit=(
+                    row_p4.limit
+                    if row_p4
+                    else (default.p4_limit if default else None)
+                ),
+                bep_limit=(
+                    default.bep_limit if default else None
+                ),
                 note=(row_2556.note if row_2556 else None)
                 or (default.note if default else None),
             )
@@ -370,48 +543,17 @@ def _position_salary_limits_from_tables(
     return rows
 
 
-def _load_position_reference(xl: pd.ExcelFile) -> list[PositionReferenceRow]:
-    rows = list(default_position_reference())
-    if SHEET_POSITION_REFERENCE not in xl.sheet_names:
-        return rows
-
-    df = _canonicalize_columns(
-        pd.read_excel(xl, SHEET_POSITION_REFERENCE),
-        SHEET_POSITION_REFERENCE,
-    )
-    for _, r in df.iterrows():
-        raw_position = str(r.get("position", "")).strip()
-        raw_group = str(r.get("equivalence_group", "")).strip()
-        if not raw_position or not raw_group:
-            continue
-        rows.append(
-            PositionReferenceRow(
-                position=raw_position,
-                equivalence_group=raw_group,
-                level=_optional_int(r.get("position_level")),
-                reference_salary_for_rate=_optional_float(
-                    r.get("reference_salary_for_rate")
-                ),
-            )
-        )
-    return rows
-
-
-def _load_position_synonyms(xl: pd.ExcelFile) -> dict[str, str]:
-    synonyms = default_position_synonyms()
-    if SHEET_POSITION_SYNONYMS not in xl.sheet_names:
-        return synonyms
-
-    df = _canonicalize_columns(
-        pd.read_excel(xl, SHEET_POSITION_SYNONYMS),
-        SHEET_POSITION_SYNONYMS,
-    )
-    for _, r in df.iterrows():
-        raw = str(r.get("raw_position", "")).strip()
-        canonical = str(r.get("canonical_position", "")).strip()
-        if raw and canonical:
-            synonyms[normalize_position(raw)] = normalize_position(canonical)
-    return synonyms
+def _bep_limit_from_position_limits(
+    position_salary_limits: list[PositionSalaryLimit],
+) -> float | None:
+    limits = [
+        float(row.bep_limit)
+        for row in position_salary_limits
+        if row.bep_limit is not None and row.bep_limit > 0
+    ]
+    if not limits:
+        return None
+    return min(limits)
 
 
 def _load_employees(
@@ -437,6 +579,7 @@ def _load_employees(
                 equivalence_group=ref.equivalence_group if ref else None,
                 position_level=ref.level if ref else None,
                 reference_salary_for_rate=ref.reference_salary_for_rate if ref else None,
+                employment_type=normalize_employment_type(r.get("employment_type")),
                 employment_category=normalize_employment_category(
                     r.get("employment_category")
                 ),
@@ -455,24 +598,10 @@ def _optional_deadline(row: pd.Series, column: str) -> date | None:
     return _parse_date(row.get(column))
 
 
-def _legacy_allowances_payment_deadline(row: pd.Series) -> date | None:
-    """Старые файлы: отдельные колонки по 120/122/124/152 — берём самую позднюю дату."""
-    legacy_cols = (
-        "allowances_payment_deadline",
-        "flex_payment_deadline",
-        "allowance_payment_deadline",
-        "incentive_payment_deadline",
-        "secret_payment_deadline",
-        "extra_work_payment_deadline",
-    )
-    dates = [d for col in legacy_cols if (d := _optional_deadline(row, col)) is not None]
-    return max(dates) if dates else None
-
-
 def _parse_contract_payment_deadlines(row: pd.Series) -> tuple[date | None, date | None]:
     return (
         _optional_deadline(row, "salary_payment_deadline"),
-        _legacy_allowances_payment_deadline(row),
+        _optional_deadline(row, "allowances_payment_deadline"),
     )
 
 
@@ -487,7 +616,7 @@ def _apply_payment_deadlines(contract: Contract) -> None:
 def _load_contracts(df: pd.DataFrame) -> list[Contract]:
     rows: list[Contract] = []
     for _, r in df.iterrows():
-        ctype = normalize_contract_type(r["contract_type"])
+        ctype = _clean_optional_text(r.get("contract_type")) or ""
         salary_payment_deadline, allowances_payment_deadline = _parse_contract_payment_deadlines(r)
         rows.append(
             Contract(
@@ -498,7 +627,8 @@ def _load_contracts(df: pd.DataFrame) -> list[Contract]:
                 start_date=_parse_date(r["start_date"]),
                 end_date=_parse_date(r["end_date"]),
                 total_fot=float(r["total_fot"]),
-                is_goz_defense_order=(ctype == "goz"),
+                account=_clean_optional_text(r.get("account")) or "",
+                is_goz_defense_order=_bool(r.get("is_goz_defense_order"), False),
                 allow_salary=_bool(r.get("allow_salary"), True),
                 allow_secret=_bool(r.get("allow_secret"), False),
                 allow_allowance=_bool(r.get("allow_allowance"), True),
@@ -507,15 +637,6 @@ def _load_contracts(df: pd.DataFrame) -> list[Contract]:
                 allow_order_incentive=_bool(
                     r.get("allow_order_incentive"),
                     False,
-                ),
-                allowance_requires_salary_contract=_bool(
-                    r.get("allowance_requires_salary_contract"),
-                    True,
-                ),
-                secret_rate=(
-                    _optional_float(r.get("secret_rate"))
-                    if "secret_rate" in r.index and _has_value(r.get("secret_rate"))
-                    else 0.05
                 ),
                 priority_payment_mode=_bool(
                     r.get("priority_payment_mode"),
@@ -528,6 +649,45 @@ def _load_contracts(df: pd.DataFrame) -> list[Contract]:
             )
         )
         _apply_payment_deadlines(rows[-1])
+    return rows
+
+
+def _normalize_secret_allowance_rate(value: object) -> float:
+    if isinstance(value, str):
+        text = value.strip()
+        if text.endswith("%"):
+            return float(text[:-1].replace(",", ".")) / 100
+    rate = _optional_float(value)
+    if rate is None:
+        return 0.05
+    if rate > 1:
+        return rate / 100
+    return rate
+
+
+def _load_secret_allowances(df: pd.DataFrame) -> list[SecretAllowance]:
+    rows: list[SecretAllowance] = []
+    for _, r in df.iterrows():
+        if not any(
+            _has_value(r.get(col))
+            for col in ("employee_id", "secret_contract_id", "rate")
+        ):
+            continue
+        employee_id = str(r.get("employee_id", "")).strip()
+        secret_contract_id = str(r.get("secret_contract_id", "")).strip()
+        if not employee_id:
+            raise ValueError(f"В листе {SHEET_SECRET_ALLOWANCES} не указан сотрудник")
+        if not secret_contract_id:
+            raise ValueError(
+                f"В листе {SHEET_SECRET_ALLOWANCES} не указан договор секретности для сотрудника {employee_id!r}"
+            )
+        rows.append(
+            SecretAllowance(
+                employee_id=employee_id,
+                secret_contract_id=secret_contract_id,
+                rate=_normalize_secret_allowance_rate(r.get("rate")),
+            )
+        )
     return rows
 
 
@@ -569,20 +729,6 @@ def _load_contract_payment_limits(
     return rows
 
 
-def _apply_contract_limit_flags(
-    contracts: list[Contract],
-    contract_payment_limits: list[ContractPaymentLimit],
-) -> None:
-    bep_contract_ids = {
-        row.contract_id
-        for row in contract_payment_limits
-        if normalize_limit_code(row.limit_code) == "bep"
-    }
-    for contract in contracts:
-        if contract.id in bep_contract_ids:
-            contract.is_goz_defense_order = True
-
-
 def _apply_positions(
     contracts: list[Contract],
     df: pd.DataFrame,
@@ -594,8 +740,46 @@ def _apply_positions(
         if cid not in by_id:
             continue
 
-        position = str(r["position"]).strip()
-        ref = resolve_position(position, position_index)
+        position = _clean_optional_text(r.get("position")) or ""
+        ref = resolve_position(position, position_index) if position else None
+        explicit_group = _clean_optional_text(r.get("equivalence_group"))
+        explicit_level = (
+            _optional_int(r.get("position_level"))
+            if "position_level" in r.index
+            else None
+        )
+        explicit_salary = (
+            _optional_float(r.get("reference_salary_for_rate"))
+            if "reference_salary_for_rate" in r.index
+            else None
+        )
+        salary_source = (
+            _clean_optional_text(r.get("salary_source"))
+            if "salary_source" in r.index
+            else (ref.salary_source if ref else None)
+        )
+        salary_group_number = (
+            _optional_int(r.get("salary_group_number"))
+            if "salary_group_number" in r.index
+            else (ref.salary_group_number if ref else None)
+        )
+        level = explicit_level if explicit_level is not None else (ref.level if ref else None)
+        reference_salary = (
+            explicit_salary
+            if explicit_salary is not None
+            else (ref.reference_salary_for_rate if ref else None)
+        )
+        equivalence_group = _reference_group_from_fields(
+            explicit_group=explicit_group,
+            salary_source=salary_source,
+            salary_group_number=salary_group_number,
+            level=level,
+            reference_salary_for_rate=reference_salary,
+            default=ref,
+            fallback=position,
+        )
+        if not position and not equivalence_group:
+            continue
 
         by_id[cid].position_rules.append(
             ContractPositionRule(
@@ -603,9 +787,9 @@ def _apply_positions(
                 position=position,
                 max_monthly_payment=None,
                 max_positions=_optional_float(r.get("max_positions")),
-                equivalence_group=ref.equivalence_group if ref else None,
-                position_level=ref.level if ref else None,
-                reference_salary_for_rate=ref.reference_salary_for_rate if ref else None,
+                equivalence_group=equivalence_group,
+                position_level=level,
+                reference_salary_for_rate=reference_salary,
             )
         )
 
@@ -716,7 +900,7 @@ def _parse_matrix_cell_value(val) -> tuple[float | None, bool]:
 
 
 def _cell_has_lock_fill(cell) -> bool:
-    """Заливка ячейки (жёлтая и т.п.) = фиксация суммы на fot_matrix."""
+    """Заливка ячейки (жёлтая и т.п.) = фиксация суммы на листе «фот_по_месяцам»."""
     fill = cell.fill
     if fill is None or fill.fill_type in (None, "none"):
         return False
@@ -737,7 +921,7 @@ def _cell_has_lock_fill(cell) -> bool:
     return False
 
 
-def _read_fot_matrix_fill_locks(path: Path) -> dict[tuple[str, int], bool]:
+def _read_fot_fill_locks(path: Path, sheet_name: str) -> dict[tuple[str, int], bool]:
     try:
         from openpyxl import load_workbook
     except ImportError:
@@ -747,11 +931,11 @@ def _read_fot_matrix_fill_locks(path: Path) -> dict[tuple[str, int], bool]:
         wb = load_workbook(path, data_only=False, read_only=False)
     except Exception:
         return {}
-    if SHEET_FOT_MATRIX not in wb.sheetnames:
+    if sheet_name not in wb.sheetnames:
         wb.close()
         return {}
 
-    ws = wb[SHEET_FOT_MATRIX]
+    ws = wb[sheet_name]
     month_by_col: dict[int, int] = {}
     for col_idx in range(2, ws.max_column + 1):
         month = _month_from_column(ws.cell(1, col_idx).value)
@@ -781,7 +965,7 @@ def _apply_matrix_budgets(
     *,
     fill_locks: dict[tuple[str, int], bool] | None = None,
 ) -> None:
-    """Матрица: строки = проекты, столбцы = месяцы. Lock: заливка, * в ячейке или fot_lock_matrix."""
+    """Матрица: строки = проекты, столбцы = месяцы. Фиксация: заливка, * в ячейке или отдельный лист фиксации."""
     by_id = {c.id: c for c in contracts}
     id_col = amounts.columns[0]
     month_cols = _matrix_month_columns(amounts)
@@ -857,7 +1041,7 @@ def _upsert_month_min_balance(
 
 
 def _apply_matrix_min_balances(contracts: list[Contract], df: pd.DataFrame, year: int) -> None:
-    """Мин. остаток по месяцам: строки = проекты, столбцы = месяцы (как fot_matrix)."""
+    """Мин. остаток по месяцам: строки = проекты, столбцы = месяцы (как «фот_по_месяцам»)."""
     by_id = {c.id: c for c in contracts}
     id_col = df.columns[0]
     month_cols = _matrix_month_columns(df)
@@ -873,30 +1057,6 @@ def _apply_matrix_min_balances(contracts: list[Contract], df: pd.DataFrame, year
             if val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() == "":
                 continue
             _upsert_month_min_balance(by_id[cid], year, month, float(val))
-
-
-def _apply_budgets(contracts: list[Contract], df: pd.DataFrame) -> None:
-    by_id = {c.id: c for c in contracts}
-    touched: set[str] = set()
-    for _, r in df.iterrows():
-        cid = str(r["contract_id"]).strip()
-        if cid not in by_id:
-            continue
-        touched.add(cid)
-        inflow_raw = r.get("inflow_amount", 0)
-        inflow = float(inflow_raw or 0)
-        _upsert_month_inflow(
-            by_id[cid],
-            int(r["year"]),
-            int(r["month"]),
-            inflow,
-            lock=_bool(r.get("lock")),
-        )
-        min_bal = _optional_float(r.get("min_balance"))
-        if min_bal is not None:
-            _upsert_month_min_balance(by_id[cid], int(r["year"]), int(r["month"]), min_bal)
-    for cid in touched:
-        by_id[cid].monthly_budgets.sort(key=lambda mb: mb.month)
 
 
 def _load_manual_assignments(df: pd.DataFrame) -> list[ManualAssignment]:
@@ -935,18 +1095,23 @@ def _load_manual_prohibitions(df: pd.DataFrame) -> list[ManualProhibition]:
 
 
 def _load_plan_overrides(df: pd.DataFrame, default_year: int) -> list[AllocationRecord]:
-    """Читает лист plan: строки с lock=yes считаются ручными фиксациями для пересчёта."""
+    """Читает лист «План выплат»: строки с фиксацией считаются ручными для пересчёта."""
     records: list[AllocationRecord] = []
     for _, r in df.iterrows():
         locked = _bool(r.get("lock"), False)
         if not locked:
             continue
+        month = _month_from_column(r.get("month"))
+        if month is None:
+            raise ValueError(
+                f"Не удалось прочитать месяц в листе {SHEET_PLAN!r}: {r.get('month')!r}"
+            )
         records.append(
             AllocationRecord(
                 employee_id=str(r["employee_id"]).strip(),
                 contract_id=str(r["contract_id"]).strip(),
                 year=int(r.get("year", default_year)),
-                month=int(r["month"]),
+                month=month,
                 payment_kind=parse_payment_kind(r["payment_kind"]),
                 amount=float(r["amount"]),
                 is_manual=True,
@@ -969,9 +1134,43 @@ def _load_contract_labor(
         pm = float(r["person_months"])
         if pm <= 0:
             continue
-        pos_raw = r.get("position")
-        position = str(pos_raw).strip() if pd.notna(pos_raw) and str(pos_raw).strip() else None
+        position = _clean_optional_text(r.get("position"))
         ref = resolve_position(position, position_index) if position else None
+        explicit_group = _clean_optional_text(r.get("equivalence_group"))
+        salary_source = (
+            _clean_optional_text(r.get("salary_source"))
+            if "salary_source" in r.index
+            else (ref.salary_source if ref else None)
+        )
+        salary_group_number = (
+            _optional_int(r.get("salary_group_number"))
+            if "salary_group_number" in r.index
+            else (ref.salary_group_number if ref else None)
+        )
+        level = (
+            _optional_int(r.get("position_level"))
+            if "position_level" in r.index
+            else (ref.level if ref else None)
+        )
+        explicit_salary = (
+            _optional_float(r.get("reference_salary_for_rate"))
+            if "reference_salary_for_rate" in r.index
+            else None
+        )
+        reference_salary = (
+            explicit_salary
+            if explicit_salary is not None
+            else (ref.reference_salary_for_rate if ref else None)
+        )
+        equivalence_group = _reference_group_from_fields(
+            explicit_group=explicit_group,
+            salary_source=salary_source,
+            salary_group_number=salary_group_number,
+            level=level,
+            reference_salary_for_rate=reference_salary,
+            default=ref,
+            fallback=position,
+        )
         avg_raw = r.get("avg_monthly_labor_cost")
         avg_cost = float(avg_raw) if pd.notna(avg_raw) and str(avg_raw).strip() else None
         rows.append(
@@ -980,8 +1179,8 @@ def _load_contract_labor(
                 year=int(r.get("year", default_year)),
                 person_months=pm,
                 position=position,
-                equivalence_group=ref.equivalence_group if ref else None,
-                position_level=ref.level if ref else None,
+                equivalence_group=equivalence_group,
+                position_level=level,
                 avg_monthly_labor_cost=avg_cost,
             )
         )
@@ -1012,7 +1211,7 @@ def _load_weights(settings: pd.DataFrame) -> OptimizationWeights:
         "weight_plan_deviation": "plan_deviation",
         "weight_uniform_spend_deviation": "uniform_spend_deviation",
         "weight_labor_deviation": "labor_deviation",
-        "weight_rate_below_staff": "rate_below_staff",
+        "weight_order_incentive_use": "order_incentive_use",
     }
     if settings.empty:
         return w

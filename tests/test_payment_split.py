@@ -8,11 +8,11 @@ import pandas as pd
 import pytest
 
 from fot_planner.excel import SHEET_CONTRACT_LABOR, create_template
+from fot_planner.excel.constants import SHEET_POSITION_LIMITS
 from fot_planner.planner import run_planning
 from fot_planner.models import Contract, Employee
 from fot_planner.payment_split import (
     employee_monthly_payment_due,
-    flex_remainder_after_salary,
     max_salary_amount_if_contract_used,
     salary_position_options,
 )
@@ -100,8 +100,9 @@ def _workbook_with_cap(path: Path, *, wage: float, cap: float) -> None:
     create_template(path)
     year = date.today().year
     settings = pd.read_excel(path, sheet_name="settings")
+    position_limits = pd.read_excel(path, sheet_name=SHEET_POSITION_LIMITS)
     # Этот helper проверяет разбиение оклад/надбавка, а не норматив БЭП.
-    settings["средняя зарплата ГОЗ"] = max(112_261, wage)
+    position_limits["БЭП"] = max(112_261, wage)
     employees = pd.DataFrame(
         [
             {
@@ -122,6 +123,7 @@ def _workbook_with_cap(path: Path, *, wage: float, cap: float) -> None:
                 "id": "C001",
                 "name": "ГОЗ",
                 "contract_type": "goszakaz",
+                "is_goz_defense_order": True,
                 "start_date": f"{year}-01-01",
                 "end_date": f"{year}-12-31",
                 "total_fot": wage * 12,
@@ -156,6 +158,7 @@ def _workbook_with_cap(path: Path, *, wage: float, cap: float) -> None:
         fot_matrix.to_excel(w, sheet_name="fot_matrix", index=False)
         labor.to_excel(w, sheet_name=SHEET_CONTRACT_LABOR, index=False)
         settings.to_excel(w, sheet_name="settings", index=False)
+        position_limits.to_excel(w, sheet_name=SHEET_POSITION_LIMITS, index=False)
 
 
 def test_contract_cap_is_max_on_contract_not_by_employee_position():

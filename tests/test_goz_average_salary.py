@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 
 from fot_planner.excel import create_template, load_context
+from fot_planner.excel.constants import SHEET_POSITION_LIMITS
 from fot_planner.models import (
     Contract,
     ContractLaborPlan,
@@ -14,20 +15,20 @@ from fot_planner.models import (
 from fot_planner.validation import validate_context
 
 
-def test_goz_average_salary_limit_is_editable_in_settings(tmp_path):
+def test_goz_average_salary_limit_is_editable_in_position_limits(tmp_path):
     path = tmp_path / "input.xlsx"
     create_template(path)
 
     contracts = pd.read_excel(path, sheet_name="contracts")
-    assert "ГОЗ / оборонный заказ" in contracts.columns
+    assert "ГОЗ" in contracts.columns
     assert load_context(path).contracts[0].is_goz_defense_order is True
 
-    settings = pd.read_excel(path, sheet_name="settings")
-    assert settings.loc[0, "средняя зарплата ГОЗ"] == 112_261
+    limits = pd.read_excel(path, sheet_name=SHEET_POSITION_LIMITS)
+    assert limits["БЭП"].min() == 112_261
 
-    settings.loc[0, "средняя зарплата ГОЗ"] = 123_456
+    limits["БЭП"] = 123_456
     with pd.ExcelWriter(path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
-        settings.to_excel(writer, sheet_name="settings", index=False)
+        limits.to_excel(writer, sheet_name=SHEET_POSITION_LIMITS, index=False)
 
     assert load_context(path).salary_stability.goz_average_salary_limit == 123_456
 

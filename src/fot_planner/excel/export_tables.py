@@ -54,10 +54,10 @@ def position_control_dataframe(ctx: PlanningContext, result: PlanningResult) -> 
                 "сотрудник": allocation.employee_id,
                 "фио": employee.full_name,
                 "должность сотрудника": employee.position,
-                "группа сотрудника": employee.equivalence_group or "",
+                "окладная группа сотрудника": employee.equivalence_group or "",
                 "договор": allocation.contract_id,
                 "должность по договору": contract_positions,
-                "группа по договору": contract_groups,
+                "окладная группа по договору": contract_groups,
                 "месяц": RU_MONTHS.get(allocation.month, allocation.month),
                 "вид выплаты": PAYMENT_KIND_RU.get(
                     allocation.payment_kind, str(allocation.payment_kind.value)
@@ -97,7 +97,7 @@ def labor_by_group_dataframe(ctx: PlanningContext, result: PlanningResult) -> pd
             rows.append(
                 {
                     "договор": contract.id,
-                    "группа взаимозаменяемости": group or "",
+                    "окладная группа": group or "",
                     "план чел.-мес.": round(plan_pm, 4),
                     "факт чел.-мес.": round(fact_pm, 4),
                     "отклонение": round(deviation, 4),
@@ -148,7 +148,7 @@ def labor_by_row_dataframe(ctx: PlanningContext, result: PlanningResult) -> pd.D
                 {
                     "договор": contract.id,
                     "должность": lp.position or "",
-                    "группа взаимозаменяемости": lp.equivalence_group or "",
+                    "окладная группа": lp.equivalence_group or "",
                     "план чел.-мес.": round(plan_pm, 4),
                     "средняя стоимость выполнения работ в месяц": round(avg_cost, 2)
                     if avg_cost
@@ -194,7 +194,7 @@ def labor_payment_report_dataframe(ctx: PlanningContext, result: PlanningResult)
                 "выплачено всего": round(total_paid, 2),
                 "на строку трудоёмкости": round(rec.amount, 2),
                 "должность строки": rec.position or "",
-                "группа строки": rec.equivalence_group or "",
+                "окладная группа строки": rec.equivalence_group or "",
             }
         )
     return pd.DataFrame(rows)

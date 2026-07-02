@@ -62,8 +62,8 @@ def test_empty_payment_deadlines_default_to_contract_end_date(tmp_path):
                 "дата окончания": f"{year}-12-31",
                 "фот": 1_000_000,
                 "оклад разрешен": True,
-                "надбавка разрешена": True,
-                "стимулирующая разрешена": True,
+                "122 разрешена": True,
+                "124 разрешена": True,
                 "перенос остатков": "",
             }
         ]

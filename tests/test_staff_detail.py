@@ -13,6 +13,7 @@ from fot_planner.models import (
     Contract,
     Employee,
     OpenRateAttribution,
+    PaymentKind,
     PlanningContext,
     PlanningResult,
 )
@@ -53,13 +54,24 @@ def _staff_scenario():
     allocations = []
     rates = []
     for month in range(1, 13):
-        allocations.append(AllocationRecord("E001", "MAIN", year, month, "salary", 40_400))
+        allocations.append(AllocationRecord("E001", "MAIN", year, month, PaymentKind.SALARY, 40_400))
         rates.append(OpenRateAttribution("E001", "MAIN", year, month, 1.0, True))
     for month in range(4, 7):
-        allocations.append(AllocationRecord("E001", "MAIN", year, month, "allowance", 16_000))
+        allocations.append(AllocationRecord("E001", "MAIN", year, month, PaymentKind.K122, 16_000))
     for month in range(4, 9):
-        allocations.append(AllocationRecord("E001", "PART", year, month, "salary", 10_100))
-        rates.append(OpenRateAttribution("E001", "PART", year, month, 0.25, False))
+        allocations.append(AllocationRecord("E001", "PART", year, month, PaymentKind.SALARY, 10_100))
+        rates.append(
+            OpenRateAttribution(
+                "E001",
+                "PART",
+                year,
+                month,
+                0.25,
+                False,
+                position="Программист",
+                equivalence_group="инженерно-технические специалисты",
+            )
+        )
 
     ctx = PlanningContext(year=year, employees=[employee], contracts=contracts)
     result = PlanningResult(
@@ -91,6 +103,8 @@ def test_staff_detail_matches_hr_structure(tmp_path):
     assert rows[0]["Номинальное\n значение \nпараметра"] == 40_400
     assert rows[0]["Значение\n параметра \nпо ставке"] == 40_400
     assert rows[1]["Значение\n параметра \nпо ставке"] == 16_000
+    assert rows[0]["Должность"] == "Инженер"
+    assert rows[2]["Должность"] == "Программист"
     assert rows[2]["Ставка"] == 0.25
     assert rows[2]["Значение\n параметра \nпо ставке"] == 10_100
     assert rows[2]["Сумма \nв\nруб."] == 10_100
