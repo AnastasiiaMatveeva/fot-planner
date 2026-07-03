@@ -270,23 +270,9 @@ PAYMENT_KIND_RU: dict[PaymentKind, str] = {
     PaymentKind.ORDER_INCENTIVE: "стимулирующая приказом",
 }
 
-# Синонимы ячеек Excel (коды и русские названия) → PaymentKind.
+# Официальные текстовые значения ячеек Excel → PaymentKind.
+# Числовые коды 0/1/120/122/124/152 разбираются отдельно в parse_payment_kind.
 PAYMENT_KIND_INPUT_ALIASES: dict[str, PaymentKind] = {
-    "1": PaymentKind.SALARY,
-    "оклад": PaymentKind.SALARY,
-    "120": PaymentKind.K120,
-    "гостайна": PaymentKind.K120,
-    "122": PaymentKind.K122,
-    "надбавка": PaymentKind.K122,
-    "надбавка 122": PaymentKind.K122,
-    "качество": PaymentKind.K122,
-    "124": PaymentKind.K124,
-    "надбавка 124": PaymentKind.K124,
-    "интенсивность": PaymentKind.K124,
-    "152": PaymentKind.K152,
-    "доп работа": PaymentKind.K152,
-    "дополнительная работа": PaymentKind.K152,
-    "приказ": PaymentKind.ORDER_INCENTIVE,
-    "стимулирующая приказом": PaymentKind.ORDER_INCENTIVE,
-    "стимулирующая приказ": PaymentKind.ORDER_INCENTIVE,
+    label.lower().replace("ё", "е"): kind
+    for kind, label in PAYMENT_KIND_RU.items()
 }

@@ -83,7 +83,7 @@ UNIFORM_SPEND_TOLERANCE_RATIO = 0.01
 # Минимальная длительность блока оклада на одном договоре (между сменами — не меньше N месяцев).
 MIN_SALARY_BLOCK_MONTHS = 3
 DEFICIT_TOTAL_TOLERANCE = 1.0
-LEX_STAGE_TOLERANCE = 1.0
+LEX_STAGE_TOLERANCE = 0.01
 
 
 def _month_inflow(ctx: PlanningContext, contract_id: str, month: int) -> float:
@@ -412,17 +412,25 @@ def _expr_salary_switch(model, salary_change_keys, weight: float):
     return _sum_terms(weight * model.salary_change[k] for k in salary_change_keys)
 
 
-def _expr_order_incentive_usage(alloc_keys, uses, weight: float):
+def _expr_order_incentive_usage(alloc_keys, alloc, weight: float):
     if weight <= 0:
         return None
     order_terms = [
-        uses[key]
+        alloc[key]
         for key in alloc_keys
         if key[3] is PaymentKind.ORDER_INCENTIVE
     ]
     if not order_terms:
         return None
-    return weight * _sum_terms(order_terms)
+    return _sum_terms(order_terms)
+
+
+def _expr_model_var_sum(model, attr_name: str):
+    var = getattr(model, attr_name, None)
+    if var is None:
+        return None
+    terms = [var[key] for key in var]
+    return _sum_terms(terms) if terms else None
 
 
 def _expr_non_anchor_salary_penalty(
@@ -774,6 +782,11 @@ def solve(
     salary_open_q_keys = [
         k for k in open_rate_keys if (k[0], k[1], k[2], PaymentKind.SALARY) in alloc_key_set
     ]
+    payment_change_keys: list[tuple[str, str, PaymentKind, int]] = [
+        (e_id, c_id, kind, m)
+        for (e_id, c_id, m, kind) in alloc_keys
+        if m > 1 and (e_id, c_id, m - 1, kind) in alloc_key_set
+    ]
     model = pyo.ConcreteModel()
     model.alloc = pyo.Var(
         alloc_keys,
@@ -821,6 +834,10 @@ def solve(
             labor_payment_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
         )
     model.baseline_dev = pyo.Var(baseline_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M))
+    if payment_change_keys:
+        model.payment_change = pyo.Var(
+            payment_change_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
+        )
     model.labor_dev = pyo.Var(labor_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M))
     if labor_amount_dev_keys:
         model.labor_amount_dev = pyo.Var(
@@ -892,6 +909,14 @@ def solve(
             model.cons.add(alloc[key] >= floor * uses[key])
         else:
             model.cons.add(alloc[key] >= MIN_USE_ALLOC * uses[key])
+
+    if payment_change_keys:
+        for e_id, c_id, kind, month in payment_change_keys:
+            prev_key = (e_id, c_id, month - 1, kind)
+            curr_key = (e_id, c_id, month, kind)
+            change = model.payment_change[(e_id, c_id, kind, month)]
+            model.cons.add(change >= alloc[curr_key] - alloc[prev_key])
+            model.cons.add(change >= alloc[prev_key] - alloc[curr_key])
 
     if salary_position_keys:
         # Связываем бинарный выбор позиции с использованием salary.
@@ -1457,11 +1482,17 @@ def solve(
         )
     order_part = _expr_order_incentive_usage(
         alloc_keys,
-        uses,
+        alloc,
         w.order_incentive_use,
     )
     if order_part is not None:
-        soft_stage_exprs.append((order_part, "использование приказов"))
+        soft_stage_exprs.append((order_part, "сумма приказов"))
+    p4_under_part = _expr_model_var_sum(model, "p4_group_under_limit")
+    if p4_under_part is not None:
+        soft_stage_exprs.append((p4_under_part, "недобор средней П4"))
+    p4_deviation_part = _expr_model_var_sum(model, "p4_employee_limit_deviation")
+    if p4_deviation_part is not None:
+        soft_stage_exprs.append((p4_deviation_part, "отклонение сотрудников от П4"))
     admin_part = _expr_admin_complexity(
         model,
         employee_contract_keys=employee_contract_keys,
@@ -1491,6 +1522,9 @@ def solve(
     )
     if uniform_part is not None:
         soft_stage_exprs.append((uniform_part, "равномерное освоение"))
+    payment_change_part = _expr_model_var_sum(model, "payment_change")
+    if payment_change_part is not None:
+        soft_stage_exprs.append((payment_change_part, "стабильность сумм выплат"))
 
     for expr, stage_label in soft_stage_exprs:
         status_name, elapsed, stage_obj = _run_minimize_stage(model, expr, per_stage_limit)

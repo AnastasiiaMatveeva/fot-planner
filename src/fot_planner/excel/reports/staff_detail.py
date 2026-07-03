@@ -183,6 +183,7 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
                             PaymentKind.K122: 2,
                             PaymentKind.K124: 3,
                             PaymentKind.K152: 4,
+                            PaymentKind.ORDER_INCENTIVE: 5,
                         }[kind],
                         contract_id,
                     ),

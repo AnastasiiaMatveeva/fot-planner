@@ -15,7 +15,10 @@ from fot_planner.labor_rules import (
 from fot_planner.limit_codes import normalize_limit_code
 from fot_planner.models import PaymentKind, PlanningContext
 from fot_planner.position_reference import normalize_position
-from fot_planner.salary_limits_2556 import effective_p4_limit, p4_applies_to_category
+from fot_planner.salary_limits_2556 import (
+    normalize_personnel_category,
+    p4_applies_to_category,
+)
 
 AVERAGE_LIMIT_MODE = "average"
 RULE_BIG_M = 1e7
@@ -65,30 +68,6 @@ def _position_limits_by_code_and_position(ctx: PlanningContext) -> dict[tuple[st
         for row in rows
         if row.position
     }
-
-
-def _position_salary_limits_by_position(ctx: PlanningContext) -> dict[str, object]:
-    return {
-        normalize_position(row.position): row
-        for row in ctx.position_salary_limits
-        if row.position
-    }
-
-
-def _position_salary_limit_for_employee(limit_by_position: dict[str, object], employee):
-    return limit_by_position.get(normalize_position(employee.position))
-
-
-def _p4_limit_by_personnel_category(ctx: PlanningContext) -> dict[str, float]:
-    limits: dict[str, float] = {}
-    for row in ctx.position_salary_limits:
-        limit = effective_p4_limit(row)
-        if limit is None:
-            continue
-        category = str(row.personnel_category or "").strip().upper().replace("Ё", "Е")
-        if category:
-            limits[category] = min(limits.get(category, limit), limit)
-    return limits
 
 
 def _limit_for_rate(limit: float | None, rate: float) -> float | None:
@@ -162,14 +141,6 @@ def _goz_bep_effective_limit(ctx: PlanningContext, contract_id: str) -> float | 
     if not limits:
         return None
     return min(limits)
-
-
-def _employee_category(rule_ctx: PayrollRuleContext, employee) -> str:
-    limit_row = _position_salary_limit_for_employee(
-        _position_salary_limits_by_position(rule_ctx.ctx),
-        employee,
-    )
-    return str(getattr(limit_row, "personnel_category", "") or "").strip().upper().replace("Ё", "Е")
 
 
 def _account_starts_with_23(contract) -> bool:
@@ -384,17 +355,6 @@ def rule_order_incentive_once_per_month(rule_ctx: PayrollRuleContext) -> None:
                 rule_ctx.model.cons.add(rule_ctx.sum_terms(order_uses) <= 1)
 
 
-def _p4_124_uses_by_employee_month(
-    rule_ctx: PayrollRuleContext,
-) -> dict[tuple[str, int], list]:
-    uses_by_employee_month: dict[tuple[str, int], list] = defaultdict(list)
-    for key in rule_ctx.alloc_keys:
-        employee_id, _contract_id, month, kind = key
-        if kind is PaymentKind.K124:
-            uses_by_employee_month[(employee_id, month)].append(rule_ctx.uses[key])
-    return dict(uses_by_employee_month)
-
-
 def _p4_staff_terms(rule_ctx: PayrollRuleContext, *, employee_id: str, month: int) -> list:
     return [
         rule_ctx.alloc[key]
@@ -403,67 +363,109 @@ def _p4_staff_terms(rule_ctx: PayrollRuleContext, *, employee_id: str, month: in
     ]
 
 
-def rule_p4_average_by_category(rule_ctx: PayrollRuleContext) -> None:
-    """П4: средняя штатная сумма (оклад + 122 + 124) только для месяцев с 124."""
+def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
+    """П4: в месяце с 124 штатная часть сотрудника (оклад + 122 + 124) не выше лимита П4."""
 
-    category_limits = _p4_limit_by_personnel_category(rule_ctx.ctx)
-    if not category_limits:
+    limit_by_code_position = _position_limits_by_code_and_position(rule_ctx.ctx)
+    employees_by_id = {employee.id: employee for employee in rule_ctx.ctx.employees}
+    p4_employee_month_124_uses: dict[tuple[str, int], list] = defaultdict(list)
+
+    for key in rule_ctx.alloc_keys:
+        employee_id, _contract_id, month, kind = key
+        if kind is not PaymentKind.K124:
+            continue
+        p4_employee_month_124_uses[(employee_id, month)].append(rule_ctx.uses[key])
+
+    if not p4_employee_month_124_uses:
         return
 
-    p4_uses_by_employee_month = _p4_124_uses_by_employee_month(rule_ctx)
-    if not p4_uses_by_employee_month:
+    p4_employee_month_keys: list[tuple[str, int]] = []
+    p4_employee_month_limit: dict[tuple[str, int], float] = {}
+    p4_employee_month_rate: dict[tuple[str, int], float] = {}
+    p4_group_employee_months: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
+    p4_group_limit: dict[tuple[str, int], float] = {}
+
+    for month_key in p4_employee_month_124_uses:
+        employee_id, month = month_key
+        employee = employees_by_id.get(employee_id)
+        if employee is None:
+            continue
+        if not rule_ctx.employee_active_in_month(employee, rule_ctx.ctx.year, month):
+            continue
+        limit_row = limit_by_code_position.get(("p4", normalize_position(employee.position)))
+        if limit_row is None or not p4_applies_to_category(limit_row.personnel_category):
+            continue
+        limit = limit_row.limit
+        if limit is None or limit <= 0 or employee.rate <= 0:
+            continue
+
+        category = normalize_personnel_category(limit_row.personnel_category)
+        group_key = (category, month)
+        p4_employee_month_keys.append(month_key)
+        p4_employee_month_limit[month_key] = float(limit) * employee.rate
+        p4_employee_month_rate[month_key] = float(employee.rate)
+        p4_group_employee_months[group_key].append(month_key)
+        current_group_limit = p4_group_limit.get(group_key)
+        p4_group_limit[group_key] = (
+            float(limit)
+            if current_group_limit is None
+            else min(current_group_limit, float(limit))
+        )
+
+    if not p4_employee_month_keys:
         return
 
-    used_keys = list(p4_uses_by_employee_month)
-    rule_ctx.model.p4_employee_month_used = pyo.Var(used_keys, domain=pyo.Binary)
-    rule_ctx.model.p4_employee_month_staff_amount = pyo.Var(
-        used_keys,
-        domain=pyo.NonNegativeReals,
+    p4_group_keys = list(p4_group_employee_months)
+    rule_ctx.model.p4_month_active = pyo.Var(p4_employee_month_keys, domain=pyo.Binary)
+    rule_ctx.model.p4_staff_included = pyo.Var(
+        p4_employee_month_keys, domain=pyo.NonNegativeReals
+    )
+    rule_ctx.model.p4_group_under_limit = pyo.Var(
+        p4_group_keys, domain=pyo.NonNegativeReals
+    )
+    rule_ctx.model.p4_employee_limit_deviation = pyo.Var(
+        p4_employee_month_keys, domain=pyo.NonNegativeReals
     )
 
-    for key, uses in p4_uses_by_employee_month.items():
-        employee_id, month = key
-        used_var = rule_ctx.model.p4_employee_month_used[key]
-        amount_var = rule_ctx.model.p4_employee_month_staff_amount[key]
-        for use_var in uses:
-            rule_ctx.model.cons.add(use_var <= used_var)
-        rule_ctx.model.cons.add(used_var <= rule_ctx.sum_terms(uses))
+    for month_key in p4_employee_month_keys:
+        employee_id, month = month_key
+        active = rule_ctx.model.p4_month_active[month_key]
+        uses_124 = p4_employee_month_124_uses[month_key]
+        for use_var in uses_124:
+            rule_ctx.model.cons.add(use_var <= active)
+        rule_ctx.model.cons.add(active <= rule_ctx.sum_terms(uses_124))
 
         staff_terms = _p4_staff_terms(rule_ctx, employee_id=employee_id, month=month)
         if not staff_terms:
-            rule_ctx.model.cons.add(amount_var == 0)
             continue
         staff_total = rule_ctx.sum_terms(staff_terms)
-        rule_ctx.model.cons.add(amount_var <= staff_total)
-        rule_ctx.model.cons.add(amount_var <= RULE_BIG_M * used_var)
-        rule_ctx.model.cons.add(
-            amount_var >= staff_total - RULE_BIG_M * (1 - used_var)
-        )
+        included = rule_ctx.model.p4_staff_included[month_key]
+        rule_ctx.model.cons.add(included <= staff_total)
+        rule_ctx.model.cons.add(included <= RULE_BIG_M * active)
+        rule_ctx.model.cons.add(included >= staff_total - RULE_BIG_M * (1 - active))
 
-    for category, limit in category_limits.items():
-        payment_terms = []
-        denominator_terms = []
-        for employee in rule_ctx.ctx.employees:
-            if _employee_category(rule_ctx, employee) != category:
-                continue
-            for month in rule_ctx.months:
-                key = (employee.id, month)
-                if key not in p4_uses_by_employee_month:
-                    continue
-                payment_terms.append(rule_ctx.model.p4_employee_month_staff_amount[key])
-                if employee.rate > 0:
-                    denominator_terms.append(
-                        employee.rate * rule_ctx.model.p4_employee_month_used[key]
-                    )
-        if not payment_terms:
-            continue
-        if denominator_terms:
-            rule_ctx.model.cons.add(
-                rule_ctx.sum_terms(payment_terms)
-                <= limit * rule_ctx.sum_terms(denominator_terms)
-            )
-        else:
-            rule_ctx.model.cons.add(rule_ctx.sum_terms(payment_terms) == 0)
+        employee_limit = p4_employee_month_limit[month_key]
+        deviation = rule_ctx.model.p4_employee_limit_deviation[month_key]
+        rule_ctx.model.cons.add(deviation >= included - employee_limit * active)
+        rule_ctx.model.cons.add(deviation >= employee_limit * active - included)
+
+    for group_key in p4_group_keys:
+        group_limit = p4_group_limit[group_key]
+        employee_months = p4_group_employee_months[group_key]
+        included_total = rule_ctx.sum_terms(
+            [rule_ctx.model.p4_staff_included[key] for key in employee_months]
+        )
+        active_rate = rule_ctx.sum_terms(
+            [
+                p4_employee_month_rate[key] * rule_ctx.model.p4_month_active[key]
+                for key in employee_months
+            ]
+        )
+        rule_ctx.model.cons.add(included_total <= group_limit * active_rate)
+        rule_ctx.model.cons.add(
+            rule_ctx.model.p4_group_under_limit[group_key]
+            >= group_limit * active_rate - included_total
+        )
 
 
 def rule_goz_bep_staff_total(rule_ctx: PayrollRuleContext) -> None:
@@ -542,7 +544,7 @@ PAYROLL_RULES: tuple[PayrollRule, ...] = (
     rule_2556_salary_122_staff_total,
     rule_order_incentive_2556_amount,
     rule_order_incentive_once_per_month,
-    rule_p4_average_by_category,
+    rule_p4_monthly_staff_limit,
     rule_goz_bep_staff_total,
     rule_contract_payment_limits,
     rule_priority_either_staff_or_152,

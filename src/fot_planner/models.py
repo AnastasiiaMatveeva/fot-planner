@@ -233,7 +233,7 @@ class OptimizationWeights:
     # Штраф за 100% отклонения от идеала (actual−ideal)/ideal; см. optimizer.UNIFORM_SPEND_TOLERANCE_*.
     uniform_spend_deviation: float = 50_000.0
     labor_deviation: float = 50_000.0
-    # Приказ — крайний инструмент: минимизируем число приказов сотрудник-месяц.
+    # Приказ — крайний инструмент: сначала минимизируем сумму приказов.
     order_incentive_use: float = 1_000_000.0
 
 
