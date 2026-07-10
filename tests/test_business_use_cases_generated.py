@@ -108,3 +108,37 @@ def test_p4_limit_uses_total_open_rate_when_124_is_paid(tmp_path: Path):
         50_000,
         abs=1,
     )
+
+
+def test_160k_uses_allowances_before_order(tmp_path: Path):
+    result = _run_use_case(tmp_path, "uc15_160k_allowances_then_order")
+
+    assert _amount(
+        result,
+        employee_id="E001-1",
+        contract_id="C_GRANT",
+        month=1,
+        kinds=(PaymentKind.SALARY,),
+    ) == pytest.approx(40_400, abs=1)
+    assert _amount(
+        result,
+        employee_id="E001-1",
+        contract_id="C_GRANT",
+        month=1,
+        kinds=(PaymentKind.K122,),
+    ) == pytest.approx(69_600, abs=1)
+    assert _amount(
+        result,
+        employee_id="E001-1",
+        contract_id="C_FLEX",
+        month=1,
+        kinds=(PaymentKind.K124,),
+    ) == pytest.approx(39_648.90, abs=1)
+    assert _amount(
+        result,
+        employee_id="E001-1",
+        contract_id="C_FLEX",
+        month=1,
+        kinds=(PaymentKind.ORDER_INCENTIVE,),
+    ) == pytest.approx(10_351.10, abs=1)
+    assert _amount(result, employee_id="E001-1", month=1) == pytest.approx(160_000, abs=1)
