@@ -21,7 +21,9 @@ OK_STATUSES = {"OPTIMAL", "FEASIBLE"}
 
 
 def _run_use_case(tmp_path: Path, name: str):
-    src = USE_CASES / f"{name}_input.xlsx"
+    src = USE_CASES / f"{name}_input.xlsm"
+    if not src.exists():
+        src = USE_CASES / f"{name}_input.xlsx"
     assert src.exists(), src
 
     input_path = tmp_path / src.name

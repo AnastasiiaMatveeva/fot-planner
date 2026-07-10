@@ -3,6 +3,11 @@ from datetime import date
 import pandas as pd
 
 from fot_planner.excel import create_template, load_context
+from fot_planner.excel.parsing import _parse_date
+
+
+def test_parse_excel_serial_date():
+    assert _parse_date(46023) == date(2026, 1, 1)
 
 
 def test_template_uses_russian_columns_and_loader_understands_them(tmp_path):

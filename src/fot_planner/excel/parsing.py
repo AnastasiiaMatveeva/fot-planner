@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from numbers import Real
 
 import pandas as pd
+from openpyxl.utils.datetime import from_excel
 
 from fot_planner.excel.constants import (
     COLUMN_ALIASES_BY_SHEET,
@@ -31,6 +33,8 @@ def _canonicalize_columns(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
 def _parse_date(val) -> date | None:
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return None
+    if isinstance(val, Real) and not isinstance(val, bool):
+        return from_excel(float(val)).date()
     if isinstance(val, datetime):
         return val.date()
     if isinstance(val, date):
