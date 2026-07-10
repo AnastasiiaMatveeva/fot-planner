@@ -11,8 +11,6 @@ from openpyxl.styles import PatternFill
 
 from fot_planner.excel.constants import (
     SHEET_CONTRACT_LABOR,
-    SHEET_CONTRACT_PAYMENT_LIMITS,
-    SHEET_CONTRACT_POSITIONS,
     SHEET_CONTRACTS,
     SHEET_EMPLOYEES,
     SHEET_FOT_MATRIX,
@@ -56,16 +54,13 @@ def _default_position_limits_table() -> pd.DataFrame:
             {
                 "должность": position,
                 "категория персонала": limits.personnel_category if limits else "",
-                "источник оклада": reference.salary_source if reference else "",
+                "страница": reference.salary_page if reference else "",
                 "номер группы": reference.salary_group_number if reference else "",
                 "номер уровня": reference.level if reference else "",
                 "оклад": (
                     reference.reference_salary_for_rate
                     if reference and reference.reference_salary_for_rate is not None
                     else ""
-                ),
-                "окладная группа": (
-                    reference.equivalence_group if reference else ""
                 ),
                 "П2556": (
                     limits.order_2556_limit
@@ -112,11 +107,9 @@ def create_template(path: str | Path) -> None:
             "год",
             "трудоемкость",
             "должность",
-            "источник оклада",
+            "страница",
             "номер группы",
             "номер уровня",
-            "оклад",
-            "окладная группа",
             "средняя стоимость выполнения работ в месяц",
         ]
     )
@@ -138,9 +131,11 @@ def create_template(path: str | Path) -> None:
                 "124 разрешена": False,
                 "152 разрешена": False,
                 "стимулирующая приказом разрешена": False,
+                "проект Приоритет": "нет",
+                "основное место разрешено": "да",
+                "совместительство разрешено": "да",
                 "конечная дата выплат оклада": f"{year}-12-31",
                 "конечная дата выплат надбавок": f"{year}-12-31",
-                "перенос остатков": True,
             }
         ]
     )
@@ -151,30 +146,7 @@ def create_template(path: str | Path) -> None:
             "ставка 120",
         ]
     )
-    contract_payment_limits = pd.DataFrame(
-        columns=[
-            "договор",
-            "выплата",
-            "ограничение",
-        ]
-    )
-    positions = pd.DataFrame(
-        [
-            {
-                "договор": "C001",
-                "должность": "инженер",
-                "источник оклада": "",
-                "номер группы": "",
-                "номер уровня": "",
-                "оклад": "",
-                "окладная группа": "",
-                "макс ставки": 2,
-            }
-        ]
-    )
-    settings_row = {"год": year, **DEFAULT_SETTINGS_ROW}
-    settings_row.pop("средняя зарплата ГОЗ", None)
-    settings = pd.DataFrame([settings_row])
+    settings = pd.DataFrame([{"год": year, **DEFAULT_SETTINGS_ROW}])
     fot_by_month = pd.DataFrame({"договор": ["C001"]})
     for m in range(1, 13):
         fot_by_month[str(m)] = [1_200_000 if m == 1 else ""]
@@ -183,12 +155,6 @@ def create_template(path: str | Path) -> None:
         employees.to_excel(writer, sheet_name=SHEET_EMPLOYEES, index=False)
         contracts.to_excel(writer, sheet_name=SHEET_CONTRACTS, index=False)
         secret_allowances.to_excel(writer, sheet_name=SHEET_SECRET_ALLOWANCES, index=False)
-        contract_payment_limits.to_excel(
-            writer,
-            sheet_name=SHEET_CONTRACT_PAYMENT_LIMITS,
-            index=False,
-        )
-        positions.to_excel(writer, sheet_name=SHEET_CONTRACT_POSITIONS, index=False)
         contract_labor.to_excel(writer, sheet_name=SHEET_CONTRACT_LABOR, index=False)
         fot_by_month.to_excel(writer, sheet_name=SHEET_FOT_MATRIX, index=False)
         settings.to_excel(writer, sheet_name=SHEET_SETTINGS, index=False)
@@ -204,7 +170,6 @@ def create_template(path: str | Path) -> None:
         SHEET_CONTRACTS,
         SHEET_EMPLOYEES,
         SHEET_SECRET_ALLOWANCES,
-        SHEET_CONTRACT_PAYMENT_LIMITS,
     ):
         ws = wb[sheet_name]
         for cell in ws[1]:

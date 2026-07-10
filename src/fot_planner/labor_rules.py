@@ -52,7 +52,7 @@ def employee_compatible_with_labor_row(employee: Employee, lp: ContractLaborPlan
 def employee_compatible_with_position_rule(
     employee: Employee, rule: ContractPositionRule
 ) -> bool:
-    """Сотрудник подходит под строку contract_positions."""
+    """Сотрудник подходит под договорную должность/группу."""
     return employee_matches_position_spec(
         employee,
         position=rule.position,
@@ -67,7 +67,7 @@ def employee_can_place_on_contract(
     Можно ли сотрудника посадить на договор (трудоёмкость → ставка → оклад).
 
     С трудоёмкостью — хотя бы одна подходящая строка labor.
-    Без трудоёмкости — хотя бы одна строка contract_positions (или ограничений нет).
+    Без трудоёмкости — хотя бы одна договорная должность/группа (или ограничений нет).
     """
     labor_rows = labor_rows_for_contract(ctx, contract.id)
     if labor_rows:

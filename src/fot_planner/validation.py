@@ -271,7 +271,7 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                     ConflictRecord(
                         code="UNKNOWN_CONTRACT_POSITION_WARNING",
                         message=(
-                            f"Договор {c.id}: должность {pr.position!r} из contract_positions "
+                            f"Договор {c.id}: договорная должность {pr.position!r} "
                             f"не найдена в справочнике должностей"
                         ),
                         contract_id=c.id,

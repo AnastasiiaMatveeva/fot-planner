@@ -473,6 +473,22 @@ def _expr_labor_deviations(
     return _sum_terms(terms) if terms else None
 
 
+def _expr_labor_employee_balance(
+    model,
+    *,
+    labor_employee_balance_keys,
+    labor_employee_balance_scale: dict[tuple[str, str, int, int], float],
+    weight: float,
+):
+    if not labor_employee_balance_keys or weight <= 0:
+        return None
+    return _sum_terms(
+        (weight / max(labor_employee_balance_scale.get(k, 0.0), 1.0))
+        * model.labor_employee_balance_dev[k]
+        for k in labor_employee_balance_keys
+    )
+
+
 def _expr_uniform_deviation(
     model,
     uniform_dev_keys,
@@ -740,6 +756,15 @@ def solve(
     labor_dev_keys = list(labor_row_indices)
     labor_amount_dev_keys = list(labor_dev_keys)
     labor_balance_dev_keys = list(labor_dev_keys)
+    labor_employee_balance_keys = [
+        key
+        for key in labor_pm_keys
+        if ctx.labor_plans[key[3]].avg_monthly_labor_cost
+    ]
+    labor_employee_balance_scale = {
+        key: float(ctx.labor_plans[key[3]].avg_monthly_labor_cost or 0.0)
+        for key in labor_employee_balance_keys
+    }
 
     allow_deficit = ctx.allow_deficit
     deficit_agg_keys: list[tuple[str, int]] = []
@@ -846,6 +871,10 @@ def solve(
     if labor_balance_dev_keys:
         model.labor_balance_dev = pyo.Var(
             labor_balance_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
+        )
+    if labor_employee_balance_keys:
+        model.labor_employee_balance_dev = pyo.Var(
+            labor_employee_balance_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
         )
     model.cons = pyo.ConstraintList()
 
@@ -988,6 +1017,8 @@ def solve(
             sum_terms=_sum_terms,
             contract_allows_month=contract_allows_month,
             employee_active_in_month=employee_active_in_month,
+            open_rate_q=open_rate_q,
+            open_rate_key_set=open_rate_key_set,
         )
     )
 
@@ -1204,6 +1235,28 @@ def solve(
                         <= OPEN_RATE_STEP * open_rate_q[key]
                     )
 
+    if labor_employee_balance_keys:
+        for e_id, c_id, m, lp_idx in labor_employee_balance_keys:
+            lp = ctx.labor_plans[lp_idx]
+            avg_cost = lp.avg_monthly_labor_cost or 0.0
+            if avg_cost <= 0:
+                continue
+            pm_key = (e_id, c_id, m, lp_idx)
+            if pm_key not in labor_pm_key_set:
+                continue
+            pay_terms = [
+                labor_pay[(e_id, c_id, m, kind, lp_idx)]
+                for kind in LABOR_PAYMENT_KINDS
+                if (e_id, c_id, m, kind, lp_idx) in labor_payment_key_set
+            ]
+            if not pay_terms:
+                continue
+            amount_expr = _sum_terms(pay_terms)
+            target_expr = avg_cost * labor_pm[pm_key]
+            dev = model.labor_employee_balance_dev[(e_id, c_id, m, lp_idx)]
+            model.cons.add(dev >= amount_expr - target_expr)
+            model.cons.add(dev >= target_expr - amount_expr)
+
     for e in ctx.employees:
         total_due = employee_monthly_payment_due(e)
         if total_due <= 0:
@@ -1241,15 +1294,6 @@ def solve(
 
             if m < 12:
                 model.cons.add(model.carry[(c_id, m)] == model.close[(c_id, m)])
-
-        if c.requires_full_fot_spend:
-            spend_full_fot = [
-                _contract_month_spent(alloc, c_id, m)
-                for m in months
-                if contract_allows_month(c, year, m)
-            ]
-            if spend_full_fot:
-                model.cons.add(_sum_terms(spend_full_fot) == c.total_fot)
 
     for c_id in contract_list:
         c = contracts[c_id]
@@ -1472,6 +1516,30 @@ def solve(
             return _solver_failed("этап раннего дефицита")
 
     soft_stage_exprs: list[tuple[object, str]] = []
+    labor_part = _expr_labor_deviations(
+        model,
+        labor_dev_keys=labor_dev_keys,
+        labor_amount_dev_keys=labor_amount_dev_keys,
+        labor_balance_dev_keys=labor_balance_dev_keys,
+        labor_plan_amount=labor_plan_amount,
+        labor_soft_indices=labor_soft_indices,
+        weight=w.labor_deviation,
+    )
+    if labor_part is not None:
+        soft_stage_exprs.append((labor_part, "отклонения трудоёмкости"))
+    labor_employee_balance_part = _expr_labor_employee_balance(
+        model,
+        labor_employee_balance_keys=labor_employee_balance_keys,
+        labor_employee_balance_scale=labor_employee_balance_scale,
+        weight=w.labor_deviation,
+    )
+    if labor_employee_balance_part is not None:
+        soft_stage_exprs.append(
+            (
+                labor_employee_balance_part,
+                "равномерность стоимости трудоёмкости по сотрудникам",
+            )
+        )
     preferred_anchor = _preferred_salary_anchor_contract_id(ctx)
     non_anchor_part = _expr_non_anchor_salary_penalty(
         uses, alloc_keys, preferred_anchor, w.salary_contract_switch
@@ -1487,6 +1555,19 @@ def solve(
     )
     if order_part is not None:
         soft_stage_exprs.append((order_part, "сумма приказов"))
+    staff_2556_deviation_part = _expr_model_var_sum(
+        model,
+        "staff_2556_limit_deviation",
+    )
+    if staff_2556_deviation_part is not None:
+        soft_stage_exprs.append(
+            (staff_2556_deviation_part, "отклонение штатной части от П2556")
+        )
+    goz_bep_under_part = _expr_model_var_sum(model, "goz_bep_average_under_limit")
+    if goz_bep_under_part is not None:
+        soft_stage_exprs.append(
+            (goz_bep_under_part, "недобор средней БЭП по ГОЗ")
+        )
     p4_under_part = _expr_model_var_sum(model, "p4_group_under_limit")
     if p4_under_part is not None:
         soft_stage_exprs.append((p4_under_part, "недобор средней П4"))
@@ -1506,17 +1587,6 @@ def solve(
     switch_part = _expr_salary_switch(model, salary_change_keys, w.salary_contract_switch)
     if switch_part is not None:
         soft_stage_exprs.append((switch_part, "смена договора оклада"))
-    labor_part = _expr_labor_deviations(
-        model,
-        labor_dev_keys=labor_dev_keys,
-        labor_amount_dev_keys=labor_amount_dev_keys,
-        labor_balance_dev_keys=labor_balance_dev_keys,
-        labor_plan_amount=labor_plan_amount,
-        labor_soft_indices=labor_soft_indices,
-        weight=w.labor_deviation,
-    )
-    if labor_part is not None:
-        soft_stage_exprs.append((labor_part, "отклонения трудоёмкости"))
     uniform_part = _expr_uniform_deviation(
         model, uniform_dev_keys, uniform_penalty_params, w.uniform_spend_deviation
     )
@@ -1789,7 +1859,6 @@ def _compute_balances(
                     carried_forward=round(carried, 2),
                     forfeited=0.0,
                     min_balance_required=round(min_bal, 2),
-                    carryover_allowed=True,
                 )
             )
             opening = carried

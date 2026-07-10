@@ -398,6 +398,21 @@ def _cash_issues(result: PlanningResult, contracts: dict) -> list[dict]:
                     "рекомендация": "Проверить лист «минимальные_остатки»",
                 }
             )
+        if b.month == 12 and b.closing_balance > 0.01:
+            issues.append(
+                {
+                    "уровень": "Предупреждение",
+                    "раздел": "Касса",
+                    "объект": b.contract_id,
+                    "месяц": RU_MONTHS[b.month],
+                    "описание проблемы": "Неосвоенный остаток на конец года",
+                    "отклонение / сумма": round(b.closing_balance, 2),
+                    "куда смотреть": SHEET_CONTRACT_FOT,
+                    "рекомендация": (
+                        "Проверить возможность переноса остатка; для коммерции это может быть перенос на +2 месяца"
+                    ),
+                }
+            )
     return issues
 
 

@@ -7,13 +7,8 @@ from typing import Callable
 import pyomo.environ as pyo
 
 from fot_planner.contract_calendar import contract_payment_window_includes_month
-from fot_planner.labor_rules import (
-    labor_rows_for_contract,
-    planned_labor_amount,
-    total_planned_person_months,
-)
-from fot_planner.limit_codes import normalize_limit_code
 from fot_planner.models import PaymentKind, PlanningContext
+from fot_planner.open_rate_rules import OPEN_RATE_STEP, TOTAL_RATE_MAX_REGULAR
 from fot_planner.position_reference import normalize_position
 from fot_planner.salary_limits_2556 import (
     normalize_personnel_category,
@@ -46,24 +41,16 @@ class PayrollRuleContext:
     sum_terms: Callable[[list], object]
     contract_allows_month: Callable[[object, int, int], bool]
     employee_active_in_month: Callable[[object, int, int], bool]
+    open_rate_q: object | None = None
+    open_rate_key_set: set[tuple[str, str, int]] | None = None
 
 
 PayrollRule = Callable[[PayrollRuleContext], None]
 
 
-def _payment_limit_entries_by_code(ctx: PlanningContext) -> dict[str, tuple]:
-    entries: dict[str, list] = defaultdict(list)
-    for row in ctx.contract_payment_limits:
-        limit_code = normalize_limit_code(row.limit_code)
-        if not limit_code:
-            continue
-        entries[limit_code].append(row)
-    return {key: tuple(value) for key, value in entries.items()}
-
-
 def _position_limits_by_code_and_position(ctx: PlanningContext) -> dict[tuple[str, str], object]:
     return {
-        (normalize_limit_code(code), normalize_position(row.position)): row
+        (str(code).strip().lower(), normalize_position(row.position)): row
         for code, rows in ctx.position_limit_tables.items()
         for row in rows
         if row.position
@@ -77,13 +64,42 @@ def _limit_for_rate(limit: float | None, rate: float) -> float | None:
 
 
 def _employee_limit_by_code(limit_by_code_position, employee, limit_code: str) -> float | None:
-    code = normalize_limit_code(limit_code)
+    code = str(limit_code).strip().lower()
     limit_row = limit_by_code_position.get((code, normalize_position(employee.position)))
     if limit_row is None:
         return None
     if code == "p4" and not p4_applies_to_category(limit_row.personnel_category):
         return None
     return _limit_for_rate(limit_row.limit, employee.rate)
+
+
+def _employee_limit_row_by_code(limit_by_code_position, employee, limit_code: str):
+    code = str(limit_code).strip().lower()
+    limit_row = limit_by_code_position.get((code, normalize_position(employee.position)))
+    if limit_row is None:
+        return None
+    if code == "p4" and not p4_applies_to_category(limit_row.personnel_category):
+        return None
+    return limit_row
+
+
+def _contract_open_rate_expr(rule_ctx: PayrollRuleContext, employee, contract_id: str, month: int):
+    key = (employee.id, contract_id, month)
+    if rule_ctx.open_rate_q is not None and key in (rule_ctx.open_rate_key_set or set()):
+        return OPEN_RATE_STEP * rule_ctx.open_rate_q[key]
+    return float(employee.rate)
+
+
+def _employee_month_open_rate_expr(rule_ctx: PayrollRuleContext, employee, month: int):
+    open_rate_key_set = rule_ctx.open_rate_key_set or set()
+    keys = [
+        key
+        for key in open_rate_key_set
+        if key[0] == employee.id and key[2] == month
+    ]
+    if rule_ctx.open_rate_q is not None and keys:
+        return rule_ctx.sum_terms([OPEN_RATE_STEP * rule_ctx.open_rate_q[key] for key in keys])
+    return float(employee.rate)
 
 
 def _payment_terms(rule_ctx: PayrollRuleContext, *, employee_id: str, month: int, kind: PaymentKind):
@@ -94,53 +110,13 @@ def _payment_terms(rule_ctx: PayrollRuleContext, *, employee_id: str, month: int
     ]
 
 
-def _contract_staff_terms(
-    rule_ctx: PayrollRuleContext,
-    contract_id: str,
-    kinds: tuple[PaymentKind, ...],
-):
-    return [
-        rule_ctx.alloc[k]
-        for k in rule_ctx.alloc_keys
-        if k[1] == contract_id and k[3] in kinds
-    ]
+def _goz_bep_average_limit(ctx: PlanningContext) -> float | None:
+    """БЭП: средний лимит штатной части ГОЗ на 1 ставку."""
 
-
-def _contract_labor_average_limit(ctx: PlanningContext, contract_id: str) -> float | None:
-    """Средняя стоимость чел.-месяца по трудоёмкости договора, если она задана."""
-
-    labor_rows = [lp for _idx, lp in labor_rows_for_contract(ctx, contract_id)]
-    labor_rows_with_cost = [
-        lp
-        for lp in labor_rows
-        if lp.person_months > 0
-        and lp.avg_monthly_labor_cost is not None
-        and lp.avg_monthly_labor_cost > 0
-    ]
-    if not labor_rows_with_cost:
+    limit = ctx.salary_stability.goz_average_salary_limit
+    if limit is None or limit <= 0:
         return None
-    planned_pm = sum(lp.person_months for lp in labor_rows_with_cost)
-    if planned_pm <= 0:
-        return None
-    planned_amount = sum(planned_labor_amount(lp) for lp in labor_rows_with_cost)
-    if planned_amount <= 0:
-        return None
-    return planned_amount / planned_pm
-
-
-def _goz_bep_effective_limit(ctx: PlanningContext, contract_id: str) -> float | None:
-    """Для ГОЗ/БЭП берём самый строгий потолок: БЭП и/или трудоёмкость договора."""
-
-    limits: list[float] = []
-    bep_limit = ctx.salary_stability.goz_average_salary_limit
-    if bep_limit > 0:
-        limits.append(float(bep_limit))
-    labor_limit = _contract_labor_average_limit(ctx, contract_id)
-    if labor_limit is not None and labor_limit > 0:
-        limits.append(float(labor_limit))
-    if not limits:
-        return None
-    return min(limits)
+    return float(limit)
 
 
 def _account_starts_with_23(contract) -> bool:
@@ -270,51 +246,52 @@ def rule_152_excludes_other_supplements(rule_ctx: PayrollRuleContext) -> None:
                     )
 
 
-def rule_contract_payment_limits(rule_ctx: PayrollRuleContext) -> None:
-    """Лимиты из листа «договоры_ограничения»: одна группа = код ограничения."""
-
-    limit_by_code_position = _position_limits_by_code_and_position(rule_ctx.ctx)
-    entries_by_code = _payment_limit_entries_by_code(rule_ctx.ctx)
-    for limit_code, entries in entries_by_code.items():
-        if limit_code in {"2556", "bep", "p4"}:
-            continue
-        for employee in rule_ctx.ctx.employees:
-            limit = _employee_limit_by_code(limit_by_code_position, employee, limit_code)
-            if limit is None:
-                continue
-            for month in rule_ctx.months:
-                terms = [
-                    rule_ctx.alloc[(employee.id, row.contract_id, month, row.payment_kind)]
-                    for row in entries
-                    if row.contract_id in rule_ctx.contracts
-                    and (employee.id, row.contract_id, month, row.payment_kind)
-                    in rule_ctx.alloc_key_set
-                ]
-                if not terms:
-                    continue
-                rule_ctx.model.cons.add(rule_ctx.sum_terms(terms) <= limit)
-
-
 def rule_2556_salary_122_staff_total(rule_ctx: PayrollRuleContext) -> None:
-    """П2556: месячная штатная часть сотрудника (оклад + 122) ограничена по должности."""
+    """П2556: штатная часть (оклад + 122) ограничена по должности и открытой ставке договора."""
 
     limit_by_code_position = _position_limits_by_code_and_position(rule_ctx.ctx)
+    target_records: list[tuple[tuple[str, str, int], object, list]] = []
     for employee in rule_ctx.ctx.employees:
-        limit = _employee_limit_by_code(limit_by_code_position, employee, "2556")
-        if limit is None:
+        limit_row = _employee_limit_row_by_code(limit_by_code_position, employee, "2556")
+        if limit_row is None or limit_row.limit is None or limit_row.limit <= 0:
             continue
+        base_limit = float(limit_row.limit)
         for month in rule_ctx.months:
             if not rule_ctx.employee_active_in_month(employee, rule_ctx.ctx.year, month):
                 continue
-            terms = [
-                rule_ctx.alloc[key]
-                for key in rule_ctx.alloc_keys
-                if key[0] == employee.id
-                and key[2] == month
-                and key[3] in SALARY_122_KINDS
-            ]
-            if terms:
-                rule_ctx.model.cons.add(rule_ctx.sum_terms(terms) <= limit)
+            for contract_id in rule_ctx.contract_list:
+                terms = [
+                    rule_ctx.alloc[key]
+                    for key in rule_ctx.alloc_keys
+                    if key[0] == employee.id
+                    and key[1] == contract_id
+                    and key[2] == month
+                    and key[3] in SALARY_122_KINDS
+                ]
+                if terms:
+                    total = rule_ctx.sum_terms(terms)
+                    limit = base_limit * _contract_open_rate_expr(
+                        rule_ctx,
+                        employee,
+                        contract_id,
+                        month,
+                    )
+                    rule_ctx.model.cons.add(total <= limit)
+                    target_records.append(((employee.id, contract_id, month), limit, terms))
+
+    if not target_records:
+        return
+
+    keys = [key for key, _limit, _terms in target_records]
+    rule_ctx.model.staff_2556_limit_deviation = pyo.Var(
+        keys,
+        domain=pyo.NonNegativeReals,
+    )
+    for key, limit, terms in target_records:
+        total = rule_ctx.sum_terms(terms)
+        deviation = rule_ctx.model.staff_2556_limit_deviation[key]
+        rule_ctx.model.cons.add(deviation >= total - limit)
+        rule_ctx.model.cons.add(deviation >= limit - total)
 
 
 def rule_order_incentive_2556_amount(rule_ctx: PayrollRuleContext) -> None:
@@ -381,7 +358,8 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
 
     p4_employee_month_keys: list[tuple[str, int]] = []
     p4_employee_month_limit: dict[tuple[str, int], float] = {}
-    p4_employee_month_rate: dict[tuple[str, int], float] = {}
+    p4_employee_month_total_rate: dict[tuple[str, int], object] = {}
+    p4_employee_month_max_rate: dict[tuple[str, int], float] = {}
     p4_group_employee_months: dict[tuple[str, int], list[tuple[str, int]]] = defaultdict(list)
     p4_group_limit: dict[tuple[str, int], float] = {}
 
@@ -402,8 +380,16 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
         category = normalize_personnel_category(limit_row.personnel_category)
         group_key = (category, month)
         p4_employee_month_keys.append(month_key)
-        p4_employee_month_limit[month_key] = float(limit) * employee.rate
-        p4_employee_month_rate[month_key] = float(employee.rate)
+        p4_employee_month_limit[month_key] = float(limit)
+        p4_employee_month_total_rate[month_key] = _employee_month_open_rate_expr(
+            rule_ctx,
+            employee,
+            month,
+        )
+        p4_employee_month_max_rate[month_key] = max(
+            float(employee.rate),
+            TOTAL_RATE_MAX_REGULAR,
+        )
         p4_group_employee_months[group_key].append(month_key)
         current_group_limit = p4_group_limit.get(group_key)
         p4_group_limit[group_key] = (
@@ -418,6 +404,9 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
     p4_group_keys = list(p4_group_employee_months)
     rule_ctx.model.p4_month_active = pyo.Var(p4_employee_month_keys, domain=pyo.Binary)
     rule_ctx.model.p4_staff_included = pyo.Var(
+        p4_employee_month_keys, domain=pyo.NonNegativeReals
+    )
+    rule_ctx.model.p4_active_rate = pyo.Var(
         p4_employee_month_keys, domain=pyo.NonNegativeReals
     )
     rule_ctx.model.p4_group_under_limit = pyo.Var(
@@ -435,6 +424,13 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
             rule_ctx.model.cons.add(use_var <= active)
         rule_ctx.model.cons.add(active <= rule_ctx.sum_terms(uses_124))
 
+        active_rate = rule_ctx.model.p4_active_rate[month_key]
+        total_rate = p4_employee_month_total_rate[month_key]
+        max_rate = p4_employee_month_max_rate[month_key]
+        rule_ctx.model.cons.add(active_rate <= total_rate)
+        rule_ctx.model.cons.add(active_rate <= max_rate * active)
+        rule_ctx.model.cons.add(active_rate >= total_rate - max_rate * (1 - active))
+
         staff_terms = _p4_staff_terms(rule_ctx, employee_id=employee_id, month=month)
         if not staff_terms:
             continue
@@ -444,10 +440,10 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
         rule_ctx.model.cons.add(included <= RULE_BIG_M * active)
         rule_ctx.model.cons.add(included >= staff_total - RULE_BIG_M * (1 - active))
 
-        employee_limit = p4_employee_month_limit[month_key]
+        employee_limit = p4_employee_month_limit[month_key] * active_rate
         deviation = rule_ctx.model.p4_employee_limit_deviation[month_key]
-        rule_ctx.model.cons.add(deviation >= included - employee_limit * active)
-        rule_ctx.model.cons.add(deviation >= employee_limit * active - included)
+        rule_ctx.model.cons.add(deviation >= included - employee_limit)
+        rule_ctx.model.cons.add(deviation >= employee_limit - included)
 
     for group_key in p4_group_keys:
         group_limit = p4_group_limit[group_key]
@@ -456,10 +452,7 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
             [rule_ctx.model.p4_staff_included[key] for key in employee_months]
         )
         active_rate = rule_ctx.sum_terms(
-            [
-                p4_employee_month_rate[key] * rule_ctx.model.p4_month_active[key]
-                for key in employee_months
-            ]
+            [rule_ctx.model.p4_active_rate[key] for key in employee_months]
         )
         rule_ctx.model.cons.add(included_total <= group_limit * active_rate)
         rule_ctx.model.cons.add(
@@ -469,20 +462,102 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
 
 
 def rule_goz_bep_staff_total(rule_ctx: PayrollRuleContext) -> None:
-    """ГОЗ/БЭП: штатная часть ГОЗ-договора ограничена средней зарплатой на трудоёмкость."""
+    """ГОЗ/БЭП: средняя штатная часть по ГОЗ-договору не выше БЭП."""
 
-    for contract_id, contract in rule_ctx.contracts.items():
-        if not contract.is_goz_defense_order:
-            continue
-        planned_pm = total_planned_person_months(rule_ctx.ctx, contract_id)
-        effective_limit = _goz_bep_effective_limit(rule_ctx.ctx, contract_id)
-        if planned_pm <= 0 or effective_limit is None:
-            continue
-        terms = _contract_staff_terms(rule_ctx, contract_id, SALARY_122_KINDS)
-        if terms:
-            rule_ctx.model.cons.add(
-                rule_ctx.sum_terms(terms) <= effective_limit * planned_pm
-            )
+    bep_limit = _goz_bep_average_limit(rule_ctx.ctx)
+    if bep_limit is None:
+        return
+    goz_contract_ids = {
+        contract_id
+        for contract_id, contract in rule_ctx.contracts.items()
+        if contract.is_goz_defense_order
+    }
+    if not goz_contract_ids:
+        return
+
+    employee_by_id = {employee.id: employee for employee in rule_ctx.ctx.employees}
+    active_records: list[tuple[tuple[str, str, int], list, list]] = []
+    month_contract_groups: dict[tuple[str, int], list[tuple[str, str, int]]] = defaultdict(list)
+
+    for employee in rule_ctx.ctx.employees:
+        for contract_id in goz_contract_ids:
+            for month in rule_ctx.months:
+                if not rule_ctx.employee_active_in_month(employee, rule_ctx.ctx.year, month):
+                    continue
+                alloc_keys = [
+                    key
+                    for key in rule_ctx.alloc_keys
+                    if key[0] == employee.id
+                    and key[1] == contract_id
+                    and key[2] == month
+                    and key[3] in SALARY_122_KINDS
+                ]
+                if not alloc_keys:
+                    continue
+                active_key = (employee.id, contract_id, month)
+                active_records.append(
+                    (
+                        active_key,
+                        [rule_ctx.alloc[key] for key in alloc_keys],
+                        [rule_ctx.uses[key] for key in alloc_keys],
+                    )
+                )
+                month_contract_groups[(contract_id, month)].append(active_key)
+
+    if not active_records:
+        return
+
+    active_keys = [key for key, _alloc_terms, _use_terms in active_records]
+    group_keys = list(month_contract_groups)
+    rule_ctx.model.goz_bep_employee_active = pyo.Var(
+        active_keys,
+        domain=pyo.Binary,
+    )
+    rule_ctx.model.goz_bep_average_under_limit = pyo.Var(
+        group_keys,
+        domain=pyo.NonNegativeReals,
+    )
+
+    for active_key, _alloc_terms, use_terms in active_records:
+        active = rule_ctx.model.goz_bep_employee_active[active_key]
+        for use_var in use_terms:
+            rule_ctx.model.cons.add(use_var <= active)
+        rule_ctx.model.cons.add(active <= rule_ctx.sum_terms(use_terms))
+
+    for group_key, active_keys_for_group in month_contract_groups.items():
+        contract_id, month = group_key
+        included_total = rule_ctx.sum_terms(
+            [
+                rule_ctx.alloc[key]
+                for key in rule_ctx.alloc_keys
+                if key[1] == contract_id
+                and key[2] == month
+                and key[3] in SALARY_122_KINDS
+            ]
+        )
+        active_rate_terms = []
+        open_rate_key_set = rule_ctx.open_rate_key_set or set()
+        for employee_id, contract_id, month in active_keys_for_group:
+            open_key = (employee_id, contract_id, month)
+            employee = employee_by_id[employee_id]
+            if open_key in open_rate_key_set:
+                active_rate_terms.append(
+                    _contract_open_rate_expr(rule_ctx, employee, contract_id, month)
+                )
+            else:
+                active_rate_terms.append(
+                    employee.rate
+                    * rule_ctx.model.goz_bep_employee_active[
+                        (employee_id, contract_id, month)
+                    ]
+                )
+        active_rate = rule_ctx.sum_terms(active_rate_terms)
+        target = bep_limit * active_rate
+        rule_ctx.model.cons.add(included_total <= target)
+        rule_ctx.model.cons.add(
+            rule_ctx.model.goz_bep_average_under_limit[group_key]
+            >= target - included_total
+        )
 
 
 # Приоритет: штатные выплаты (не 152) на договоре приоритета.
@@ -546,7 +621,6 @@ PAYROLL_RULES: tuple[PayrollRule, ...] = (
     rule_order_incentive_once_per_month,
     rule_p4_monthly_staff_limit,
     rule_goz_bep_staff_total,
-    rule_contract_payment_limits,
     rule_priority_either_staff_or_152,
     rule_priority_no_staff_if_salary_elsewhere,
 )

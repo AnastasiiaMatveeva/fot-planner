@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-# БЭП 550 ВП: средняя зарплата на 1 чел.-мес. по договору ГОЗ.
+# БЭП 550 ВП: средний лимит штатной части (оклад + 122) для ГОЗ.
 DEFAULT_GOZ_AVERAGE_SALARY_LIMIT: float = 112_261.0
 
 DEFAULT_GOZ_LABOR_TOLERANCE: float = 0.05
@@ -16,6 +16,5 @@ DEFAULT_SETTINGS_ROW: dict[str, object] = {
     "штраф отклонения от равномерного освоения": 10_000,
     "штраф использования приказа": 1_000_000,
     "допуск трудоёмкости": DEFAULT_GOZ_LABOR_TOLERANCE,
-    "средняя зарплата ГОЗ": DEFAULT_GOZ_AVERAGE_SALARY_LIMIT,
     "штраф отклонения трудоёмкости": 100_000,
 }

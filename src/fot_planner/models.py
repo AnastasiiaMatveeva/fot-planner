@@ -52,10 +52,10 @@ class PositionReference:
     """Строка справочника должностей для совместимости и справочного оклада."""
 
     position: str
-    equivalence_group: str  # окладная группа: раздел положения + уровень + оклад
+    equivalence_group: str  # окладная группа: страница + номер группы + номер уровня
     level: int | None = None
     reference_salary_for_rate: float | None = None
-    salary_source: str | None = None
+    salary_page: str | None = None
     salary_group_number: int | None = None
 
 
@@ -87,7 +87,7 @@ class Contract:
     id: str
     name: str
     number: str
-    contract_type: str  # свободная метка; правила задаются колонками договора и листом договоры_ограничения
+    contract_type: str  # свободная метка; правила задаются колонками договора
     start_date: date
     end_date: date
     total_fot: float
@@ -110,17 +110,8 @@ class Contract:
 
     @property
     def requires_full_fot_spend(self) -> bool:
-        """Договор с положительным ФОТ должен быть полностью освоен моделью."""
-        return self.total_fot > 0
-
-
-@dataclass
-class ContractPaymentLimit:
-    """Связка договора, вида выплаты и применяемого ограничения/документа."""
-
-    contract_id: str
-    payment_kind: PaymentKind
-    limit_code: str
+        """Legacy-флаг: полное освоение больше не является жёстким требованием."""
+        return False
 
 
 @dataclass
@@ -245,10 +236,8 @@ class SalaryStabilityRules:
     max_contracts_per_year: int | None = None
     # Допуск ±% по чел.-мес. и сумме строки трудоёмкости (все типы договоров)
     goz_labor_tolerance: float = DEFAULT_GOZ_LABOR_TOLERANCE
-    # БЭП 550 ВП: предельная средняя зарплата на 1 чел.-мес. по договору ГОЗ.
+    # БЭП 550 ВП: средний лимит штатной части (оклад + 122) для ГОЗ.
     goz_average_salary_limit: float = DEFAULT_GOZ_AVERAGE_SALARY_LIMIT
-    # Открытые ставки и мультиоклад — всегда включены (не настраиваются).
-    enable_open_rates: bool = True
 
 
 @dataclass
@@ -264,7 +253,6 @@ class PlanningContext:
     weights: OptimizationWeights = field(default_factory=OptimizationWeights)
     salary_stability: SalaryStabilityRules = field(default_factory=SalaryStabilityRules)
     labor_plans: list[ContractLaborPlan] = field(default_factory=list)
-    contract_payment_limits: list[ContractPaymentLimit] = field(default_factory=list)
     secret_allowances: list[SecretAllowance] = field(default_factory=list)
     baseline_plan: list[AllocationRecord] | None = None
     # Диагностический режим: разрешить недоплату с большим штрафом (см. allow_deficit)
@@ -330,7 +318,6 @@ class ContractBalanceRecord:
     carried_forward: float = 0.0
     forfeited: float = 0.0
     min_balance_required: float = 0.0  # минимальный остаток на конец месяца («минимальные_остатки»)
-    carryover_allowed: bool = True
 
     @property
     def balance(self) -> float:

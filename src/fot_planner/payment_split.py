@@ -31,7 +31,7 @@ def employee_max_salary_amount(employee: Employee) -> float:
 
 @dataclass(frozen=True)
 class SalaryPositionOption:
-    """Вариант посадки на строку contract_positions (должность/группа договора)."""
+    """Вариант посадки на договорную должность/группу."""
 
     position_rule_index: int
     position: str | None

@@ -40,13 +40,13 @@ def position_control_dataframe(ctx: PlanningContext, result: PlanningResult) -> 
 
         if compatible_rules:
             salary_cap_1_rate = employee.reference_salary_for_rate
-            contract_positions = "; ".join(sorted({pr.position for pr in compatible_rules}))
+            contract_position_names = "; ".join(sorted({pr.position for pr in compatible_rules}))
             contract_groups = "; ".join(
                 sorted({pr.equivalence_group or "" for pr in compatible_rules if pr.equivalence_group})
             )
         else:
             salary_cap_1_rate = None
-            contract_positions = ""
+            contract_position_names = ""
             contract_groups = ""
 
         rows.append(
@@ -56,7 +56,7 @@ def position_control_dataframe(ctx: PlanningContext, result: PlanningResult) -> 
                 "должность сотрудника": employee.position,
                 "окладная группа сотрудника": employee.equivalence_group or "",
                 "договор": allocation.contract_id,
-                "должность по договору": contract_positions,
+                "должность по договору": contract_position_names,
                 "окладная группа по договору": contract_groups,
                 "месяц": RU_MONTHS.get(allocation.month, allocation.month),
                 "вид выплаты": PAYMENT_KIND_RU.get(
