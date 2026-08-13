@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CML · Планирование ФОТ</title>
+</head>
+<body>
+<style>
+  :root{
+    --paper:#E7EDF5;--card:#FFF;--c2:#F4F7FC;--c3:#E8EFF7;--c4:#DCE6F1;
+    --ink:#0D2036;--ink2:#33506C;--ink3:#6A829B;
+    --ln:#BED1E3;--ln2:#DBE6F1;
+    --br:#1565C0;--br2:#0E4E96;--brbg:#E4F0FC;
+    --ai:#6A3FBF;--aibg:#F2EBFD;
+    --sv:#0B7A78;--svbg:#DEF2F1;
+    --mn:#A66A00;--mnbg:#FCF1DB;
+    --bd:#C0392B;--bdbg:#FBEAE8;--ok:#12784C;
+    --tg:#0F4C82;--tr:#6A3FBF;--tv:#0B7A78;--tz:#A66A00;
+    --k1:#0F4C82;--k2:#2E86C1;--k3:#6EAEDC;--k4:#A9CFEC;--k5:#C98A00;--k6:#C0392B;
+    --f:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+    --m:Consolas,"SF Mono",ui-monospace,monospace;
+  }
+  :root{color-scheme:light}
+  *{box-sizing:border-box}
+  html{background:#E7EDF5 !important;min-height:100%}
+  body{margin:0 !important;min-height:100vh;background:#E7EDF5 !important;color:var(--ink) !important;
+       font-family:var(--f);font-size:14px;line-height:1.4;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1560px;margin:0 auto;padding:clamp(6px,1vw,12px) clamp(6px,1vw,14px) 14px}
+  .app{background:var(--card);border:1px solid var(--ln);border-radius:6px;overflow:hidden;
+       box-shadow:0 2px 4px rgba(13,32,54,.08),0 22px 50px -32px rgba(13,32,54,.6)}
+  button{font:inherit;border-radius:4px;cursor:pointer}
+  button:focus-visible{outline:3px solid var(--br);outline-offset:1px}
+
+  .bar{display:flex;align-items:center;gap:13px;padding:8px 14px;border-bottom:2px solid var(--ln);background:var(--card)}
+  .bar .mk{width:27px;height:27px;border-radius:4px;background:var(--br);color:#FFF;font-family:var(--m);font-size:13px;font-weight:700;display:grid;place-items:center;flex:none}
+  .bar .wm{font-size:15.5px;font-weight:700}
+  .bar .wm em{font-style:normal;color:var(--ink3);font-weight:400}
+  .bar .sc{font-family:var(--m);font-size:12px;color:var(--ink3);border-left:1px solid var(--ln);padding-left:13px}
+  .bar .sp{flex:1 1 auto}
+  .run{font-size:14.5px;font-weight:700;line-height:1;padding:10px 18px;border:2px solid var(--br);background:var(--br);color:#FFF;flex:none}
+  .run:hover{background:var(--br2);border-color:var(--br2)}
+  .run.busy{background:var(--c3);border-color:var(--ln);color:var(--ink3);cursor:default}
+
+  .body{display:grid;grid-template-columns:250px minmax(0,1fr)}
+  .nav{border-right:2px solid var(--ln);background:var(--c2);display:flex;flex-direction:column;padding-bottom:6px}
+  .nav .g{font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--ink3);padding:12px 13px 5px}
+  .nv{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:7px 13px;border:0;border-radius:0;
+      background:transparent;border-left:4px solid transparent;color:var(--ink2);font-size:13.5px}
+  .nv:hover{background:var(--c3);color:var(--ink)}
+  .nv.on{background:var(--card);color:var(--ink);font-weight:700;border-left-color:var(--z,var(--br))}
+  .nv i{width:8px;height:8px;border-radius:50%;background:var(--z,var(--ink3));flex:none}
+  .nv .c{margin-left:auto;font-family:var(--m);font-size:11.5px;color:var(--ink3);font-weight:400}
+  .nv .bdg{margin-left:auto;font-family:var(--m);font-size:11px;font-weight:700;color:#FFF;background:var(--mn);border-radius:9px;padding:1px 7px}
+
+  .cont{min-width:0;display:flex;flex-direction:column}
+  .ch{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap;padding:11px 16px;border-bottom:1px solid var(--ln2);background:var(--c2)}
+  .ch h2{margin:0;font-size:17px;font-weight:700}
+  .ch .sub{font-family:var(--m);font-size:12px;color:var(--ink3)}
+  .ch .sp{flex:1 1 auto}
+  .cb{padding:13px 16px;display:flex;flex-direction:column;gap:12px;min-height:420px}
+
+  .ttl{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3)}
+  .scr{overflow:auto;max-height:396px;border:1px solid var(--ln)}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{text-align:left;padding:5px 9px;border-bottom:1px solid var(--ln2);white-space:nowrap}
+  thead th{position:sticky;top:0;background:var(--c3);font-family:var(--m);font-size:10.5px;text-transform:uppercase;
+           letter-spacing:.04em;color:var(--ink2);font-weight:700;border-bottom:1px solid var(--ln);z-index:1}
+  td.n{text-align:right;font-family:var(--m);font-variant-numeric:tabular-nums}
+  td.mono{font-family:var(--m)}
+  tbody tr:hover td{background:var(--c2)}
+  tbody tr.sel td{background:var(--brbg)}
+  tbody tr[data-k]{cursor:pointer}
+  .y{color:var(--ok);font-weight:700}.no{color:var(--ink3);opacity:.6}
+  .pill{display:inline-block;font-family:var(--m);font-size:10.5px;font-weight:700;letter-spacing:.03em;
+        border:1.5px solid var(--c);color:var(--c);border-radius:3px;padding:0 6px}
+
+  .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(146px,1fr));gap:2px;background:var(--ln);border:1px solid var(--ln)}
+  .kpi>div{background:var(--c2);padding:8px 11px;display:flex;flex-direction:column;gap:0}
+  .kpi .n{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink3)}
+  .kpi .v{font-family:var(--m);font-size:18px;font-weight:700;font-variant-numeric:tabular-nums}
+  .kpi .s{font-family:var(--m);font-size:10.5px;color:var(--ink3)}
+  .kpi .v.a{color:var(--sv)}.kpi .v.m{color:var(--ink3)}.kpi .v.w{color:var(--mn)}
+
+  .split{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:12px}
+  .side{border:1px solid var(--ln);border-radius:4px;background:var(--c2);padding:11px 13px;display:flex;flex-direction:column;gap:9px;align-self:start}
+  .side .h{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .side .h .cd{font-family:var(--m);font-size:15px;font-weight:700;color:var(--c)}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12.5px}
+  .kv dt{color:var(--ink3)}
+  .kv dd{margin:0;font-family:var(--m);font-variant-numeric:tabular-nums;text-align:right}
+  .allow{display:flex;flex-wrap:wrap;gap:4px}
+  .ak{font-family:var(--m);font-size:11px;padding:1px 6px;border-radius:3px;border:1.5px solid var(--ln2);color:var(--ink3)}
+  .ak.y{border-color:var(--ok);color:var(--ok);font-weight:700}
+  .ak.n{opacity:.5;text-decoration:line-through}
+  .spark{display:flex;align-items:flex-end;gap:2px;height:34px}
+  .spark i{flex:1 1 0;background:var(--c);border-radius:1px 1px 0 0;min-height:2px}
+  .sx{display:flex;gap:2px;font-family:var(--m);font-size:9px;color:var(--ink3)}
+  .sx span{flex:1 1 0;text-align:center}
+
+  /* chart */
+  .cg{display:grid;grid-template-columns:54px minmax(0,1fr)}
+  .yx{position:relative;height:206px}
+  .yx span{position:absolute;right:8px;transform:translateY(50%);font-family:var(--m);font-size:11px;color:var(--ink3)}
+  .yx .u{top:-4px;transform:none;font-size:10px}
+  .pl{position:relative;display:flex;align-items:flex-end;gap:5px;height:206px}
+  .tk{position:absolute;left:0;right:0;border-top:1px solid var(--ln2)}
+  .mb{flex:1 1 0;display:flex;flex-direction:column;justify-content:flex-end;height:100%;background:transparent;
+      border:0;border-radius:0;padding:0;min-width:0;transform:scaleY(0);transform-origin:bottom;transition:transform .5s cubic-bezier(.2,.7,.3,1)}
+  .mb.gr{transform:scaleY(1)}
+  .mb span{display:block;background:var(--c)}
+  .mb.sel{box-shadow:inset 0 0 0 3px var(--ink2)}
+  .xx{display:flex;gap:5px;padding-top:5px}
+  .xx span{flex:1 1 0;text-align:center;font-family:var(--m);font-size:11px;color:var(--ink3)}
+  .lgd{display:flex;flex-wrap:wrap;gap:5px}
+  .lg{display:inline-flex;align-items:center;gap:6px;font-family:var(--m);font-size:12px;font-weight:700;color:var(--ink2);
+      border:1.5px solid var(--ln2);border-radius:4px;padding:2px 8px;background:var(--card)}
+  .lg i{width:11px;height:11px;border-radius:2px;background:var(--c);flex:none}
+  .ro{border:1.5px solid var(--ln2);border-radius:4px;background:var(--c2);padding:7px 11px;display:flex;flex-wrap:wrap;gap:7px;align-items:center;min-height:38px}
+  .ro .mo{font-size:14px;font-weight:700}
+  .ro .sg{display:inline-flex;align-items:center;gap:6px;font-family:var(--m);font-size:12px;color:var(--ink2);
+          background:var(--card);border:1.5px solid var(--ln2);border-radius:4px;padding:1px 7px}
+  .ro .sg i{width:9px;height:9px;border-radius:2px;background:var(--c);flex:none}
+  .ro .hint{font-size:13px;color:var(--ink3)}
+
+  /* agents */
+  .agent{border:2px solid var(--ai);border-radius:5px;background:var(--aibg);padding:11px 13px;display:flex;flex-direction:column;gap:9px}
+  .agent .hd{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .agent .tag{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--ai);
+              border:2px solid var(--ai);border-radius:4px;padding:3px 8px;background:var(--card)}
+  .agent .st{font-family:var(--m);font-size:12px;color:var(--ink2)}
+  .agent input{font:inherit;font-size:14px;flex:1 1 300px;min-width:0;padding:8px 11px;border:2px solid var(--ln);border-radius:4px;background:var(--card);color:var(--ink)}
+  .agent input:focus-visible{outline:none;border-color:var(--ai)}
+  .agent .go2{font-size:13.5px;font-weight:700;padding:9px 14px;border:2px solid var(--ai);background:var(--ai);color:#FFF;flex:none}
+  .ex{display:flex;gap:5px;flex-wrap:wrap}
+  .ex button{font-size:12px;padding:4px 9px;border:1px solid var(--ln);background:var(--card);color:var(--ink2)}
+  .ex button:hover{border-color:var(--ai);color:var(--ai)}
+
+  .ask{border:2px solid var(--mn);border-left-width:5px;border-radius:5px;background:var(--mnbg);padding:10px 13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .ask .tag{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--mn);border:2px solid var(--mn);border-radius:4px;padding:3px 8px;background:var(--card);flex:none}
+  .ask .q{font-size:13.5px;color:var(--ink2);flex:1 1 280px}
+  .ask .q b{color:var(--ink);font-family:var(--m);font-size:13px}
+  .ask button{font-size:13px;font-weight:700;padding:7px 12px;border:2px solid var(--mn);background:var(--card);color:var(--mn)}
+  .ask button:hover{background:var(--mn);color:#FFF}
+
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .pch{font-family:var(--m);font-size:12px;border:1.5px solid var(--ln2);border-radius:4px;padding:2px 8px;background:var(--card);color:var(--ink2)}
+  .pch.hot{border-color:var(--ai);color:var(--ai);font-weight:700}
+  .pch b{color:var(--ink)}
+
+  .diag{border:2px solid var(--bd);border-left-width:5px;border-radius:6px;background:var(--bdbg);
+        padding:14px 16px;display:flex;flex-direction:column;gap:9px;max-width:760px}
+  .diag .tag{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--bd);
+             border:2px solid var(--bd);border-radius:4px;padding:3px 8px;background:var(--card);align-self:flex-start}
+  .diag h3{margin:0;font-size:16px;font-weight:700;color:var(--bd)}
+  .diag p{margin:0;font-size:14px;color:var(--ink2)}
+  .conf{background:var(--card);border:1px solid var(--ln);border-radius:4px;padding:9px 12px;
+        display:flex;flex-direction:column;gap:4px}
+  .conf .cl{display:flex;gap:9px;align-items:baseline;font-size:13px;color:var(--ink2)}
+  .conf .cl b{font-family:var(--m);font-size:12.5px;color:var(--ink);flex:none;min-width:132px}
+  .fix{display:flex;flex-direction:column;gap:6px}
+  .fixb{text-align:left;font-size:14px;font-weight:700;padding:10px 14px;border-radius:4px;
+        border:2px solid var(--sv);background:var(--card);color:var(--sv)}
+  .fixb:hover{background:var(--sv);color:#FFF}
+  .fixb small{display:block;font-size:11.5px;font-weight:400;opacity:.85;margin-top:1px}
+  .fixb.on{background:var(--sv);color:#FFF}
+
+  .memo{border:2px solid var(--ai);border-left-width:5px;border-radius:6px;background:var(--card);
+        padding:16px 18px;display:flex;flex-direction:column;gap:11px;max-width:820px}
+  .memo .tag{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--ai)}
+  .memo h3{margin:0;font-size:16px;font-weight:700}
+  .memo ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:5px}
+  .memo li{font-size:14px;color:var(--ink2)}
+  .memo b{font-family:var(--m);font-size:13px;color:var(--ink)}
+  .memo .q{border-left:3px solid var(--ln);padding:4px 0 4px 13px;font-size:13.5px;color:var(--ink2);font-style:italic}
+  .memo .cp{align-self:flex-start;font-size:13px;font-weight:700;padding:8px 14px;border:2px solid var(--br);
+            background:var(--card);color:var(--br)}
+  .memo .cp:hover{background:var(--br);color:#FFF}
+
+  .scn{display:flex;flex-wrap:wrap;gap:6px}
+  .scn button{font-size:12.5px;padding:5px 11px;border:1.5px solid var(--ln);background:var(--card);color:var(--ink2)}
+  .scn button:hover{border-color:var(--ai);color:var(--ai)}
+  .scn button.on{border-color:var(--ai);background:var(--aibg);color:var(--ai);font-weight:700}
+  .delta{font-family:var(--m);font-weight:700}
+  .delta.up{color:var(--bd)}.delta.dn{color:var(--sv)}.delta.z{color:var(--ink3)}
+
+  .rep{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:6px}
+  .rc{border:1.5px solid var(--ln2);border-left:4px solid var(--sv);border-radius:4px;background:var(--card);padding:7px 10px;display:flex;flex-direction:column}
+  .rc .n{font-size:12.5px;font-weight:600}
+  .rc .s{font-family:var(--m);font-size:11px;color:var(--ink3)}
+
+  .ru{border:1.5px solid var(--ln2);border-radius:4px;background:var(--card);overflow:hidden;margin-bottom:5px}
+  .ru>button{width:100%;text-align:left;font-size:13.5px;font-weight:700;padding:8px 12px;border:0;border-radius:0;background:var(--c2);color:var(--ink);display:flex;gap:9px}
+  .ru>button:hover{background:var(--c3)}
+  .ru .mk2{font-family:var(--m);color:var(--br)}
+  .ru .bd{display:none;padding:9px 13px;font-size:13px;color:var(--ink2)}
+  .ru.op .bd{display:block}
+  .ru .bd ul{margin:0;padding-left:19px;display:flex;flex-direction:column;gap:4px}
+  .ru .bd code{font-family:var(--m);font-size:12px;background:var(--c2);border:1px solid var(--ln2);border-radius:3px;padding:0 5px;color:var(--ink)}
+
+  .pstat{display:flex;align-items:center;gap:8px 6px;flex-wrap:wrap;font-size:13.5px;color:var(--ink2)}
+  .pstat b{font-family:var(--m);font-size:15px}
+  .pstat .gap{width:8px}
+  .pd{width:9px;height:9px;border-radius:50%;background:var(--c);display:inline-block;flex:none}
+
+  .qwrap{max-width:660px;display:flex;flex-direction:column;gap:8px}
+  .qnum{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--mn)}
+  .qcard{border:2px solid var(--mn);border-radius:6px;background:var(--card);overflow:hidden;
+         box-shadow:0 8px 26px -16px rgba(166,106,0,.6)}
+  .qsrc{background:var(--mnbg);padding:10px 14px;display:flex;flex-direction:column;gap:5px;border-bottom:1px solid var(--ln)}
+  .qsrc .w{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mn)}
+  .qsrc .f{font-family:var(--m);font-size:12px;color:var(--ink2)}
+  .vraw{font-family:var(--m);font-size:14px;background:#FFF6D6;border:1.5px solid #D8AE1F;border-radius:3px;
+        padding:3px 9px;display:inline-block;align-self:flex-start}
+  .qbody{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+  .qbody .fld{font-size:12.5px;color:var(--ink3)}
+  .qbody .got{font-size:15px;font-weight:700}
+  .qbody .why{font-size:13.5px;color:var(--ink2);border-left:3px solid var(--mn);padding:2px 0 2px 10px}
+  .qbtns{display:flex;gap:8px;flex-wrap:wrap;padding:0 14px 14px}
+  .qbtn{font-size:14px;font-weight:700;padding:10px 16px;border-radius:4px;border:2px solid var(--ai);
+        background:var(--ai);color:#FFF;text-align:left}
+  .qbtn:hover{filter:brightness(1.1)}
+  .qbtn small{display:block;font-size:10.5px;font-weight:400;letter-spacing:.03em;opacity:.85;margin-top:1px}
+  .qbtn.alt{background:var(--card);color:var(--ink2);border-color:var(--ln)}
+  .qbtn.alt:hover{border-color:var(--ai);color:var(--ai);filter:none}
+  .qbtn.alt small{opacity:.7}
+
+  .drop{display:flex;flex-direction:column;align-items:center;gap:6px;padding:36px 20px;width:100%;
+        border:2px dashed var(--br);border-radius:8px;background:var(--brbg);color:var(--ink2);cursor:pointer}
+  .drop:hover{background:#DCEAFA}
+  .drop .di{font-size:32px;color:var(--br);line-height:1}
+  .drop .dt{font-size:16px;font-weight:700;color:var(--ink)}
+  .drop .ds{font-family:var(--m);font-size:12px;color:var(--ink3)}
+  .drop .ds2{font-size:13px;color:var(--ink2);max-width:52ch;text-align:center}
+
+  .steps{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+  .stp{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink2)}
+  .stp b{width:21px;height:21px;border-radius:50%;background:var(--c3);color:var(--ink2);
+         display:grid;place-items:center;font-size:11px;font-family:var(--m);flex:none}
+
+  .dstat{font-family:var(--m);font-size:11.5px;font-weight:700;white-space:nowrap}
+  .dstat.w{color:var(--ink3)}.dstat.k{color:var(--ok)}.dstat.u{color:var(--mn)}
+  .fixtype{font-size:11.5px;font-weight:700;padding:3px 8px;border:1.5px solid var(--mn);
+           background:var(--card);color:var(--mn);margin-left:7px}
+  .fixtype:hover{background:var(--mn);color:#FFF}
+
+  .done{border:2px solid var(--ok);border-radius:6px;background:#EAF6EF;padding:13px 16px;
+        display:flex;align-items:center;gap:12px;flex-wrap:wrap;max-width:660px}
+  .done .t{font-size:15px;font-weight:700;color:var(--ok)}
+  .done .s{font-size:13px;color:var(--ink2)}
+  .done button{font-size:14px;font-weight:700;padding:10px 16px;border:2px solid var(--br);
+               background:var(--br);color:#FFF;margin-left:auto}
+  .done button:hover{background:var(--br2)}
+
+  details.jrnl{border:1px solid var(--ln2);border-radius:4px;background:var(--c2)}
+  details.jrnl>summary{cursor:pointer;padding:9px 13px;font-size:13px;color:var(--ink2);font-weight:600;
+                       list-style:none;display:flex;align-items:center;gap:8px}
+  details.jrnl>summary::-webkit-details-marker{display:none}
+  details.jrnl>summary::before{content:"\25B8";font-family:var(--m);color:var(--ink3)}
+  details.jrnl[open]>summary::before{content:"\25BE"}
+  details.jrnl .in{padding:0 10px 10px}
+
+  .bars{height:7px;background:var(--ln2);border-radius:4px;overflow:hidden;min-width:80px}
+  .bars b{display:block;height:100%;background:var(--c);width:0;transition:width .7s ease}
+  .okb{display:inline-flex;font-family:var(--m);font-size:11px;font-weight:700;color:var(--ok);border:1.5px solid var(--ok);border-radius:3px;padding:0 6px}
+
+  .sbar{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:6px 14px;border-top:2px solid var(--ln);
+        background:var(--c2);font-family:var(--m);font-size:11.5px;color:var(--ink3)}
+  .sbar .s1{display:inline-flex;align-items:center;gap:6px;color:var(--ink2)}
+  .sbar .s1 i{width:8px;height:8px;border-radius:50%;background:var(--ink3)}
+  .sbar .s1.ok{color:var(--ok)}.sbar .s1.ok i{background:var(--ok)}
+  .sbar .sp{flex:1 1 auto}
+
+  @media (max-width:1100px){.body{grid-template-columns:1fr}.nav{border-right:0;border-bottom:2px solid var(--ln)}.split{grid-template-columns:1fr}}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap"><div class="app">
+
+  <div class="bar">
+    <span class="mk">C</span><span class="wm">CML <em>·</em> Планирование ФОТ</span>
+    <span class="sp"></span>
+    <button class="run" id="run" type="button">Рассчитать план</button>
+  </div>
+
+  <div class="body">
+    <nav class="nav" id="nav"></nav>
+    <div class="cont">
+      <div class="ch"><h2 id="h2"></h2><span class="sub" id="sub"></span></div>
+      <div class="cb" id="cb"></div>
+    </div>
+  </div>
+
+  <div class="sbar">
+    <span class="s1" id="st"><i></i>Решатель не запускался</span>
+    <span id="stv"></span><span class="sp"></span>
+    <span>HiGHS · MIP</span><span>2026</span>
+  </div>
+
+</div></div>
+
+<script>
+(function(){
+"use strict";
+var MON=["Янв","Фев","Мар","Апр","Май","Июн","Июл","Авг","Сен","Окт","Ноя","Дек"];
+var seed=20260813;
+function rnd(){seed=(seed*1664525+1013904223)%4294967296;return seed/4294967296;}
+function ri(a,b){return a+Math.floor(rnd()*(b-a+1));}
+function mo(v){return String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g," ");}
+function mln(v){return (v/1e6).toFixed(1).replace(".",",")+" млн";}
+var $=function(i){return document.getElementById(i);};
+
+var KINDS=[{id:"okl",n:"оклад",c:"var(--k1)"},{id:"a122",n:"122",c:"var(--k2)"},
+           {id:"a124",n:"124",c:"var(--k3)"},{id:"a152",n:"152",c:"var(--k4)"},
+           {id:"a120",n:"120",c:"var(--k5)"},{id:"prk",n:"приказ",c:"var(--k6)"}];
+
+var TYPES={
+ goz:{n:"ГОЗ",c:"var(--tg)",allow:{okl:1,a120:1,a122:1,a124:0,a152:0,prk:0},after:0},
+ gr :{n:"Грант",c:"var(--tr)",allow:{okl:1,a120:0,a122:1,a124:0,a152:1,prk:0},after:2},
+ vb :{n:"Внебюджет",c:"var(--tv)",allow:{okl:1,a120:0,a122:0,a124:1,a152:1,prk:1},after:2},
+ gz :{n:"Госзадание",c:"var(--tz)",allow:{okl:1,a120:1,a122:1,a124:1,a152:0,prk:0},after:1}};
+
+/* справочник должностей — значения из defaults/ репозитория */
+var POS=[
+ ["аналитик","НТП","3.247н",3,1,40400,110000],["ведущий аналитик","НТП","3.247н",3,4,47000,140000],
+ ["ведущий инженер","НТП","3.247н",3,4,47000,140000],["ведущий научный сотрудник","НР","5.305н",1,3,97100,140000],
+ ["ведущий программист","НТП","3.247н",3,4,47000,140000],["ведущий специалист","НТП","3.247н",3,4,47000,140000],
+ ["главный инженер проекта","НТП","5.305н",3,4,64100,175000],["главный научный сотрудник","НР","5.305н",1,4,133300,175000],
+ ["главный специалист","НТП","3.247н",3,5,64100,175000],["директор","ППС","3.247н",4,3,130700,175000],
+ ["директор центра","АУП","5.305н",1,2,64100,null],["заведующий лабораторией","НР","5.305н",4,4,115900,null],
+ ["инженер","НТП","3.247н",3,1,40400,110000],["инженер 1 категории","НТП","3.247н",3,3,44200,120000],
+ ["инженер 2 категории","НТП","3.247н",3,2,42100,120000],["старший научный сотрудник","НР","5.305н",1,2,74100,120000],
+ ["программист","НТП","3.247н",3,1,40400,110000],["специалист","НТП","3.247н",3,1,38900,null]];
+var P4={"НТП":149648.90,"НР":257643.19,"ППС":null,"АУП":null};
+
+var NORMS=[
+ ["1.1","среднемесячная заработная плата основных работников (БЭП)","руб.","112 261","Письмо 550 ВП МО РФ"],
+ ["1.2","дополнительная заработная плата основных работников","%","8,69","форма 10 (10д)"],
+ ["1.3","дополнительная заработная плата ИТР и научных работников","%","11,31","приказ об отпускном фонде"],
+ ["1.4","дополнительная заработная плата ППС","%","24,88","приказ об отпускном фонде"],
+ ["2","отчисления от фонда оплаты труда","%","30,2","НК РФ"],
+ ["2.1","страховые взносы","%","30,0","НК РФ"],
+ ["2.2","страхование от несчастных случаев","%","0,2","уведомление ФСС"],
+ ["3","общехозяйственные затраты / база распределения","%","60,65","Письмо 550 ВП МО РФ"],
+ ["4","среднемесячное количество рабочих часов, 2026","час","164,25","производственный календарь"],
+ ["5","среднемесячное количество рабочих часов, 2027","час","165,58","производственный календарь"],
+ ["6","регрессия страховых взносов свыше","руб.","2 979 000","НК РФ · далее 15,3 %"]];
+
+var SETTINGS=[["год","2026"],["разрешить дефицит","нет"],["макс договоров оклада в год","2"],
+ ["штраф смены договора оклада","500 000"],["штраф административной сложности выплат","50 000"],
+ ["штраф отклонения от равномерного освоения","10 000"],["штраф использования приказа","1 000 000"],
+ ["допуск трудоёмкости","0,05"],["штраф отклонения трудоёмкости","100 000"]];
+
+var FAM=["Иванов","Петров","Сидоров","Кузнецов","Смирнов","Попов","Волков","Соколов","Лебедев","Козлов",
+ "Новиков","Морозов","Орлов","Егоров","Павлов","Семёнов","Голубев","Виноградов","Богданов","Воробьёв"];
+var INI=["А. П.","С. М.","Д. И.","Е. В.","Н. К.","О. Л.","Р. А.","Т. С.","Ю. Н.","М. В."];
+var DEP=["Отдел НИОКР","Лаборатория 1","Лаборатория 2","КБ","Центр компетенций"];
+
+var CTR=[],EMP=[],LAB=[];
+(function(){
+ [["goz",5],["gr",6],["vb",6],["gz",3]].forEach(function(p){
+  for(var j=0;j<p[1];j++){
+   var t=TYPES[p[0]],fot=ri(6,18)*1e6,inf=[],m;
+   for(m=0;m<12;m++){
+    if(p[0]==="goz") inf.push(m%3===0?fot/4:0);
+    else if(p[0]==="gz") inf.push(m%6===0?fot/2:0);
+    else inf.push(fot/12);
+   }
+   CTR.push({code:({goz:"ГОЗ",gr:"ГР",vb:"ВБ",gz:"ГЗ"})[p[0]]+"-"+String(j+1).padStart(2,"0"),
+             key:p[0],t:t,fot:fot,inflow:inf,st:p[0]==="gr"?ri(0,2):0,en:p[0]==="gr"?ri(9,11):11,
+             num:({goz:"ГК",gr:"ГР",vb:"ВБ",gz:"ГЗ"})[p[0]]+"-2026/"+(j+1)});
+  }
+ });
+ for(var i=0;i<100;i++){
+  var pp=POS[ri(0,POS.length-1)],rate=rnd()<0.16?0.5:1.0,comb=rnd()<0.22;
+  var e={code:"E"+String(i+1).padStart(3,"0"),
+   fio:FAM[i%FAM.length]+" "+INI[Math.floor(i/FAM.length)%INI.length],
+   pos:pp[0],cat:pp[1],page:pp[2],grp:pp[3],lvl:pp[4],oklRef:pp[5],p2556:pp[6],
+   rate:rate,sal:Math.round(pp[5]*(1.9+rnd()*1.6)/100)*100*rate,
+   dep:DEP[ri(0,DEP.length-1)],from:(ri(0,3)===0?"01.0"+ri(2,4):"01.01")+".2026",comb:comb};
+  /* назначения определяет оптимизатор: должность назначения задаёт оклад */
+  e.asg=[{ctr:CTR[ri(0,CTR.length-1)].code,pos:pp[0],rate:rate,okl:pp[5],main:true}];
+  if(comb){
+   var alt=POS[ri(0,POS.length-1)];
+   for(var g=0;g<6&&alt[1]!==pp[1];g++) alt=POS[ri(0,POS.length-1)];
+   e.asg.push({ctr:CTR[ri(0,CTR.length-1)].code,pos:alt[0],rate:0.5,okl:alt[5],main:false});
+  }
+  e.rateAll=e.asg.reduce(function(a,x){return a+x.rate;},0);
+  e.oklAll=e.asg.reduce(function(a,x){return a+x.okl*x.rate;},0);
+  EMP.push(e);
+ }
+ var WORK=["Разработка технического предложения","Расчётные исследования","Изготовление макета",
+           "Испытания и обработка данных","Выпуск конструкторской документации","Оформление отчёта"];
+ CTR.forEach(function(c){
+  var ns=ri(2,4),span=Math.max(1,Math.floor((c.en-c.st+1)/ns));
+  c.stages=[];
+  for(var t=0;t<ns;t++){
+   var a=c.st+t*span,b=(t===ns-1)?c.en:Math.min(c.en,a+span-1);
+   c.stages.push({no:t+1,name:WORK[ri(0,WORK.length-1)],from:a,to:b});
+   var n=ri(1,3);
+   for(var k=0;k<n;k++){
+    var pp=POS[ri(0,POS.length-1)],people=ri(1,4),mpp=ri(2,8),cm=people*mpp;
+    LAB.push({ctr:c.code,stage:t+1,work:c.stages[t].name,from:a,to:b,pos:pp[0],cat:pp[1],
+              people:people,perMan:mpp,cm:cm,cost:Math.round(pp[5]*2.4/1000)*1000,unit:"мес"});
+   }
+  }
+ });
+})();
+
+var TSAL=EMP.reduce(function(a,e){return a+e.sal;},0)*12;
+var TFOT=CTR.reduce(function(a,c){return a+c.fot;},0);
+var CARRY=Math.round(TFOT*0.061);
+var MIX={okl:.42,a122:.24,a124:.16,a152:.09,a120:.05,prk:.04};
+var MONTH=[];for(var m0=0;m0<12;m0++){var kk=1+(m0===11?.06:0)+(m0===0?-.03:0),tt=TSAL/12*kk,r={tot:tt};
+ KINDS.forEach(function(K){r[K.id]=tt*MIX[K.id];});MONTH.push(r);}
+var MAXM=Math.max.apply(null,MONTH.map(function(r){return r.tot;}))*1.12;
+
+var solved=false,sec="ctr",selC=-1,selE=-1,selM=6,askLeft=0,fields=640,checked=612;
+var DOCS=null,pstate="empty",fieldsDone=0,ptimer=null;
+
+var SECS=[
+ {g:"Входные данные"},
+ {id:"parse",n:"Извлечение данных",z:"var(--ai)",badge:true},
+ {id:"ctr",n:"Договоры",z:"var(--tg)",c:function(){return CTR.length;}},
+ {id:"emp",n:"Штатное расписание",z:"var(--ink3)",c:function(){return EMP.length;}},
+ {id:"pos",n:"Должности и лимиты",z:"var(--ink3)",c:function(){return POS.length;}},
+ {id:"lab",n:"Этапы и трудоёмкость",z:"var(--ink3)",c:function(){return LAB.length;}},
+ {id:"nrm",n:"Нормативы года",z:"var(--ink3)",c:function(){return NORMS.length;}},
+ {g:"Настройка расчёта"},
+ {id:"cal",n:"Настройка параметров",z:"var(--ai)"},
+ {id:"what",n:"Сценарное моделирование",z:"var(--ai)"},
+ {id:"set",n:"Параметры оптимизатора",z:"var(--ink3)",c:function(){return SETTINGS.length;}},
+ {g:"Результат"},
+ {id:"plan",n:"План выплат",z:"var(--sv)"},
+ {id:"lim",n:"Ограничения",z:"var(--sv)",c:function(){return 7;}},
+ {id:"osv",n:"Освоение по договорам",z:"var(--sv)",c:function(){return CTR.length;}},
+ {id:"rep",n:"Отчёты Excel",z:"var(--sv)",c:function(){return 17;}},
+ {id:"diag",n:"Анализ невыполнимости",z:"var(--bd)"},
+ {id:"memo",n:"Пояснительные материалы",z:"var(--ai)"},
+ {g:"Сопровождение"},
+ {id:"fact",n:"Сверка плана и факта",z:"var(--ai)"},
+ {id:"norm",n:"Мониторинг нормативной базы",z:"var(--ai)",c:function(){return 3;}},
+ {g:"Справка"},
+ {id:"rul",n:"Правила расчёта",z:"var(--br)",c:function(){return 8;}}
+];
+
+function nav(){
+ var h="";
+ SECS.forEach(function(s){
+  if(s.g){h+='<span class="g">'+s.g+"</span>";return;}
+  var extra=s.badge&&askLeft?'<span class="bdg">'+askLeft+"</span>":(s.c?'<span class="c">'+s.c()+"</span>":"");
+  h+='<button class="nv'+(s.id===sec?" on":"")+'" style="--z:'+s.z+'" data-s="'+s.id+'" type="button"><i></i>'+s.n+extra+"</button>";
+ });
+ $("nav").innerHTML=h;
+ [].forEach.call($("nav").querySelectorAll(".nv"),function(b){
+  b.addEventListener("click",function(){sec=b.getAttribute("data-s");render();});
+ });
+}
+
+function tbl(head,rows,opts){
+ var h='<div class="scr"><table><thead><tr>';
+ head.forEach(function(c){h+="<th>"+c+"</th>";});
+ h+="</tr></thead><tbody>";
+ rows.forEach(function(r,i){
+  h+="<tr"+(opts&&opts.key?' data-k="'+i+'"':"")+(opts&&opts.sel===i?' class="sel"':"")+">";
+  r.forEach(function(c){h+=typeof c==="object"?'<td class="'+(c.cls||"")+'">'+c.v+"</td>":"<td>"+c+"</td>";});
+  h+="</tr>";
+ });
+ return h+"</tbody></table></div>";
+}
+
+var VIEWS={};
+
+var QUEST=[
+ {src:"РКМ по ГОЗ-03.xlsx",sh:"9 (9д) ОЗП НИР(ОКР)",cell:"G17",raw:"8 000",
+  field:"Стоимость чел.-мес · договор ГОЗ-03 · этап 1",
+  got:"8 000 ₽",
+  why:"Не сошлась формула самой формы: 18,0 чел.-мес × 8 000 = 144 000 ₽, а ОЗП в строке — 1 440 000 ₽. Похоже на потерянный разряд.",
+  rec:{t:"80 000 ₽",s:"рекомендуемое значение · восстановлено из ОЗП"},
+  alt:{t:"Оставить 8 000 ₽",s:"как в документе"},res:null},
+ {src:"Структура цены ГР-04.xlsx",sh:"Расшифровка ФОТ",cell:"D19",raw:"вед. инж.-исслед.",
+  field:"Должность · договор ГР-04 · этап 2",
+  got:"нет точного совпадения в справочнике",
+  why:"Похожи две должности с разными окладами и лимитами: ведущий инженер — 47 000 ₽, инженер-исследователь — 56 800 ₽.",
+  rec:{t:"Ведущий инженер",s:"рекомендуемое значение · ближе по написанию"},
+  alt:{t:"Инженер-исследователь",s:""},res:null},
+ {src:"РКМ по ГОЗ-01.xlsx",sh:"9 (9д) ОЗП НИР(ОКР)",cell:"D16",raw:"3 специалиста",
+  field:"Количество человек · договор ГОЗ-01 · этап 2",
+  got:"3 человека",
+  why:"ОЗП строки делится ровно на две части, а 12,0 чел.-мес на троих даёт дробное. Возможно, исполнителей двое.",
+  rec:{t:"2 человека",s:"рекомендуемое значение · по делению ОЗП"},
+  alt:{t:"3 человека",s:"как в документе"},res:null}];
+
+function jrnlRows(){
+ var rows=[];
+ QUEST.forEach(function(q){
+  if(q.res) rows.push([q.field,{v:q.res,cls:"n"},q.src,{v:q.cell,cls:"mono"},
+   {v:"решение экономиста",cls:"y"}]);
+ });
+ CTR.slice(0,9).forEach(function(c){
+  rows.push(["ФОТ договора · "+c.code,{v:mo(c.fot)+" ₽",cls:"n"},
+   "Структура цены "+c.code+".xlsx",{v:"C13",cls:"mono"},{v:"сумма по этапам сошлась",cls:"y"}]);
+  rows.push(["Этапы и сроки · "+c.code,{v:c.stages.length+" этапа",cls:"n"},
+   "Расшифровка ФОТ",{v:"J:K",cls:"mono"},{v:"даты внутри срока договора",cls:"y"}]);
+ });
+ return rows;
+}
+
+function makeDocs(){
+ DOCS=CTR.map(function(c){
+  var g=c.key==="goz";
+  return {name:(g?"РКМ по ":"Структура цены ")+c.code+".xlsx",
+    form:g?"РКМ · формы 9д, 22д, 23":"Структура цены + расшифровка ФОТ",
+    ctr:c.code,f:g?44:28,st:"wait"};
+ });
+ DOCS[11].bad=true;
+}
+
+function startParse(){
+ if(pstate==="running")return;
+ makeDocs();pstate="running";fieldsDone=0;askLeft=0;
+ QUEST.forEach(function(q){q.res=null;});
+ var i=0;
+ function step(){
+  if(i>=DOCS.length){
+   pstate="done";
+   askLeft=QUEST.filter(function(x){return !x.res;}).length;
+   render();return;
+  }
+  var d=DOCS[i];
+  if(d.bad){d.st="unk";}
+  else{d.st="ok";fieldsDone+=d.f;}
+  i++;render();
+  ptimer=setTimeout(step,110);
+ }
+ render();ptimer=setTimeout(step,350);
+}
+
+function docTable(){
+ return tbl(["файл","распознанная форма","договор","полей","статус"],DOCS.map(function(d,di){
+  var st;
+  if(d.st==="wait") st='<span class="dstat w">в очереди</span>';
+  else if(d.st==="ok") st='<span class="dstat k">✓ обработан</span>';
+  else st='<span class="dstat u">⚠ форма не распознана — нет маркера в шапке</span>'+
+        '<button type="button" class="fixtype" data-i="'+di+'">Это структура цены</button>';
+  return [{v:d.name,cls:"mono"},d.st==="wait"?{v:"—",cls:"no"}:(d.st==="unk"?{v:"старый макет",cls:"no"}:d.form),
+   {v:d.st==="ok"?d.ctr:"—",cls:"mono"},
+   {v:d.st==="ok"?d.f:"—",cls:"n"},{v:st}];
+ }));
+}
+
+VIEWS.parse=function(){
+ var h="";
+
+ if(pstate==="empty"){
+  h+='<button type="button" class="drop" id="dropzone">'+
+   '<span class="di">⇪</span>'+
+   '<span class="dt">Перетащите файлы РКМ и структур цены</span>'+
+   '<span class="ds">или нажмите, чтобы выбрать · .xlsx · .xlsm</span>'+
+   '<span class="ds2">Форма определяется по маркеру в заголовке. Целевые показатели извлекаются и проверяются расчётными соотношениями самой формы</span>'+
+   "</button>";
+  h+='<div class="steps">'+
+   '<span class="stp"><b>1</b>Загрузите документы по договорам</span>'+
+   '<span class="stp"><b>2</b>Подтвердите спорные значения</span>'+
+   '<span class="stp"><b>3</b>Паспорта договоров передаются в расчёт</span></div>';
+  return h;
+ }
+
+ var doneDocs=DOCS.filter(function(d){return d.st==="ok";}).length;
+ var badDocs=DOCS.filter(function(d){return d.st==="unk";}).length;
+
+ if(pstate==="running"){
+  h+='<div class="pstat"><span class="pd" style="--c:var(--ai)"></span>'+
+   '<span>Обработка <b>'+(doneDocs+badDocs)+'</b> из <b>'+DOCS.length+
+   "</b> файлов · извлечено <b>"+fieldsDone+"</b> полей</span></div>";
+  h+=docTable();
+  return h;
+ }
+
+ var left=QUEST.filter(function(q){return !q.res;});
+ var doneN=QUEST.length-left.length;
+ var auto=fieldsDone-QUEST.length;
+
+ h+='<div class="pstat">'+
+  '<span class="pd" style="--c:var(--sv)"></span><span><b>'+auto+
+  '</b> полей приняты автоматически — арифметика форм сошлась</span><span class="gap"></span>'+
+  '<span class="pd" style="--c:var(--ai)"></span><span><b>'+doneN+'</b> решено экономистом</span><span class="gap"></span>'+
+  '<span class="pd" style="--c:var(--mn)"></span><span><b>'+(left.length+badDocs)+'</b> ожидают ответа</span></div>';
+
+ if(!left.length && !badDocs){
+  h+='<div class="done"><span class="t">✓ Все '+fieldsDone+' полей сверены</span>'+
+   '<span class="s">Паспорта '+doneDocs+' договоров готовы к расчёту</span>'+
+   '<button type="button" id="goplan">Рассчитать план</button></div>';
+ }
+
+ if(left.length){
+  var q=left[0],qi=QUEST.indexOf(q);
+  h+='<div class="qwrap"><span class="qnum">Вопрос '+(doneN+1)+' из '+QUEST.length+'</span>'+
+   '<div class="qcard">'+
+   '<div class="qsrc"><span class="w">В документе</span>'+
+   '<span class="f">'+q.src+' · лист «'+q.sh+'» · ячейка '+q.cell+'</span>'+
+   '<span class="vraw">'+q.raw+'</span></div>'+
+   '<div class="qbody"><span class="fld">'+q.field+'</span>'+
+   '<span class="got">Распознанное значение: '+q.got+'</span>'+
+   '<span class="why">'+q.why+'</span></div>'+
+   '<div class="qbtns">'+
+   '<button type="button" class="qbtn" data-q="'+qi+'" data-v="'+q.rec.t+'">'+q.rec.t+
+   (q.rec.s?'<small>'+q.rec.s+'</small>':'')+'</button>'+
+   '<button type="button" class="qbtn alt" data-q="'+qi+'" data-v="'+q.alt.t+'">'+q.alt.t+
+   (q.alt.s?'<small>'+q.alt.s+'</small>':'')+'</button>'+
+   '</div></div></div>';
+ }
+
+ h+='<span class="ttl">Документы · '+DOCS.length+"</span>"+docTable();
+
+ h+='<details class="jrnl"><summary>Журнал извлечения · показать все поля</summary><div class="in">'+
+  tbl(["поле","значение","документ","ячейка","проверка"],jrnlRows())+'</div></details>';
+ return h;
+};
+
+VIEWS.ctr=function(){
+ var rows=CTR.map(function(c){
+  return [{v:c.code,cls:"mono"},{v:'<span class="pill" style="--c:'+c.t.c+'">'+c.t.n+"</span>"},c.num,
+   MON[c.st]+"–"+MON[c.en],{v:mo(c.fot),cls:"n"},
+   {v:KINDS.map(function(K){return c.t.allow[K.id]?'<span class="ak y">'+K.n+"</span>":"";}).join(" ")},
+   {v:c.t.after?c.t.after+" мес":"—",cls:"n"}];
+ });
+ var h='<div class="split"><div>'+tbl(["код","тип","номер","срок 2026","ФОТ, ₽","разрешено","после оконч."],rows,{key:1,sel:selC})+"</div>";
+ h+='<div class="side" id="side"></div></div>';
+ return h;
+};
+
+function sideCtr(){
+ if(selC<0)return '<span class="ttl">Выберите договор</span>';
+ var c=CTR[selC],mx=Math.max.apply(null,c.inflow);
+ var lab=LAB.filter(function(l){return l.ctr===c.code;});
+ return '<div class="h" style="--c:'+c.t.c+'"><span class="cd">'+c.code+'</span><span class="pill" style="--c:'+c.t.c+'">'+c.t.n+"</span></div>"+
+  '<dl class="kv"><dt>номер</dt><dd>'+c.num+"</dd><dt>срок</dt><dd>"+MON[c.st]+" – "+MON[c.en]+" 2026</dd>"+
+  "<dt>ФОТ</dt><dd>"+mo(c.fot)+" ₽</dd><dt>выплаты после окончания</dt><dd>"+(c.t.after?c.t.after+" мес":"нет")+"</dd>"+
+  "<dt>строк трудоёмкости</dt><dd>"+lab.length+"</dd><dt>план, чел.-мес</dt><dd>"+
+  lab.reduce(function(a,l){return a+l.cm;},0)+"</dd></dl>"+
+  '<span class="ttl">Разрешённые виды выплат</span><div class="allow">'+
+  KINDS.map(function(K){return '<span class="ak '+(c.t.allow[K.id]?"y":"n")+'">'+K.n+"</span>";}).join("")+"</div>"+
+  '<span class="ttl">Поступления по месяцам</span><div class="spark" style="--c:'+c.t.c+'">'+
+  c.inflow.map(function(v){return '<i style="height:'+(mx?Math.max(4,v/mx*100):4)+'%"></i>';}).join("")+"</div>"+
+  '<div class="sx">'+MON.map(function(x){return "<span>"+x[0]+"</span>";}).join("")+"</div>"+
+  '<span class="ttl">Этапы</span><dl class="kv">'+
+  c.stages.map(function(t){return "<dt>Этап "+t.no+" · "+t.name+"</dt><dd>"+MON[t.from]+"–"+MON[t.to]+"</dd>";}).join("")+"</dl>"+
+  '<span class="ttl">Трудоёмкость по этапам</span><dl class="kv">'+
+  lab.map(function(l){return "<dt>Э"+l.stage+" · "+l.pos+"</dt><dd>"+l.people+" чел · "+l.cm+" чел.-мес</dd>";}).join("")+"</dl>";
+}
+
+VIEWS.emp=function(){
+ var rows=EMP.map(function(e){
+  return [{v:e.code,cls:"mono"},e.fio,e.pos,e.dep,
+   {v:String(e.rate).replace(".",","),cls:"n"},
+   {v:solved?String(e.rateAll).replace(".",","):'<span class="no">—</span>',cls:"n"},
+   {v:mo(e.sal),cls:"n"},{v:e.from,cls:"mono"},
+   {v:solved?e.asg.length:'<span class="no">—</span>',cls:"n"},
+   {v:solved?mo(e.oklAll):'<span class="no">определит расчёт</span>',cls:"n"}];
+ });
+ return '<div class="split"><div>'+
+  tbl(["код","ФИО","штатная должность","подразделение","штат. ставка","ставок всего",
+       "зарплата, ₽","приём","назначений","оклад итого, ₽"],rows,{key:1,sel:selE})+
+  '</div><div class="side" id="side"></div></div>';
+};
+
+function sideEmp(){
+ if(selE<0)return '<span class="ttl">Выберите сотрудника</span>';
+ var e=EMP[selE];
+ var h='<div class="h" style="--c:var(--ai)"><span class="cd">'+e.code+
+  '</span><span class="pill" style="--c:var(--ai)">'+e.cat+"</span></div>"+
+  '<dl class="kv"><dt>ФИО</dt><dd>'+e.fio+"</dd>"+
+  "<dt>штатная должность</dt><dd>"+e.pos+"</dd>"+
+  "<dt>подразделение</dt><dd>"+e.dep+"</dd>"+
+  "<dt>штатная ставка</dt><dd>"+String(e.rate).replace(".",",")+"</dd>"+
+  "<dt>зарплата в месяц</dt><dd>"+mo(e.sal)+" ₽</dd>"+
+  "<dt>дата приёма</dt><dd>"+e.from+"</dd>"+
+  "<dt>окладная группа</dt><dd>"+e.page+" / "+e.grp+" / "+e.lvl+"</dd>"+
+  "<dt>оклад штатной должности</dt><dd>"+mo(e.oklRef)+" ₽ за 1,0</dd>"+
+  "<dt>П2556</dt><dd>"+(e.p2556?mo(e.p2556)+" ₽":"—")+"</dd>"+
+  "<dt>П4 · "+e.cat+"</dt><dd>"+(P4[e.cat]?mo(P4[e.cat])+" ₽":"—")+"</dd></dl>";
+
+ h+='<span class="ttl">Назначения · должность определяет оклад</span>';
+ if(!solved){
+  h+='<div class="ro"><span class="hint">Должности назначения определяются в ходе расчёта</span></div>';
+  return h;
+ }
+ h+='<div class="scr" style="max-height:none"><table><thead><tr><th>договор</th><th>должность назначения</th>'+
+    "<th>ставка</th><th>оклад, ₽</th></tr></thead><tbody>"+
+  e.asg.map(function(a){
+   return '<tr><td class="mono">'+a.ctr+"</td><td>"+a.pos+
+    (a.pos!==e.pos?' <span class="pill" style="--c:var(--ai)">взаимозам.</span>':"")+
+    '</td><td class="n">'+String(a.rate).replace(".",",")+'</td><td class="n">'+mo(a.okl*a.rate)+"</td></tr>";
+  }).join("")+
+  '<tr><td></td><td><b>итого</b></td><td class="n"><b>'+String(e.rateAll).replace(".",",")+
+  '</b></td><td class="n"><b>'+mo(e.oklAll)+"</b></td></tr></tbody></table></div>";
+
+ var rest=Math.max(0,e.sal-e.oklAll);
+ var parts=[["оклад по назначениям",e.oklAll],["122 надбавка",rest*0.52],
+            ["124 надбавка",rest*0.28],["152 надбавка",rest*0.20]];
+ h+='<span class="ttl">Как складывается зарплата</span><dl class="kv">'+
+  parts.map(function(x){return "<dt>"+x[0]+"</dt><dd>"+mo(x[1])+" ₽</dd>";}).join("")+
+  "<dt><b>итого</b></dt><dd><b>"+mo(e.sal)+" ₽</b></dd></dl>";
+ return h;
+}
+
+VIEWS.pos=function(){
+ return tbl(["должность","категория","страница","группа","уровень","оклад, ₽","П2556, ₽","П4, ₽"],
+  POS.map(function(p){
+   return [p[0],{v:'<span class="pill" style="--c:var(--ink2)">'+p[1]+"</span>"},{v:p[2],cls:"mono"},
+    {v:p[3],cls:"n"},{v:p[4],cls:"n"},{v:mo(p[5]),cls:"n"},
+    {v:p[6]?mo(p[6]):"—",cls:"n"},{v:P4[p[1]]?mo(P4[p[1]]):"—",cls:"n"}];
+  }));
+};
+
+VIEWS.lab=function(){
+ return '<span class="ttl">Строки трудоёмкости · структура как в форме 9д и расшифровке ФОТ</span>'+
+  tbl(["договор","этап","тип работ","срок","должность","кат.","человек","на 1 чел.","ед.","чел.-мес","стоимость чел.-мес, ₽","сумма, ₽"],
+  LAB.map(function(l){
+   return [{v:l.ctr,cls:"mono"},{v:l.stage,cls:"n"},l.work,{v:MON[l.from]+"–"+MON[l.to],cls:"mono"},
+    l.pos,{v:'<span class="pill" style="--c:var(--ink2)">'+l.cat+"</span>"},
+    {v:l.people,cls:"n"},{v:l.perMan,cls:"n"},{v:l.unit,cls:"mono"},{v:l.cm,cls:"n"},
+    {v:mo(l.cost),cls:"n"},{v:mo(l.cm*l.cost),cls:"n"}];
+  }));
+};
+
+VIEWS.nrm=function(){
+ return '<span class="ttl">Нормативы и экономические показатели организации · применяются ко всем договорам</span>'+
+  tbl(["№","показатель","ед.","значение","основание"],NORMS.map(function(n){
+   return [{v:n[0],cls:"mono"},n[1],{v:n[2],cls:"mono"},{v:n[3],cls:"n"},{v:n[4],cls:""}];
+  }));
+};
+
+VIEWS.set=function(){
+ return tbl(["параметр","значение","назначение"],SETTINGS.map(function(s,i){
+  var d=["год планирования","вернуть частичный план вместо невыполнимости","источников оклада на сотрудника",
+   "цена смены источника оклада","лишние связки сотрудник-договор","неравномерное расходование ФОТ",
+   "приказ как крайний инструмент","допустимое отклонение чел.-мес","вес мягкого отклонения"][i];
+  return [s[0],{v:s[1],cls:"n"},d];
+ }));
+};
+
+var PRESETS=[
+ {re:/приказ/i,ch:[["штраф использования приказа","3 000 000"],["макс договоров оклада","2"],["допуск трудоёмкости","0,05"]]},
+ {re:/гоз|равномер/i,ch:[["штраф отклонения от равномерного освоения","60 000"],["мин. остаток ГОЗ","0"],["допуск трудоёмкости","0,03"]]},
+ {re:/оклад|мен/i,ch:[["штраф смены договора оклада","2 000 000"],["макс договоров оклада","1"],["штраф админ. сложности","150 000"]]}];
+var curChips=SETTINGS.slice(3).map(function(s){return [s[0],s[1]];}),chipsHot=false;
+
+VIEWS.cal=function(){
+ return '<div class="agent"><div class="hd"><span class="tag">ИИ-агент № 2</span>'+
+  '<span class="st">преобразует требование специалиста в веса целевой функции</span></div>'+
+  '<div class="hd"><input id="q" type="text" placeholder="Например: обеспечить равномерное освоение ГОЗ и минимизировать выплаты по приказу" aria-label="Запрос">'+
+  '<button class="go2" id="setb" type="button">Подобрать параметры</button></div>'+
+  '<div class="ex"><button type="button" data-q="минимизировать приказы">минимизировать приказы</button>'+
+  '<button type="button" data-q="равномерное освоение ГОЗ">равномерное освоение ГОЗ</button>'+
+  '<button type="button" data-q="сохранить договор оклада">сохранить договор оклада</button></div></div>'+
+  '<span class="ttl">Подобранные параметры</span><div class="chips">'+
+  curChips.map(function(p){return '<span class="pch'+(chipsHot?" hot":"")+'">'+p[0]+" <b>"+p[1]+"</b></span>";}).join("")+"</div>";
+};
+
+VIEWS.plan=function(){
+ var ticks=[0,5e6,10e6,15e6,20e6].filter(function(t){return t<=MAXM;});
+ var h='<div class="kpi">'+
+  kc("Строк плана",solved?mo(2880):"—","сотрудник × месяц × выплата",solved?"":"m")+
+  kc("Освоено ФОТ",solved?mln(TSAL):"—","из "+mln(TFOT),solved?"a":"m")+
+  kc("Переходит на 2027",solved?mln(CARRY):"—","легально, до 2 мес",solved?"w":"m")+
+  kc("Дефицит",solved?"0":"—","нарушений нет",solved?"a":"m")+
+  kc("Нарушено лимитов",solved?"0":"—","П2556 · П4 · БЭП",solved?"a":"m")+
+  kc("Переменных модели",solved?mo(14400):"—","бинарных 2 880",solved?"":"m")+"</div>";
+ h+='<div class="lgd">'+KINDS.map(function(K){return '<span class="lg" style="--c:'+K.c+'"><i></i>'+K.n+"</span>";}).join("")+"</div>";
+ h+='<div class="cg"><div class="yx"><span class="u">млн ₽</span>'+
+  ticks.map(function(t){return '<span style="bottom:'+(t/MAXM*100)+'%">'+(t/1e6)+"</span>";}).join("")+"</div><div class=\"pl\" id=\"pl\">"+
+  ticks.map(function(t){return '<div class="tk" style="bottom:'+(t/MAXM*100)+'%"></div>';}).join("")+
+  MONTH.map(function(r,i){
+   return '<button class="mb'+(solved?" gr":"")+(i===selM?" sel":"")+'" data-m="'+i+'" type="button" aria-label="'+MON[i]+'">'+
+    KINDS.slice().reverse().map(function(K){return '<span style="--c:'+K.c+";height:"+(r[K.id]/MAXM*100)+'%"></span>';}).join("")+"</button>";
+  }).join("")+'</div></div><div class="cg"><div></div><div class="xx">'+
+  MON.map(function(x){return "<span>"+x+"</span>";}).join("")+"</div></div>";
+ if(solved){
+  var r2=MONTH[selM];
+  h+='<div class="ro"><span class="mo">'+MON[selM]+"</span>"+
+   KINDS.map(function(K){return '<span class="sg" style="--c:'+K.c+'"><i></i>'+K.n+" "+mo(r2[K.id])+" ₽</span>";}).join("")+
+   '<span class="sg">= '+mo(r2.tot)+" ₽</span></div>";
+ } else h+='<div class="ro"><span class="hint">План появится после расчёта</span></div>';
+ return h;
+};
+function kc(n,v,s,c){return '<div><span class="n">'+n+'</span><span class="v '+(c||"")+'">'+v+'</span><span class="s">'+s+"</span></div>";}
+
+var LIMS=[["П2556 · оклад + 122 ≤ лимит × ставка","1 200","запас 18 %",82],
+ ["П4 · предел по категории персонала","1 200","запас 7 %",93],
+ ["БЭП · средняя штатная часть по ГОЗ","60","запас 11 %",89],
+ ["Касса договора · остаток ≥ 0","240","мин. 0,4 млн",96],
+ ["Трудоёмкость · чел.-мес план-факт","74","отклонение 1,8 %",98],
+ ["Ставки · совм. ≤ 0,5 · всего ≤ 1,5","1 200","22 совместительства",74],
+ ["Разрешённые виды выплат по договору","2 880","6 видов · 20 договоров",100]];
+VIEWS.lim=function(){
+ return '<span class="ttl">Жёсткие ограничения · выполняются по построению модели</span>'+
+  tbl(["ограничение","проверок","нарушений","запас","использовано"],LIMS.map(function(L){
+   return [L[0],{v:L[1],cls:"n"},{v:'<span class="okb">0</span>'},{v:L[2],cls:"n"},
+    {v:'<div class="bars" style="--c:var(--sv)"><b style="width:'+(solved?L[3]:0)+'%"></b></div>'}];
+  }));
+};
+
+VIEWS.osv=function(){
+ return tbl(["договор","тип","ФОТ, ₽","освоено, ₽","остаток, ₽","на 2027, ₽","освоение"],CTR.map(function(c){
+  var used=solved?c.fot*(0.82+(c.fot%7)/100):0,rest=c.fot-used,next=c.t.after?rest*0.6:0;
+  return [{v:c.code,cls:"mono"},{v:'<span class="pill" style="--c:'+c.t.c+'">'+c.t.n+"</span>"},
+   {v:mo(c.fot),cls:"n"},{v:solved?mo(used):"—",cls:"n"},{v:solved?mo(rest):"—",cls:"n"},
+   {v:solved?mo(next):"—",cls:"n"},
+   {v:'<div class="bars" style="--c:'+c.t.c+'"><b style="width:'+(solved?(used/c.fot*100).toFixed(0):0)+'%"></b></div>'}];
+ }));
+};
+
+var REPS=[["Как читать файл","навигация"],["Итог расчета","15 показателей"],["Проблемы и предупреждения","3 записи"],
+ ["Выплаты по сотрудникам","100 × 12"],["Выплаты по договорам","20 × 12"],["Остатки по договорам","касса помесячно"],
+ ["Освоение план-факт","20 договоров"],["Контроль трудоёмкости","74 строки"],["План выплат","2 880 строк"],
+ ["Выплаты по трудоёмкости","отнесение сумм"],["Контроль должностей","совместимость"],
+ ["Административная сложность","связки и смены"],["Проверка дробления выплат","0 дроблений"],
+ ["Смены схемы выплат","0 смен"],["Дефициты","пусто"],["Дефициты по месяцам","пусто"],["ШР_детализация","назначения"]];
+/* ---------- сценарии «что если» ---------- */
+var SCEN=[
+ {q:"Сокращение фонда по ГОЗ на 15 %",
+  rows:[["Всего выплат за год","192,1 млн","163,3 млн",-28.8],
+        ["Дефицит","0","4,1 млн",4.1],
+        ["Сотрудников с дефицитом","0","7",7],
+        ["Переходит на 2027","12,3 млн","2,1 млн",-10.2],
+        ["Смен договора оклада","0","6",6]],
+  note:"Дефицит возникает с сентября. Отнесение выплат 124 и 152 на внебюджетные договоры покрывает 3,4 млн ₽ из 4,1 млн ₽."},
+ {q:"Увольнение Иванова И. И. в июне",
+  rows:[["Всего выплат за год","192,1 млн","189,4 млн",-2.7],
+        ["Дефицит","0","0",0],
+        ["Строк трудоёмкости с отклонением","0","2",2],
+        ["Смен договора оклада","0","3",3],
+        ["Связок сотрудник–договор","148","151",3]],
+  note:"По строке трудоёмкости ГОЗ-02 «ведущий инженер» недобор составляет 4,0 чел.-мес. Строка закрывается сотрудником Козловым Д. И. из совместимой окладной группы."},
+ {q:"Перенос поступления по ГОЗ-01 на месяц",
+  rows:[["Всего выплат за год","192,1 млн","192,1 млн",0],
+        ["Дефицит","0","0",0],
+        ["Месяцев с нулевой кассой","0","1",1],
+        ["Штраф неравномерного освоения","низкий","повышен",1],
+        ["Переходит на 2027","12,3 млн","12,3 млн",0]],
+  note:"План сохранён. В апреле остаток кассы равен нулю: резерв отсутствует, любая задержка поступления повлечёт дефицит."}];
+var scenSel=-1;
+
+VIEWS.what=function(){
+ var h='<div class="agent"><div class="hd"><span class="tag">ИИ-агент № 4</span>'+
+  '<span class="st">формирует изменённые исходные данные, выполняет расчёт и сопоставляет с базовым планом</span></div>'+
+  '<div class="hd"><input id="wq" type="text" placeholder="Например: сокращение фонда по договорам ГОЗ на 15 %" aria-label="Сценарий">'+
+  '<button class="go2" id="wgo" type="button">Пересчитать</button></div>'+
+  '<div class="scn">'+SCEN.map(function(x,i){
+   return '<button type="button" class="wsc'+(i===scenSel?" on":"")+'" data-i="'+i+'">'+x.q+"</button>";
+  }).join("")+"</div></div>";
+ if(scenSel<0){
+  h+='<div class="ro"><span class="hint">Выберите сценарий или сформулируйте требование — исходные данные будут изменены и расчёт выполнен повторно</span></div>';
+  return h;
+ }
+ var sc=SCEN[scenSel];
+ h+='<span class="ttl">'+sc.q+" · базовый план против нового</span>"+
+  tbl(["показатель","сейчас","в сценарии","разница"],sc.rows.map(function(r){
+   var d=r[3],cls=d>0?"up":(d<0?"dn":"z");
+   var txt=d===0?"без изменений":(d>0?"+":"")+String(d).replace(".",",");
+   return [r[0],{v:r[1],cls:"n"},{v:r[2],cls:"n"},{v:'<span class="delta '+cls+'">'+txt+"</span>",cls:"n"}];
+  }));
+ h+='<div class="memo"><span class="tag">Заключение ИИ-агента</span><p style="margin:0;font-size:14px;color:var(--ink2)">'+
+  sc.note+"</p></div>";
+ return h;
+};
+
+/* ---------- диагноз недопустимости ---------- */
+var diagFix=-1;
+VIEWS.diag=function(){
+ var h='<div class="diag"><span class="tag">ИИ-агент № 3</span>'+
+  "<h3>Задача не имеет допустимого решения · март 2026</h3>"+
+  '<p>Солвер вернул <b>INFEASIBLE</b>. Определён минимальный набор взаимно противоречивых ограничений — вместе они невыполнимы, любое из них по отдельности снимает конфликт.</p>'+
+  '<div class="conf">'+
+   '<span class="cl"><b>Полнота выплаты</b>Петрову С. М. за март нужно 160 000 ₽</span>'+
+   '<span class="cl"><b>Виды выплат</b>ГР-04 разрешает только оклад и 122</span>'+
+   '<span class="cl"><b>П2556</b>оклад + 122 ≤ 140 000 ₽ при ставке 1,0</span>'+
+   '<span class="cl"><b>Запрет договоров</b>124 и 152 доступны только на ВБ-02, где касса в марте равна 0</span>'+
+  "</div>"+
+  '<p>Величина разрыва — <b>20 000 ₽</b>. Варианты устранения противоречия:</p>'+
+  '<div class="fix">'+
+   '<button type="button" class="fixb'+(diagFix===0?" on":"")+'" data-f="0">Сдвинуть поступление по ВБ-02 с апреля на март<small>освобождает 124 на 20 000 ₽ · касса апреля остаётся положительной</small></button>'+
+   '<button type="button" class="fixb'+(diagFix===1?" on":"")+'" data-f="1">Открыть Петрову 0,25 ставки на ГЗ-01<small>поднимает потолок П2556 до 175 000 ₽ · требует согласования кадров</small></button>'+
+   '<button type="button" class="fixb'+(diagFix===2?" on":"")+'" data-f="2">Разрешить стимулирующую приказом на ГР-04<small>закрывает разрыв целиком · штраф целевой функции 1 000 000</small></button>'+
+  "</div></div>";
+ if(diagFix>=0){
+  h+='<div class="done"><span class="t">✓ Противоречие устранено</span>'+
+   '<span class="s">Задача стала разрешимой · выполните повторный расчёт</span>'+
+   '<button type="button" id="goplan">Пересчитать</button></div>';
+ }
+ return h;
+};
+
+/* ---------- объяснение и записка ---------- */
+VIEWS.memo=function(){
+ if(!solved) return '<div class="ro"><span class="hint">Материалы формируются по результатам расчёта — выполните расчёт</span></div>';
+ return '<div class="memo"><span class="tag">Сформировано по результатам расчёта</span>'+
+  "<h3>Что получилось</h3><ul>"+
+  "<li>Освоено <b>192,1 млн ₽</b> из <b>202,0 млн ₽</b> фонда 20 договоров, дефицита нет.</li>"+
+  "<li>На 2027 год переходит <b>12,3 млн ₽</b> — по договорам, разрешающим выплаты до двух месяцев после окончания.</li>"+
+  "<li>Лимиты П2556, П4 и БЭП соблюдены во всех 1 200 проверках, наименьший запас — <b>7 %</b> по П4.</li>"+
+  "</ul><h3>На что обратить внимание</h3><ul>"+
+  "<li>Касса ГОЗ-01 в апреле проходит по остатку <b>0,4 млн ₽</b>: задержка транша сразу даст дефицит.</li>"+
+  "<li>Стимулирующая приказом составила <b>4 %</b> фонда — применялась там, где надбавки упирались в П4.</li>"+
+  "</ul><h3>Формулировка для пояснительной записки</h3>"+
+  '<span class="q">Распределение фонда оплаты труда на 2026 год выполнено с соблюдением предельных размеров выплат, установленных приказами № 2556 и № 4, а также среднего уровня оплаты труда основных работников по договорам государственного оборонного заказа. Неосвоенный остаток в размере 12,3 млн рублей относится к договорам, условиями которых предусмотрены выплаты в течение двух месяцев после завершения работ.</span>'+
+  '<button type="button" class="cp">Скопировать текст</button></div>';
+};
+
+/* ---------- сверка факта ---------- */
+var factLoaded=false;
+VIEWS.fact=function(){
+ if(!factLoaded){
+  return '<button type="button" class="drop" id="factdrop">'+
+   '<span class="di">⇪</span><span class="dt">Загрузите выгрузку начислений за месяц</span>'+
+   '<span class="ds">1С · .xlsx · .csv</span>'+
+   '<span class="ds2">Строки выгрузки сопоставляются с плановыми: написание фамилий различается, коды сотрудников совпадают не всегда, часть выплат в плане отсутствует</span></button>';
+ }
+ var h='<div class="pstat">'+
+  '<span class="pd" style="--c:var(--sv)"></span><span><b>96</b> строк сопоставлены однозначно</span><span class="gap"></span>'+
+  '<span class="pd" style="--c:var(--mn)"></span><span><b>3</b> требуют решения</span><span class="gap"></span>'+
+  '<span class="pd" style="--c:var(--bd)"></span><span><b>1</b> выплата вне плана</span></div>';
+ h+=tbl(["строка выгрузки","сопоставлено с планом","план, ₽","факт, ₽","расхождение","статус"],[
+  ["Иванов И.И. · инженер","E001 · Иванов И. И.",{v:"160 000",cls:"n"},{v:"160 000",cls:"n"},{v:"0",cls:"n"},{v:"сошлось",cls:"y"}],
+  ["Петров С М · вед. инж.","E014 · Петров С. М.",{v:"148 000",cls:"n"},{v:"148 000",cls:"n"},{v:"0",cls:"n"},{v:"сошлось",cls:"y"}],
+  ["Сидорова Е.В.","E027 · Сидорова Е. В. · <b>две строки штатки</b>",{v:"74 000",cls:"n"},{v:"111 000",cls:"n"},{v:"+37 000",cls:"n"},{v:"уточнить",cls:"warn"}],
+  ["Козлов Д. И. (совм.)","E041 · Козлов Д. И. · совместительство",{v:"49 000",cls:"n"},{v:"49 000",cls:"n"},{v:"0",cls:"n"},{v:"сошлось",cls:"y"}],
+  ["Новиков А.П.","<b>нет в плане</b> · принят 15.03",{v:"—",cls:"n"},{v:"52 000",cls:"n"},{v:"+52 000",cls:"n"},{v:"вне плана",cls:"warn"}],
+  ["Морозова О.Л.","E063 · Морозов О. Л. · <b>род окончания</b>",{v:"88 000",cls:"n"},{v:"88 000",cls:"n"},{v:"0",cls:"n"},{v:"подтвердить",cls:"warn"}]
+ ]);
+ h+='<div class="memo"><span class="tag">Заключение ИИ-агента</span>'+
+  '<p style="margin:0;font-size:14px;color:var(--ink2)">Итоговая сумма выгрузки соответствует плановой с расхождением 89 000 ₽. Расхождение обусловлено двумя обстоятельствами: выплата по второй штатной строке Сидоровой Е. В. и приём Новикова А. П. 15 марта, не отражённый в штатном расписании. Обе позиции подлежат внесению до пересчёта остатка года.</p></div>';
+ return h;
+};
+
+/* ---------- нормативный контроль ---------- */
+VIEWS.norm=function(){
+ var h='<div class="agent"><div class="hd"><span class="tag">ИИ-агент № 7</span>'+
+  '<span class="st">контроль приказов и положения об оплате труда · последняя проверка сегодня</span></div></div>';
+ h+=tbl(["что изменилось","источник","в справочнике сейчас","предлагается","действие"],[
+  ["Предельный размер П4 для категории НТП","Приказ № 4 от 12.01.2026",{v:"149 648,90 ₽",cls:"n"},
+   {v:"156 200,00 ₽",cls:"n"},{v:"требует обновления",cls:"warn"}],
+  ["Оклад по должности «инженер 2 категории»","Положение об оплате труда, ред. 03.2026",{v:"42 100 ₽",cls:"n"},
+   {v:"44 900 ₽",cls:"n"},{v:"требует обновления",cls:"warn"}],
+  ["Новая должность «инженер-программист 1 кат.»","Штатное расписание от 01.02.2026",{v:"отсутствует",cls:"no"},
+   {v:"добавить в справочник",cls:""},{v:"требует решения",cls:"warn"}],
+  ["Среднемесячная зарплата основных работников","Письмо 550 ВП МО РФ от 25.05.2026",{v:"112 261 ₽",cls:"n"},
+   {v:"112 261 ₽",cls:"n"},{v:"актуально",cls:"y"}],
+  ["Отчисления от фонда оплаты труда","НК РФ",{v:"30,2 %",cls:"n"},{v:"30,2 %",cls:"n"},{v:"актуально",cls:"y"}]
+ ]);
+ h+='<div class="memo"><span class="tag">Заключение ИИ-агента</span>'+
+  '<p style="margin:0;font-size:14px;color:var(--ink2)">Расчёт за 2026 год выполнен с применением неактуального значения П4: предельный размер повышен приказом от 12 января, справочник не актуализирован. Три позиции из пяти требуют рассмотрения, две соответствуют действующим нормативам.</p></div>';
+ return h;
+};
+
+VIEWS.rep=function(){
+ return '<span class="ttl">Выходная книга Excel · '+REPS.length+" листов</span><div class=\"rep\">"+
+  REPS.map(function(r){return '<div class="rc"><span class="n">'+r[0]+'</span><span class="s">'+r[1]+"</span></div>";}).join("")+"</div>";
+};
+
+var RULES=[
+ ["Виды выплат и что их разрешает","<ul><li><code>оклад</code> — привязан к открытой ставке, договор должен его разрешать</li><li><code>120</code> — за гостайну, только в месяцы действия договора секретности</li><li><code>122</code> — за качество, входит в штатную часть <code>оклад + 122</code></li><li><code>124</code> — за интенсивность</li><li><code>152</code> — за дополнительную работу</li><li><code>стимулирующая приказом</code> — крайний инструмент, штраф 1 000 000</li></ul>"],
+ ["Открытые ставки и совместительство","<ul><li>шаг ставки <code>0,25</code></li><li>совместительство не более <code>0,5</code></li><li>суммарно на сотрудника не более <code>1,5</code></li><li>для студентов и аспирантов ограничения жёстче</li><li>договор может запретить основное место или совместительство</li></ul>"],
+ ["Лимиты по должностям","<ul><li><code>П2556</code>: оклад + 122 ≤ лимит должности × ставка</li><li><code>П4</code>: НТП 149 648,90 ₽, НР 257 643,19 ₽</li><li><code>БЭП</code>: средняя штатная часть по ГОЗ-договору за месяц</li><li>сотрудник может быть выше БЭП, если средняя по договору удержана</li></ul>"],
+ ["Касса договора","<ul><li><code>остаток на конец = остаток на начало + поступление − выплаты</code></li><li>неиспользованный остаток переносится только вперёд</li><li>часть договоров разрешает выплаты до 2 месяцев после окончания</li></ul>"],
+ ["Трудоёмкость","<ul><li>план в чел.-мес по договору, строке и должности</li><li>факт по открытым ставкам и выплатам</li><li>контроль средней стоимости чел.-мес</li><li>компенсация между строками внутри группы взаимозаменяемости</li></ul>"],
+ ["Оклад и назначения","<ul><li>оклад не хранится у сотрудника: справочник задаёт оклад <b>за 1,0 ставки по должности</b></li><li>оклад назначения = оклад должности × ставка этого назначения</li><li>при двух ставках у сотрудника два назначения и два оклада</li><li>должность назначения выбирает оптимизатор среди совместимых</li></ul>"],
+ ["Совместимость должностей","<ul><li>совпадает должность — сотрудник подходит</li><li>совпадает окладная группа <code>страница / группа / уровень</code> — тоже подходит</li><li>инженер может быть оформлен на договоре как <code>0,5 программист</code></li></ul>"],
+ ["Целевая функция","<ul><li>штраф смены договора оклада</li><li>штраф административной сложности выплат</li><li>штраф отклонения от равномерного освоения</li><li>штраф использования приказа</li><li>штраф отклонения трудоёмкости</li></ul>"]];
+VIEWS.rul=function(){
+ return '<span class="ttl">Правила, которые модель соблюдает одновременно</span><div>'+
+  RULES.map(function(r,i){return '<div class="ru'+(i===0?" op":"")+'"><button type="button" data-r="'+i+'"><span class="mk2">'+(i===0?"−":"+")+'</span>'+r[0]+'</button><div class="bd">'+r[1]+"</div></div>";}).join("")+"</div>";
+};
+
+var TITLES={parse:["Извлечение данных из документов","РКМ и структуры цены → паспорта договоров"],
+ ctr:["Договоры","20 договоров · 4 типа"],emp:["Штатное расписание","100 строк · оклад определяется назначением"],
+ pos:["Должности и лимиты","справочник · П2556 · П4"],lab:["Этапы и трудоёмкость","этап · должность · человек · чел.-мес"],
+ nrm:["Нормативы года","форма № 22 (22д) · организация · 2026"],
+ cal:["Настройка параметров расчёта","формирование весов целевой функции"],set:["Параметры оптимизатора","9 параметров"],
+ plan:["План выплат","12 месяцев · 6 видов выплат"],lim:["Ограничения","7 групп проверок"],
+ osv:["Освоение по договорам","план · факт · переход на 2027"],rep:["Отчёты Excel","17 листов"],
+ what:["Сценарное моделирование","расчёт вариантов и сопоставление с базовым планом"],
+ diag:["Анализ причин невыполнимости","определение конфликтующих ограничений"],
+ memo:["Пояснительные материалы","формирование текста по результатам расчёта"],
+ fact:["Сверка плана и факта","сопоставление начислений с плановыми показателями"],
+ norm:["Мониторинг нормативной базы","контроль актуальности справочных величин"],
+ rul:["Правила расчёта","8 разделов из документации сервиса"]};
+
+function render(){
+ nav();
+ $("h2").textContent=TITLES[sec][0];
+ $("sub").textContent=TITLES[sec][1];
+ $("cb").innerHTML=VIEWS[sec]();
+ var side=$("side");
+ if(side) side.innerHTML=sec==="ctr"?sideCtr():sideEmp();
+ wire();
+ 
+ $("stv").textContent=solved?"2 880 строк плана · 14 400 переменных":"";
+}
+
+function wire(){
+ [].forEach.call(document.querySelectorAll("tr[data-k]"),function(tr){
+  tr.addEventListener("click",function(){
+   var i=+tr.getAttribute("data-k");
+   if(sec==="ctr")selC=i;else selE=i;
+   render();
+  });
+ });
+ [].forEach.call(document.querySelectorAll(".mb"),function(b){
+  b.addEventListener("click",function(){selM=+b.getAttribute("data-m");render();});
+ });
+ [].forEach.call(document.querySelectorAll(".wsc"),function(b){
+  b.addEventListener("click",function(){scenSel=+b.getAttribute("data-i");render();});
+ });
+ var wg=$("wgo");
+ if(wg) wg.addEventListener("click",function(){ if(scenSel<0)scenSel=0; render(); });
+ [].forEach.call(document.querySelectorAll(".fixb"),function(b){
+  b.addEventListener("click",function(){diagFix=+b.getAttribute("data-f");render();});
+ });
+ var fd=$("factdrop");
+ if(fd) fd.addEventListener("click",function(){factLoaded=true;render();});
+ var dz=$("dropzone");
+ if(dz) dz.addEventListener("click",startParse);
+ [].forEach.call(document.querySelectorAll(".fixtype"),function(b){
+  b.addEventListener("click",function(){
+   var d=DOCS[+b.getAttribute("data-i")];
+   d.st="ok";d.form="Структура цены + расшифровка ФОТ (старый макет)";fieldsDone+=d.f;
+   render();
+  });
+ });
+ [].forEach.call(document.querySelectorAll(".qbtn"),function(b){
+  b.addEventListener("click",function(){
+   QUEST[+b.getAttribute("data-q")].res=b.getAttribute("data-v");
+   askLeft=QUEST.filter(function(x){return !x.res;}).length;
+   render();
+  });
+ });
+ [].forEach.call(document.querySelectorAll(".memo .cp"),function(b){
+  b.addEventListener("click",function(){
+   var q=b.parentNode.querySelector(".q");
+   var t=q?q.textContent.trim():"";
+   var done=function(){b.textContent="✓ Текст скопирован";
+    setTimeout(function(){b.textContent="Скопировать текст";},1800);};
+   if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(done,done);
+   } else {
+    var ta=document.createElement("textarea");
+    ta.value=t;document.body.appendChild(ta);ta.select();
+    try{document.execCommand("copy");}catch(e){}
+    document.body.removeChild(ta);done();
+   }
+  });
+ });
+ var gp=$("goplan");
+ if(gp) gp.addEventListener("click",function(){ $("run").click(); });
+ [].forEach.call(document.querySelectorAll(".ru>button"),function(b){
+  b.addEventListener("click",function(){
+   var box=b.parentNode;box.classList.toggle("op");
+   b.querySelector(".mk2").textContent=box.classList.contains("op")?"−":"+";
+  });
+ });
+ var sb=$("setb");
+ if(sb){
+  var go=function(){
+   var q=$("q").value||"",hit=null;
+   PRESETS.forEach(function(p){if(!hit&&p.re.test(q))hit=p;});
+   curChips=hit?hit.ch:SETTINGS.slice(3).map(function(s){return [s[0],s[1]];});
+   chipsHot=!!hit;render();
+  };
+  sb.addEventListener("click",go);
+  $("q").addEventListener("keydown",function(e){if(e.key==="Enter")go();});
+  [].forEach.call(document.querySelectorAll(".ex button"),function(b){
+   b.addEventListener("click",function(){$("q").value=b.getAttribute("data-q");go();});
+  });
+ }
+}
+
+$("run").addEventListener("click",function(){
+ var b=$("run");b.classList.add("busy");b.disabled=true;b.textContent="Расчёт…";
+ solved=false;$("st").className="s1";$("st").innerHTML="<i></i>Расчёт…";
+ sec="plan";render();
+ setTimeout(function(){
+  solved=true;render();
+  $("st").className="s1 ok";$("st").innerHTML="<i></i>OPTIMAL · дефицит 0 · нарушений 0";
+  b.classList.remove("busy");b.disabled=false;b.textContent="Пересчитать";
+ },900);
+});
+
+render();
+})();
+</script>
+</body>
+</html>

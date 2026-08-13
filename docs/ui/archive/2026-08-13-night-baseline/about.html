@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CML · Планирование ФОТ — как устроен сервис</title>
+</head>
+<body>
+<style>
+  :root{
+    --paper:#E7EDF5;--card:#FFF;--c2:#F4F7FC;--c3:#E8EFF7;
+    --ink:#0D2036;--ink2:#33506C;--ink3:#6A829B;
+    --ln:#BED1E3;--ln2:#DBE6F1;
+    --br:#1565C0;--brbg:#E4F0FC;
+    --ai:#6A3FBF;--aibg:#F2EBFD;
+    --sv:#0B7A78;--svbg:#DEF2F1;
+    --mn:#A66A00;--mnbg:#FCF1DB;
+    --ok:#12784C;--bd:#C0392B;
+    --f:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+    --m:Consolas,"SF Mono",ui-monospace,monospace;
+    color-scheme:light;
+  }
+  *{box-sizing:border-box}
+  html{background:#E7EDF5 !important;min-height:100%}
+  body{margin:0 !important;min-height:100vh;background:#E7EDF5 !important;color:var(--ink) !important;
+       font-family:var(--f);font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+
+  .wrap{max-width:1120px;margin:0 auto;padding:clamp(14px,2.4vw,30px) clamp(10px,2.2vw,26px) 60px;
+        display:flex;flex-direction:column;gap:clamp(20px,3vw,32px)}
+
+  header{background:var(--card);border:1px solid var(--ln);border-radius:6px;padding:20px 24px;
+         box-shadow:0 2px 4px rgba(13,32,54,.07)}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .brand .mk{width:28px;height:28px;border-radius:4px;background:var(--br);color:#FFF;font-family:var(--m);
+             font-size:13px;font-weight:700;display:grid;place-items:center}
+  .brand .wm{font-size:15px;font-weight:700}
+  .brand .wm em{font-style:normal;color:var(--ink3);font-weight:400}
+  h1{margin:0;font-size:clamp(23px,3.4vw,30px);line-height:1.15;letter-spacing:-.015em;text-wrap:balance}
+  header p{margin:12px 0 0;color:var(--ink2);max-width:74ch;font-size:16px}
+
+  section{background:var(--card);border:1px solid var(--ln);border-radius:6px;overflow:hidden;
+          box-shadow:0 2px 4px rgba(13,32,54,.07)}
+  .sh{padding:13px 22px;border-bottom:2px solid var(--ln);background:var(--c2);display:flex;
+      align-items:baseline;gap:12px;flex-wrap:wrap}
+  .sh h2{margin:0;font-size:19px;font-weight:700}
+  .sh .n{font-family:var(--m);font-size:12px;color:var(--ink3)}
+  .sb{padding:20px 22px;display:flex;flex-direction:column;gap:16px}
+
+  figure{margin:0}
+  .fig{overflow-x:auto}
+  svg{display:block;min-width:860px;width:100%;height:auto}
+  figcaption{margin-top:12px;font-size:13.5px;color:var(--ink2);border-top:1px solid var(--ln2);padding-top:11px}
+
+  .nbox{fill:var(--c2);stroke:var(--ln);stroke-width:1.5}
+  .nbox.ai{fill:var(--aibg);stroke:var(--ai)}
+  .nbox.sv{fill:var(--svbg);stroke:var(--sv)}
+  .nbox.mn{fill:var(--mnbg);stroke:var(--mn)}
+  .nbox.br{fill:var(--brbg);stroke:var(--br)}
+  .nbox.bd{fill:#FBEAE8;stroke:var(--bd)}
+  .t-bd{fill:var(--bd)}
+  .nt{font-family:var(--f);font-size:13px;font-weight:700;fill:var(--ink)}
+  .ns{font-family:var(--m);font-size:10.5px;fill:var(--ink3)}
+  .t-ai{fill:var(--ai)}.t-sv{fill:var(--sv)}.t-mn{fill:var(--mn)}.t-br{fill:var(--br)}
+  .edge{stroke:var(--ink3);stroke-width:1.6;fill:none}
+  .edge.dash{stroke-dasharray:5 4}
+  .el{font-family:var(--m);font-size:10.5px;fill:var(--ink3)}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(276px,1fr));gap:12px}
+  .card{border:2px solid var(--c);border-left-width:5px;border-radius:5px;background:var(--card);
+        padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+  .card .tag{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--c)}
+  .card h3{margin:0;font-size:16px;font-weight:700}
+  .card p{margin:0;font-size:14px;color:var(--ink2)}
+  .card .lbl{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);margin-top:2px}
+  .card ul{margin:0;padding-left:19px;display:flex;flex-direction:column;gap:4px}
+  .card li{font-size:13.5px;color:var(--ink2)}
+  .card code{font-family:var(--m);font-size:12.5px;background:var(--c2);border:1px solid var(--ln2);
+             border-radius:3px;padding:0 5px;color:var(--ink)}
+
+  .tw{overflow-x:auto;border:1px solid var(--ln);border-radius:4px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 11px;border-bottom:1px solid var(--ln2);vertical-align:top}
+  thead th{background:var(--c3);font-family:var(--m);font-size:10.5px;text-transform:uppercase;
+           letter-spacing:.05em;color:var(--ink2);font-weight:700;border-bottom:1px solid var(--ln);white-space:nowrap}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover td{background:var(--c2)}
+  td.mono{font-family:var(--m);font-size:12.5px;white-space:nowrap}
+  td.n{text-align:right;font-family:var(--m);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .who{display:inline-block;font-family:var(--m);font-size:10.5px;font-weight:700;border:1.5px solid var(--c);
+       color:var(--c);border-radius:3px;padding:0 6px;white-space:nowrap}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+  .blk{border:1px solid var(--ln2);border-radius:5px;background:var(--c2);padding:13px 15px;
+       display:flex;flex-direction:column;gap:7px}
+  .blk h3{margin:0;font-size:15px;font-weight:700}
+  .blk ul{margin:0;padding-left:19px;display:flex;flex-direction:column;gap:5px}
+  .blk li{font-size:13.5px;color:var(--ink2)}
+  .blk code{font-family:var(--m);font-size:12.5px;background:var(--card);border:1px solid var(--ln2);
+            border-radius:3px;padding:0 5px;color:var(--ink)}
+
+  .rep{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:7px}
+  .rc{border:1.5px solid var(--ln2);border-left:4px solid var(--sv);border-radius:4px;background:var(--card);
+      padding:8px 11px;display:flex;flex-direction:column}
+  .rc .n2{font-size:13px;font-weight:600}
+  .rc .s2{font-family:var(--m);font-size:11px;color:var(--ink3)}
+
+  .kinds{display:flex;flex-wrap:wrap;gap:7px}
+  .kk{display:inline-flex;align-items:center;gap:7px;font-family:var(--m);font-size:12.5px;font-weight:700;
+      color:var(--ink2);border:1.5px solid var(--ln2);border-radius:4px;padding:4px 10px;background:var(--card)}
+  .kk i{width:11px;height:11px;border-radius:2px;background:var(--c);flex:none}
+
+  footer{font-size:13px;color:var(--ink3);border-top:1px solid var(--ln);padding-top:14px}
+  footer code{font-family:var(--m);font-size:12px}
+
+  @media print{body{background:#FFF !important}section,header{box-shadow:none;break-inside:avoid}}
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div class="brand"><span class="mk">C</span><span class="wm">CML <em>·</em> Планирование ФОТ</span></div>
+    <h1>Как устроен сервис планирования фонда оплаты труда</h1>
+    <p>
+      Сервис распределяет средства договоров по сотрудникам и месяцам так, чтобы каждому была
+      выплачена его месячная заработная плата, а все ограничения договоров, лимитов и кассы
+      остались соблюдены. Обработку документов выполняют ИИ-агенты, расчёт денежных величин —
+      детерминированная оптимизационная модель.
+    </p>
+  </header>
+
+  <section>
+    <div class="sh"><h2>Схема работы</h2><span class="n">от подписанных документов до плана выплат</span></div>
+    <div class="sb">
+      <figure>
+        <div class="fig">
+          <svg viewBox="0 0 1000 430" role="img"
+               aria-label="Документы поступают ИИ-агенту извлечения данных, который формирует показатели и направляет спорные позиции специалисту; проверенные данные образуют паспорта договоров и вместе со справочниками поступают в оптимизатор; ИИ-агенты настройки параметров и сценарного моделирования задают условия расчёта, ИИ-агент анализа невыполнимости обрабатывает отказ, ИИ-агент пояснительных материалов формирует текст по результату, ИИ-агент сверки возвращает фактические начисления месяца на пересчёт, ИИ-агент мониторинга контролирует актуальность справочников.">
+            <defs>
+              <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#6A829B"/>
+              </marker>
+            </defs>
+
+            <!-- основной ряд -->
+            <rect class="nbox" x="10" y="164" width="118" height="56" rx="4"/>
+            <text class="nt" x="69" y="187" text-anchor="middle">Документы</text>
+            <text class="ns" x="69" y="203" text-anchor="middle">РКМ · цена</text>
+
+            <line class="edge" x1="128" y1="192" x2="158" y2="192" marker-end="url(#ar)"/>
+
+            <rect class="nbox ai" x="160" y="158" width="142" height="68" rx="4"/>
+            <text class="nt t-ai" x="231" y="181" text-anchor="middle">ИИ-агент № 1</text>
+            <text class="ns" x="231" y="197" text-anchor="middle">извлечение данных</text>
+            <text class="ns" x="231" y="212" text-anchor="middle">арифметика форм</text>
+
+            <line class="edge" x1="302" y1="192" x2="332" y2="192" marker-end="url(#ar)"/>
+
+            <rect class="nbox br" x="334" y="164" width="126" height="56" rx="4"/>
+            <text class="nt t-br" x="397" y="187" text-anchor="middle">Паспорта</text>
+            <text class="ns" x="397" y="203" text-anchor="middle">единая схема</text>
+
+            <line class="edge" x1="460" y1="192" x2="556" y2="192" marker-end="url(#ar)"/>
+
+            <rect class="nbox sv" x="558" y="158" width="142" height="68" rx="4"/>
+            <text class="nt t-sv" x="629" y="181" text-anchor="middle">Оптимизатор</text>
+            <text class="ns" x="629" y="197" text-anchor="middle">MIP · HiGHS</text>
+            <text class="ns" x="629" y="212" text-anchor="middle">жёсткие ограничения</text>
+
+            <line class="edge" x1="700" y1="192" x2="730" y2="192" marker-end="url(#ar)"/>
+
+            <rect class="nbox" x="732" y="164" width="118" height="56" rx="4"/>
+            <text class="nt" x="791" y="187" text-anchor="middle">План и отчёты</text>
+            <text class="ns" x="791" y="203" text-anchor="middle">17 листов</text>
+
+            <line class="edge" x1="850" y1="192" x2="874" y2="192" marker-end="url(#ar)"/>
+
+            <rect class="nbox ai" x="876" y="158" width="116" height="68" rx="4"/>
+            <text class="nt t-ai" x="934" y="181" text-anchor="middle">ИИ-агент № 6</text>
+            <text class="ns" x="934" y="197" text-anchor="middle">объяснение</text>
+            <text class="ns" x="934" y="212" text-anchor="middle">пояснительная записка</text>
+
+            <!-- верх: калибровщик и сценарии -->
+            <rect class="nbox ai" x="446" y="20" width="150" height="60" rx="4"/>
+            <text class="nt t-ai" x="521" y="43" text-anchor="middle">ИИ-агент № 2</text>
+            <text class="ns" x="521" y="59" text-anchor="middle">запрос → веса модели</text>
+            <text class="ns" x="521" y="73" text-anchor="middle">штрафы целевой функции</text>
+
+            <rect class="nbox ai" x="614" y="20" width="150" height="60" rx="4"/>
+            <text class="nt t-ai" x="689" y="43" text-anchor="middle">ИИ-агент № 4</text>
+            <text class="ns" x="689" y="59" text-anchor="middle">сценарный расчёт</text>
+            <text class="ns" x="689" y="73" text-anchor="middle">сравнение планов</text>
+
+            <path class="edge" d="M 521 80 L 521 120 L 600 120 L 600 158" marker-end="url(#ar)"/>
+            <path class="edge" d="M 689 80 L 689 120 L 658 120 L 658 158" marker-end="url(#ar)"/>
+            <text class="el" x="605" y="136" text-anchor="middle">веса целевой функции и варианты исходных данных</text>
+
+            <!-- низ: экономист и справочники -->
+            <rect class="nbox mn" x="160" y="288" width="142" height="54" rx="4"/>
+            <text class="nt t-mn" x="231" y="310" text-anchor="middle">Экономист</text>
+            <text class="ns" x="231" y="326" text-anchor="middle">решение спорных позиций</text>
+
+            <path class="edge" d="M 208 226 L 208 288" marker-end="url(#ar)"/>
+            <text class="el" x="200" y="260" text-anchor="end">спорная позиция</text>
+            <path class="edge" d="M 256 288 L 256 226" marker-end="url(#ar)"/>
+            <text class="el" x="264" y="260" text-anchor="start">решение</text>
+
+            <rect class="nbox" x="334" y="288" width="126" height="54" rx="4"/>
+            <text class="nt" x="397" y="310" text-anchor="middle">Справочники</text>
+            <text class="ns" x="397" y="326" text-anchor="middle">должности · нормативы</text>
+            <path class="edge" d="M 460 315 L 500 315 L 500 250 L 590 250 L 590 226" marker-end="url(#ar)"/>
+
+            <rect class="nbox ai" x="334" y="366" width="126" height="54" rx="4"/>
+            <text class="nt t-ai" x="397" y="388" text-anchor="middle">ИИ-агент № 7</text>
+            <text class="ns" x="397" y="404" text-anchor="middle">актуальность величин</text>
+            <path class="edge" d="M 397 366 L 397 342" marker-end="url(#ar)"/>
+
+            <!-- диагност -->
+            <rect class="nbox bd" x="558" y="288" width="142" height="54" rx="4"/>
+            <text class="nt t-bd" x="629" y="310" text-anchor="middle">ИИ-агент № 3</text>
+            <text class="ns" x="629" y="326" text-anchor="middle">анализ отказа</text>
+            <path class="edge" d="M 615 226 L 615 288" marker-end="url(#ar)"/>
+            <text class="el" x="607" y="262" text-anchor="end">решения нет</text>
+            <path class="edge" d="M 668 288 L 668 226" marker-end="url(#ar)"/>
+            <text class="el" x="676" y="262" text-anchor="start">какое ограничение<tspan x="676" dy="12">ослабить</tspan></text>
+
+            <!-- сверка факта -->
+            <rect class="nbox ai" x="732" y="288" width="150" height="54" rx="4"/>
+            <text class="nt t-ai" x="807" y="310" text-anchor="middle">ИИ-агент № 5</text>
+            <text class="ns" x="807" y="326" text-anchor="middle">начисления месяца</text>
+            <path class="edge dash" d="M 791 220 L 791 288" marker-end="url(#ar)"/>
+            <path class="edge dash" d="M 732 315 L 716 315 L 716 205 L 700 205" marker-end="url(#ar)"/>
+            <text class="el" x="756" y="362" text-anchor="middle">фактические начисления месяца · закрытые месяцы фиксируются, остаток года пересчитывается</text>
+          </svg>
+        </div>
+        <figcaption>
+          Семь ИИ-агентов работают на разных участках, и ни один не выполняет расчёт денежных
+          величин. Агенты обрабатывают документы и формируют запросы к модели; оптимизатор видит модель, но не видит
+          документы. Единственный канал между ними — паспорт договора, каждое поле которого либо прошло
+          проверку формулой из самой формы, либо подтверждено экономистом.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section>
+    <div class="sh"><h2>ИИ-агенты</h2><span class="n">семь агентов · ни один не выполняет расчёт денежных величин</span></div>
+    <div class="sb">
+      <div class="cards">
+
+        <div class="card" style="--c:var(--ai)">
+          <span class="tag">ИИ-агент № 1 · ввод данных</span>
+          <h3>Извлечение данных из расчётно-калькуляционных материалов</h3>
+          <p>Обрабатывает расчётно-калькуляционные материалы по ГОЗ и структуры цены, извлекает целевые показатели в паспорт договора. Принимает вложения служебной переписки и распределяет их по договорам.</p>
+          <span class="lbl">Делает</span>
+          <ul>
+            <li>опознаёт форму по маркеру в шапке</li>
+            <li>сопоставляет должности со справочником, включая сокращения и опечатки</li>
+            <li>разбирает этапы, сроки, количество людей, трудоёмкость</li>
+            <li>переносит числа без вычислений</li>
+          </ul>
+          <span class="lbl">Контроль</span>
+          <ul>
+            <li>арифметические инварианты формы</li>
+            <li>вопрос экономисту, если проверка не сошлась</li>
+          </ul>
+        </div>
+
+        <div class="card" style="--c:var(--ai)">
+          <span class="tag">ИИ-агент № 2 · настройка расчёта</span>
+          <h3>Настройка параметров оптимизационной модели</h3>
+          <p>Преобразует требование специалиста, сформулированное на естественном языке, в веса целевой функции.</p>
+          <span class="lbl">Пример</span>
+          <ul>
+            <li>«минимизировать приказы» → <code>штраф приказа 3 000 000</code></li>
+            <li>«равномерное освоение ГОЗ» → <code>штраф неравномерности 60 000</code></li>
+            <li>«сохранить договор оклада» → <code>макс договоров оклада 1</code></li>
+          </ul>
+          <span class="lbl">Не делает</span>
+          <ul>
+            <li>не трогает жёсткие ограничения — только веса предпочтений</li>
+          </ul>
+        </div>
+
+        <div class="card" style="--c:var(--bd)">
+          <span class="tag">ИИ-агент № 3 · анализ отказа</span>
+          <h3>Анализ причин невыполнимости задачи</h3>
+          <p>При отсутствии допустимого решения формирует содержательное заключение вместо технического отказа <code>INFEASIBLE</code>.</p>
+          <span class="lbl">Делает</span>
+          <ul>
+            <li>выделяет минимальный конфликтующий набор ограничений</li>
+            <li>называет разрыв в рублях и месяц, где он возник</li>
+            <li>предлагает варианты, каждый из которых снимает конфликт</li>
+            <li>показывает цену каждого варианта: штраф, согласование, риск кассы</li>
+          </ul>
+          <span class="lbl">Зачем</span>
+          <ul>
+            <li>без агента специалист получает отказ без указания причины</li>
+          </ul>
+        </div>
+
+        <div class="card" style="--c:var(--ai)">
+          <span class="tag">ИИ-агент № 4 · вариантный анализ</span>
+          <h3>Сценарное моделирование</h3>
+          <p>Формирует изменённые исходные данные, выполняет расчёт и представляет отличия от базового плана.</p>
+          <span class="lbl">Типовые вопросы</span>
+          <ul>
+            <li>Сокращение фонда по ГОЗ на 15 %</li>
+            <li>ключевой сотрудник увольняется в июне</li>
+            <li>транш сдвинут на месяц</li>
+            <li>добавили договор в середине года</li>
+          </ul>
+          <span class="lbl">Выдаёт</span>
+          <ul>
+            <li>таблицу различий и вывод, что именно стало связывающим</li>
+          </ul>
+        </div>
+
+        <div class="card" style="--c:var(--ai)">
+          <span class="tag">ИИ-агент № 5 · сопровождение</span>
+          <h3>Сверка плановых и фактических начислений</h3>
+          <p>Ежемесячно сопоставляет выгрузку начислений бухгалтерии с плановыми строками.</p>
+          <span class="lbl">Решает</span>
+          <ul>
+            <li>ФИО пишутся по-разному, коды сотрудников не всегда совпадают</li>
+            <li>у сотрудника несколько штатных строк</li>
+            <li>появились выплаты, которых в плане не было</li>
+          </ul>
+          <span class="lbl">Контроль</span>
+          <ul>
+            <li>итоговая сумма по сотруднику должна сойтись с точностью до рубля</li>
+          </ul>
+        </div>
+
+        <div class="card" style="--c:var(--ai)">
+          <span class="tag">ИИ-агент № 6 · выходные материалы</span>
+          <h3>Формирование пояснительных материалов</h3>
+          <p>Формирует текст пояснительной записки и служебных писем по результатам расчёта.</p>
+          <span class="lbl">Отвечает на вопросы</span>
+          <ul>
+            <li>почему применена стимулирующая приказом</li>
+            <li>почему остаток договора не освоен</li>
+            <li>какое ограничение оказалось связывающим</li>
+          </ul>
+          <span class="lbl">Контроль</span>
+          <ul>
+            <li>оперирует только числами из результата расчёта</li>
+          </ul>
+        </div>
+
+        <div class="card" style="--c:var(--ai)">
+          <span class="tag">ИИ-агент № 7 · нормативная база</span>
+          <h3>Мониторинг нормативной базы</h3>
+          <p>Контролирует приказы и положение об оплате труда, выявляет неактуальные значения в справочниках.</p>
+          <span class="lbl">Отслеживает</span>
+          <ul>
+            <li>предельные размеры П2556 и П4</li>
+            <li>оклады должностей и новые должности штатного расписания</li>
+            <li>среднемесячную зарплату основных работников из писем ВП МО РФ</li>
+            <li>ставки отчислений и накладных</li>
+          </ul>
+          <span class="lbl">Зачем</span>
+          <ul>
+            <li>без агента расчёт длительно выполняется на неактуальных предельных величинах</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sh"><h2>Оптимизатор</h2><span class="n">смешанное целочисленное программирование · Pyomo + HiGHS</span></div>
+    <div class="sb">
+      <div class="grid2">
+        <div class="blk">
+          <h3>Что гарантирует</h3>
+          <ul>
+            <li>решение либо удовлетворяет всем жёстким ограничениям, либо задача объявляется недопустимой</li>
+            <li>ограничения выполняются по построению модели, а не проверяются постфактум</li>
+            <li>при одинаковом входе результат воспроизводим</li>
+            <li>если план не сходится — показывается дефицит с указанием сотрудника, месяца и договора</li>
+          </ul>
+        </div>
+        <div class="blk">
+          <h3>Что минимизирует</h3>
+          <ul>
+            <li>смены источника оклада в течение года</li>
+            <li>административную сложность: лишние связки сотрудник–договор</li>
+            <li>дробление выплат между договорами</li>
+            <li>неравномерность освоения ФОТ по месяцам</li>
+            <li>использование стимулирующей приказом как крайнего инструмента</li>
+            <li>отклонение факта трудоёмкости от плана</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sh"><h2>Входные данные</h2><span class="n">кто заполняет каждый источник</span></div>
+    <div class="sb">
+      <div class="tw">
+        <table>
+          <thead><tr><th>Источник</th><th>Что содержит</th><th>Заполняет</th><th>Частота</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">договоры</td>
+              <td>код, тип, номер, сроки, ФОТ, признак ГОЗ, разрешённые виды выплат, право платить после окончания</td>
+              <td><span class="who" style="--c:var(--ai)">ИИ-агент № 1</span></td><td>при заключении</td></tr>
+            <tr><td class="mono">этапы и трудоёмкость</td>
+              <td>этап, тип работ, срок, должность или категория, количество человек, чел.-мес, стоимость чел.-мес</td>
+              <td><span class="who" style="--c:var(--ai)">ИИ-агент № 1</span></td><td>при заключении</td></tr>
+            <tr><td class="mono">поступления по месяцам</td>
+              <td>помесячный график поступлений по каждому договору</td>
+              <td><span class="who" style="--c:var(--ai)">ИИ-агент № 1</span></td><td>при заключении</td></tr>
+            <tr><td class="mono">штатное расписание</td>
+              <td>сотрудник, штатная должность, подразделение, ставка, месячная зарплата, даты приёма и увольнения</td>
+              <td><span class="who" style="--c:var(--mn)">кадры</span></td><td>ежемесячно</td></tr>
+            <tr><td class="mono">должности и лимиты</td>
+              <td>оклад за 1,0 ставки, окладная группа, категория персонала, П2556, П4, БЭП</td>
+              <td><span class="who" style="--c:var(--ink3)">справочник</span></td><td>раз в год</td></tr>
+            <tr><td class="mono">нормативы года</td>
+              <td>среднемесячная зарплата основных работников, ставки допзарплаты, отчисления, накладные, рабочие часы</td>
+              <td><span class="who" style="--c:var(--ink3)">форма 22д</span></td><td>раз в год</td></tr>
+            <tr><td class="mono">параметры оптимизатора</td>
+              <td>год, допуск трудоёмкости, штрафы целевой функции, максимум договоров оклада</td>
+              <td><span class="who" style="--c:var(--mn)">экономист</span></td><td>перед расчётом</td></tr>
+            <tr><td class="mono">факт начислений</td>
+              <td>фактические выплаты закрытых месяцев для пересчёта остатка года</td>
+              <td><span class="who" style="--c:var(--mn)">бухгалтерия</span></td><td>ежемесячно</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div>
+        <p style="margin:0 0 9px;font-size:13.5px;color:var(--ink2)">Виды выплат, из которых складывается месячная зарплата:</p>
+        <div class="kinds">
+          <span class="kk" style="--c:#0F4C82"><i></i>оклад</span>
+          <span class="kk" style="--c:#C98A00"><i></i>120 · гостайна</span>
+          <span class="kk" style="--c:#2E86C1"><i></i>122 · качество</span>
+          <span class="kk" style="--c:#6EAEDC"><i></i>124 · интенсивность</span>
+          <span class="kk" style="--c:#A9CFEC"><i></i>152 · доп. работа</span>
+          <span class="kk" style="--c:#C0392B"><i></i>стимулирующая приказом</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sh"><h2>Выходные данные</h2><span class="n">книга Excel · 17 листов</span></div>
+    <div class="sb">
+      <div class="rep">
+        <div class="rc"><span class="n2">Как читать файл</span><span class="s2">навигация</span></div>
+        <div class="rc"><span class="n2">Итог расчета</span><span class="s2">статус, суммы, показатели</span></div>
+        <div class="rc"><span class="n2">Проблемы и предупреждения</span><span class="s2">что проверить</span></div>
+        <div class="rc"><span class="n2">Выплаты по сотрудникам</span><span class="s2">помесячно</span></div>
+        <div class="rc"><span class="n2">Выплаты по договорам</span><span class="s2">помесячно</span></div>
+        <div class="rc"><span class="n2">Остатки по договорам</span><span class="s2">касса и остатки</span></div>
+        <div class="rc"><span class="n2">Освоение план-факт</span><span class="s2">по договорам</span></div>
+        <div class="rc"><span class="n2">Контроль трудоёмкости</span><span class="s2">чел.-мес и средние</span></div>
+        <div class="rc"><span class="n2">План выплат</span><span class="s2">детализация начислений</span></div>
+        <div class="rc"><span class="n2">Выплаты по трудоёмкости</span><span class="s2">отнесение сумм</span></div>
+        <div class="rc"><span class="n2">Контроль должностей</span><span class="s2">совместимость</span></div>
+        <div class="rc"><span class="n2">Административная сложность</span><span class="s2">связки и смены</span></div>
+        <div class="rc"><span class="n2">Проверка дробления выплат</span><span class="s2">контроль дробления</span></div>
+        <div class="rc"><span class="n2">Смены схемы выплат</span><span class="s2">где менялись источники</span></div>
+        <div class="rc"><span class="n2">Дефициты</span><span class="s2">недоплаты</span></div>
+        <div class="rc"><span class="n2">Дефициты по месяцам</span><span class="s2">разбивка</span></div>
+        <div class="rc"><span class="n2">ШР_детализация</span><span class="s2">кадровые назначения</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sh"><h2>Условия и ограничения</h2><span class="n">выполняются одновременно</span></div>
+    <div class="sb">
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Ограничение</th><th>Формулировка</th><th>Область</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">Полнота выплаты</td>
+              <td>каждому активному сотруднику за месяц выплачивается его полная месячная зарплата</td>
+              <td>все договоры</td></tr>
+            <tr><td class="mono">П2556</td>
+              <td><code>оклад + 122 ≤ лимит должности × ставка</code></td><td>ГОЗ</td></tr>
+            <tr><td class="mono">П4</td>
+              <td>предельный размер по категории персонала: НТП 149 648,90 ₽, НР 257 643,19 ₽</td><td>все</td></tr>
+            <tr><td class="mono">БЭП</td>
+              <td>средняя штатная часть по ГОЗ-договору за месяц не выше лимита; отдельный сотрудник может быть выше, если средняя удержана</td>
+              <td>ГОЗ</td></tr>
+            <tr><td class="mono">Касса договора</td>
+              <td><code>остаток на конец = остаток на начало + поступление − выплаты</code>, остаток неотрицателен и переносится только вперёд</td>
+              <td>все</td></tr>
+            <tr><td class="mono">Срок выплат</td>
+              <td>выплаты внутри срока договора; отдельные договоры разрешают до 2 месяцев после окончания</td>
+              <td>все</td></tr>
+            <tr><td class="mono">Виды выплат</td>
+              <td>с договора допустимы только разрешённые им виды: оклад, 120, 122, 124, 152, приказ</td>
+              <td>все</td></tr>
+            <tr><td class="mono">Ставки</td>
+              <td>шаг <code>0,25</code>; совместительство не более <code>0,5</code>; суммарно не более <code>1,5</code></td>
+              <td>все</td></tr>
+            <tr><td class="mono">Совместимость должностей</td>
+              <td>сотрудник закрывает строку, если совпадает должность или окладная группа <code>страница / группа / уровень</code></td>
+              <td>все</td></tr>
+            <tr><td class="mono">Трудоёмкость</td>
+              <td>факт чел.-мес против плана с допуском; контроль средней стоимости чел.-мес; компенсация внутри группы</td>
+              <td>все</td></tr>
+            <tr><td class="mono">Оклад и назначения</td>
+              <td>оклад определяется должностью назначения; при двух ставках у сотрудника два назначения и два оклада</td>
+              <td>все</td></tr>
+            <tr><td class="mono">120 · гостайна</td>
+              <td>начисляется только в месяцы действия договора секретности и только с договоров, где вид разрешён</td>
+              <td>секретные</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid2">
+        <div class="blk">
+          <h3>Что происходит, если решения нет</h3>
+          <ul>
+            <li>при <code>разрешить дефицит = нет</code> задача объявляется недопустимой</li>
+            <li>при <code>да</code> возвращается частичный план с явными дефицитами</li>
+            <li>дефицит показывается адресно: сотрудник, месяц, договор, сумма</li>
+            <li>неосвоенный остаток договора не блокирует расчёт, а выносится в предупреждения</li>
+          </ul>
+        </div>
+        <div class="blk">
+          <h3>Пересчёт по факту</h3>
+          <ul>
+            <li>закрытые месяцы фиксируются по факту и становятся ограничением</li>
+            <li>пересчитывается только остаток года</li>
+            <li>договорные величины неизменны: годовая трудоёмкость, ОЗП по годам, БЭП</li>
+            <li>выход факта за договорной инвариант показывается до пересчёта</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <footer>
+    Реализация: <code>Python · Pyomo · HiGHS · openpyxl</code>. Вход и выход — книги Excel.
+    Контур извлечения документов и агент-калибровщик находятся в разработке.
+  </footer>
+
+</div>
+</body>
+</html>
