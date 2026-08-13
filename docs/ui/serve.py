@@ -311,6 +311,27 @@ def do_scenario(text):
             "rows": rows, "note": note}
 
 
+WORK_FILES = ["_uploaded.xlsx", "_built_input.xlsx", "_result.xlsx", "_result.json",
+              "_scenario.xlsx", "_scenario_result.xlsx", "_base_result.xlsx"]
+
+
+def do_reset():
+    """Сброс демонстрации: паспорт, кэш базового расчёта и рабочие файлы."""
+    STATE["passport"] = None
+    STATE["source"] = None
+    BASE_SUM["cache"] = None
+    removed = 0
+    for name in WORK_FILES:
+        path = os.path.join(HERE, name)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                pass
+    return {"ok": True, "removed": removed}
+
+
 class H(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=HERE, **kw)
@@ -323,8 +344,17 @@ class H(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_GET(self):
+        if self.path == "/api/ping":
+            self._send({"ok": True})
+            return
+        super().do_GET()
+
     def do_POST(self):
         try:
+            if self.path == "/api/reset":
+                self._send(do_reset())
+                return
             if self.path == "/api/solve":
                 n = int(self.headers.get("Content-Length") or 0)
                 payload = json.loads(self.rfile.read(n) or b"{}") if n else {}

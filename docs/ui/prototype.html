@@ -26,9 +26,10 @@
   html{background:#E9EEF4 !important;min-height:100%}
   body{margin:0 !important;min-height:100vh;background:#E9EEF4 !important;color:var(--ink) !important;
        font:14px/1.45 var(--f);-webkit-font-smoothing:antialiased}
-  .wrap{max-width:1480px;margin:0 auto;padding:clamp(6px,1vw,14px)}
-  .app{background:var(--s0);border:1px solid var(--line);border-radius:3px;overflow:hidden;
-       box-shadow:0 1px 3px rgba(21,38,56,.10)}
+  .wrap{max-width:none;margin:0;padding:0;
+        min-height:100vh;display:flex;flex-direction:column}
+  .app{background:var(--s0);border:0;border-radius:0;overflow:hidden;box-shadow:none;
+       flex:1;display:flex;flex-direction:column;min-height:0}
   button{font:inherit;cursor:pointer;border-radius:2px}
   button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
 
@@ -38,15 +39,29 @@
   .logo b{font-size:15px;font-weight:700}
   .logo span{font-size:13px;color:var(--ink3)}
   .top .sp{flex:1}
+  /* фирменная шапка CML-Bench: вордмарк и заливной чип во всю высоту полосы */
+  .top .cmllogo{height:20px;width:auto;min-width:0;color:#004977;flex:0 0 auto;display:block}
+  .top .bname{display:inline-flex;align-items:center;align-self:stretch;
+              margin:-9px 0 -9px -6px;padding:0 18px;background:var(--acc);color:#FFF;
+              font-size:13.5px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;
+              white-space:nowrap;flex:0 0 auto}
+  .top .demo{font-size:13px;color:var(--ink3);white-space:nowrap}
   .runbtn{font-size:14px;font-weight:600;padding:9px 20px;border:1px solid var(--acc2);
           background:var(--acc);color:#FFF}
   .runbtn:hover{background:var(--acc2)}
+  .runbtn.sm{font-size:12.5px;padding:4px 14px}
+  .clrbtn{font-size:12.5px;padding:4px 12px;border:1px solid var(--line);
+          background:var(--s0);color:var(--ink2)}
+  .clrbtn:hover{border-color:var(--ink3);color:var(--ink)}
+  .dl{font-size:13.5px;font-weight:600;padding:8px 16px;border:1px solid var(--acc2);
+      background:var(--acc);color:#FFF;text-decoration:none;white-space:nowrap}
+  .dl:hover{background:var(--acc2)}
   .runbtn[disabled]{background:var(--s2);border-color:var(--line);color:var(--ink3);cursor:default}
   .srcnote{font-size:12px;color:var(--ink3)}
 
   /* ── каркас ─────────────────────────────────────── */
-  .frame{display:grid;grid-template-columns:236px minmax(0,1fr)}
-  .nav{border-right:1px solid var(--line);background:var(--s1);padding:2px 0 8px}
+  .frame{display:grid;grid-template-columns:216px minmax(0,1fr);flex:1;min-height:0}  /* = отступ 16 + логотип 190 + зазор до чипа */
+  .nav{border-right:1px solid var(--line);background:var(--s1);padding:2px 0 8px;overflow:auto}
   .nav .g{font-size:11px;font-weight:600;color:var(--ink3);padding:13px 14px 4px;text-transform:uppercase;letter-spacing:.03em}
   .nv{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:0;background:none;
       padding:6px 14px;color:var(--ink2);font-size:13.5px;border-radius:0}
@@ -56,11 +71,11 @@
   .nv .c{margin-left:auto;font:12px var(--m);color:var(--ink3);font-weight:400}
   .nv .warnc{margin-left:auto;font:600 12px var(--m);color:var(--warn)}
 
-  .main{min-width:0;display:flex;flex-direction:column}
+  .main{min-width:0;display:flex;flex-direction:column;min-height:0}
   .head{padding:12px 18px 10px;border-bottom:1px solid var(--line2)}
   .head h1{margin:0;font-size:17px;font-weight:700}
   .head p{margin:2px 0 0;font-size:12.5px;color:var(--ink3)}
-  .body{padding:14px 18px 20px;display:flex;flex-direction:column;gap:14px}
+  .body{padding:14px 18px 20px;display:flex;flex-direction:column;gap:14px;overflow:auto;flex:1}
 
   .status{display:flex;flex-wrap:wrap;gap:4px 22px;align-items:center;padding:6px 16px;
           border-top:1px solid var(--line);background:var(--s1);font:12px var(--m);color:var(--ink3)}
@@ -80,6 +95,7 @@
   thead th{position:sticky;top:0;z-index:1;background:var(--s2);font-size:12px;font-weight:600;
            color:var(--ink2);border-bottom:1px solid var(--line)}
   td.n,th.n{text-align:right;font-family:var(--m);font-variant-numeric:tabular-nums}
+  th.nh{text-align:right}
   td.mono{font-family:var(--m);font-size:12.5px}
   tbody tr:hover td{background:var(--s1)}
   tbody tr.sel td{background:var(--accbg)}
@@ -199,9 +215,11 @@
   details.jr .in{padding:0 10px 10px}
 
   .agrow{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-  .agrow input{font:inherit;font-size:13.5px;flex:1 1 320px;min-width:0;padding:8px 11px;
-               border:1px solid var(--line);background:var(--s0);color:var(--ink);border-radius:2px}
-  .agrow input:focus-visible{outline:2px solid var(--acc);outline-offset:0}
+  .agrow input{font:inherit;font-size:13.5px;flex:1 1 320px;min-width:0;padding:9px 12px;
+               border:1.6px solid var(--acc);background:var(--accbg);color:var(--ink);border-radius:2px;
+               box-shadow:0 1px 4px rgba(23,95,169,.14)}
+  .agrow input::placeholder{color:var(--ink2)}
+  .agrow input:focus-visible{outline:2px solid var(--acc);outline-offset:0;background:var(--s0)}
   .agrow .go{font-size:13.5px;font-weight:600;padding:9px 15px;border:1px solid var(--acc2);background:var(--acc);color:#FFF}
   .exlist{display:flex;gap:8px;flex-wrap:wrap}
   .exlist button{font-size:12.5px;padding:5px 10px;border:1px solid var(--line);background:var(--s0);color:var(--ink2)}
@@ -211,7 +229,10 @@
   .params{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:1px;background:var(--line2);border:1px solid var(--line2)}
   .params>div{background:var(--s0);padding:7px 11px;display:flex;justify-content:space-between;gap:10px;font-size:13px}
   .params .pn{color:var(--ink2)}
-  .params .pv{font-family:var(--m);font-weight:600;white-space:nowrap}
+  .params .pv{font:600 13px var(--m);white-space:nowrap;width:11ch;text-align:right;
+              border:1px solid transparent;background:none;color:var(--ink);padding:1px 4px}
+  .params .pv:hover{border-color:var(--line)}
+  .params .pv:focus{outline:0;border-color:var(--acc);background:var(--s0)}
   .params>div.hot{background:var(--accbg)}
   .params>div.hot .pv{color:var(--acc2)}
 
@@ -258,11 +279,11 @@
 <div class="wrap"><div class="app">
 
   <div class="top">
-    <div class="logo"><b>Планирование ФОТ</b><span>CML, демонстрационный стенд</span></div>
+    <svg viewBox="0 0 171 18" fill="currentColor" xmlns="http://www.w3.org/2000/svg" class="cmllogo" role="img" aria-label="CML-Bench 2.0"><path fill-rule="evenodd" clip-rule="evenodd" d="M4.93171 13.7722C3.97455 12.8559 3.48464 11.6855 3.48464 10.2656C3.48464 8.84579 3.95641 7.69357 4.88635 6.77724C5.84351 5.86091 7.01387 5.39821 8.43826 5.39821C9.86266 5.39821 11.2009 5.77925 12.3531 6.54589V3.45214C11.1782 2.8352 9.88534 2.51766 8.41558 2.51766C6.09754 2.51766 4.16054 3.23893 2.62728 4.68601C1.12123 6.13309 0.359131 7.97936 0.359131 10.2611C0.359131 12.5429 1.12123 14.3619 2.65449 15.8317C4.18776 17.2788 6.09754 18 8.41558 18H8.42012C10.035 18 11.4413 17.6417 12.6525 16.9204V13.8357C11.5456 14.7067 10.1847 15.1286 8.56982 15.1286C7.10006 15.1286 5.88887 14.684 4.93171 13.7722ZM52.3315 10.4471H45.763V13.1507H52.3315V10.4471ZM33.2608 2.81701H36.3228V14.9607H43.8711V17.7006H33.2608V2.81701ZM65.6409 9.49446C66.6615 9.07259 67.5143 8.04739 67.5143 6.54134C67.5143 4.15978 65.7271 2.82158 63.0053 2.82158H56.0103V17.7051H63.4952C65.0693 17.7006 66.3258 17.3196 67.2603 16.5302C68.1948 15.7409 68.662 14.7248 68.662 13.4683C68.662 12.3886 68.3626 11.5131 67.7684 10.8145C67.1741 10.1114 66.471 9.66231 65.6409 9.49446ZM59.0768 5.36644H62.5199C63.7946 5.36644 64.5612 5.98337 64.5612 7.02218C64.5612 8.06099 63.7991 8.64164 62.5199 8.64164H59.0768V5.36644ZM62.9236 15.065H59.0768V11.1729H62.9236C64.4342 11.1729 65.346 11.876 65.346 13.128C65.346 14.38 64.4342 15.065 62.9236 15.065ZM98.656 12.3841C98.656 13.255 98.9735 13.9763 99.6086 14.5297C100.248 15.0832 101.033 15.3599 101.949 15.3599C103.029 15.3599 103.986 15.1285 104.816 14.6386V17.1926C103.82 17.7226 102.714 17.9722 101.46 17.9728C99.8875 17.9719 98.5325 17.4638 97.404 16.4441C96.279 15.4053 95.7029 14.0444 95.7029 12.3614C95.7029 10.6784 96.2745 9.34023 97.404 8.34225C98.5517 7.32158 99.9126 6.80898 101.509 6.80898C102.68 6.80898 103.719 7.04033 104.653 7.5121V10.0615C103.741 9.63962 102.825 9.42188 101.954 9.42188C101.015 9.42188 100.226 9.70313 99.5905 10.2566C98.9735 10.7873 98.656 11.5131 98.656 12.3841ZM113.921 6.81348C112.519 6.81348 111.33 7.34876 110.373 8.38758V2.81701H107.375V17.7006H110.373V10.937C110.886 10.1522 111.843 9.55794 112.777 9.55794C113.884 9.55794 114.796 10.1749 114.796 11.8125V17.7006H117.795V11.1955C117.795 8.47377 116.393 6.81348 113.925 6.81348H113.921ZM18.3048 2.81701L22.6234 8.98183L26.9419 2.81701H29.9586V17.7006H26.9419V7.51661L23.517 12.2979H21.8159L18.3321 7.51661V17.7006H18.3275H15.261V2.81701H18.3048ZM75.8975 6.80898C74.2598 6.80898 72.9171 7.34426 71.8964 8.4239C70.8758 9.48539 70.3677 10.81 70.3677 12.3841C70.3677 14.0625 70.9393 15.4234 72.0643 16.4441C73.1938 17.4647 74.5955 17.9728 76.2513 17.9728H76.2558C78.0023 17.9728 79.3405 17.6144 80.2977 16.8932V14.4889C79.2135 15.1059 78.0839 15.4234 76.8954 15.4234C75.0219 15.4234 73.6656 14.6613 73.3435 13.2142H80.9554V12.4249C80.9554 10.8508 80.4836 9.53529 79.5764 8.44658C78.6601 7.36241 77.4489 6.80898 75.8975 6.80898ZM73.3435 11.2999C73.4932 10.0434 74.405 9.17239 75.7704 9.17239C77.1359 9.17239 77.9388 10.1295 78.0023 11.2999H73.3435ZM86.2537 8.3649C87.2109 7.32609 88.3767 6.81349 89.8056 6.81349C92.2734 6.81349 93.6751 8.47377 93.6751 11.1955V17.7006H90.6721V11.8125C90.6721 10.1749 89.7648 9.55795 88.6534 9.55795C87.719 9.55795 86.7618 10.1522 86.2492 10.937H86.2537V17.7006H83.2552V7.0902H86.2537V8.3649Z"/><text x="122" y="17.7" font-family="'Open Sans', sans-serif" font-size="21" font-weight="700">2.0</text><g transform="translate(35,0)"><path fill-rule="evenodd" clip-rule="evenodd" d="M120.199 5.72026C120.199 2.56754 122.762 0 125.919 0C129.072 0 131.639 2.56754 131.639 5.72026C131.639 8.87298 129.072 11.4405 125.919 11.4405C122.766 11.4405 120.199 8.87298 120.199 5.72026ZM125.919 10.1159C128.342 10.1159 130.315 8.14264 130.315 5.72026C130.315 3.29788 128.342 1.3246 125.919 1.3246C123.497 1.3246 121.524 3.29788 121.524 5.72026C121.524 8.14264 123.497 10.1159 125.919 10.1159ZM128.037 4.45011C128.037 3.45213 127.266 2.78076 126.114 2.78076H123.565L123.578 8.20616H124.953V6.13761H125.606L127.112 8.20616H128.691L127.039 5.95162C127.67 5.69759 128.037 5.1487 128.037 4.45465V4.45011ZM126.631 4.50455C126.631 4.7359 126.563 4.97632 126.055 4.97632H124.944V3.99195H126.055C126.427 3.99195 126.631 4.1734 126.631 4.50455Z"/></g></svg>
+    <span class="bname">Сервис планирования фонда оплаты труда</span>
     <div class="solveline" id="solveline"><span class="dotp"></span><span id="solvemsg">Решатель работает…</span></div>
     <span class="sp"></span>
     <span class="srcnote" id="srcnote"></span>
-    <button class="runbtn" id="run" type="button">Рассчитать план</button>
   </div>
 
   <div class="frame">
@@ -274,8 +295,10 @@
   </div>
 
   <div class="status">
-    <span class="st" id="stmain">Расчёт не выполнялся</span>
+    <span class="st" id="stmain">Расчет не выполнялся</span>
     <span id="stextra"></span>
+    <button class="runbtn sm" id="run" type="button">Рассчитать план</button>
+    <button class="clrbtn" id="clr" type="button" title="Сбросить расчет, загруженный файл и рабочие файлы сервера">Очистить</button>
     <span class="sp"></span>
     <span id="stscale"></span>
     <span>HiGHS, MIP</span>
@@ -284,7 +307,7 @@
 </div></div>
 
 <script id="demo-data" type="application/json">
-{"base": {"employees": [{"code": "E001", "fio": "Иванов А. П.", "pos": "инженер", "dep": "Отдел НИОКР", "rate": 1, "sal": 160000, "from": "11.02.2019"}, {"code": "E002", "fio": "Петров С. М.", "pos": "инженер 1 категории", "dep": "Лаборатория вычислений", "rate": 1, "sal": 87000, "from": "01.09.2020"}, {"code": "E003", "fio": "Сидоров Д. И.", "pos": "программист", "dep": "Конструкторское бюро", "rate": 1, "sal": 100800, "from": "15.03.2021"}, {"code": "E004", "fio": "Кузнецов Е. В.", "pos": "аналитик", "dep": "Отдел НИОКР", "rate": 1, "sal": 83800, "from": "01.04.2026"}, {"code": "E005", "fio": "Смирнов Н. К.", "pos": "специалист", "dep": "Лаборатория вычислений", "rate": 1, "sal": 92300, "from": "07.11.2022"}, {"code": "E006", "fio": "Попов О. Л.", "pos": "ведущий инженер", "dep": "Конструкторское бюро", "rate": 1, "sal": 111800, "from": "14.06.2018"}, {"code": "E007", "fio": "Волков Р. А.", "pos": "инженер", "dep": "Отдел НИОКР", "rate": 1, "sal": 104200, "from": "01.10.2023"}, {"code": "E008", "fio": "Соколов Т. С.", "pos": "инженер 1 категории", "dep": "Лаборатория вычислений", "rate": 1, "sal": 108700, "from": "20.01.2020"}, {"code": "E009", "fio": "Лебедев А. П.", "pos": "программист", "dep": "Конструкторское бюро", "rate": 1, "sal": 101100, "from": "03.07.2024"}, {"code": "E010", "fio": "Козлов С. М.", "pos": "аналитик", "dep": "Отдел НИОКР", "rate": 1, "sal": 103900, "from": "12.05.2017"}], "contracts": [{"code": "C_GOZ", "name": "ГОЗ НИР «Метель»", "num": "ГОЗ-2026/11", "type": "госзаказ", "goz": "да", "fot": 11791800, "kinds": {"oklad": "да", "k120": "да", "k122": "да", "k124": "нет", "k152": "нет", "prk": "нет"}}, {"code": "C_FLEX", "name": "Внебюджет НТЦ «Полюс»", "num": "ВБ-2026/07", "type": "внебюджет", "goz": "нет", "fot": 600000, "kinds": {"oklad": "нет", "k120": "нет", "k122": "нет", "k124": "да", "k152": "да", "prk": "да"}}], "inflow": {"C_GOZ": [2947950, 0, 0, 2947950, 0, 0, 2947950, 0, 0, 2947950, 0, 0], "C_FLEX": [50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000]}, "plan": [{"emp": "E001", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 0, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 0, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 1, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 1, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 2, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 2, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 3, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 3, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 4, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 4, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 5, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 5, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 6, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 6, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 7, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 7, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 8, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 8, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 9, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 9, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 10, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 10, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 11, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 11, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E002", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E003", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E004", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E005", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E006", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E007", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E008", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E009", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E010", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}], "cash": {"C_GOZ": {"Поступление": [2947950, 0, 0, 2947950, 0, 0, 2947950, 0, 0, 2947950, 0, 0], "Выплаты": [919800, 919800, 919800, 1003600, 1003600, 1003600, 1003600, 1003600, 1003600, 1003600, 1003600, 1003600], "Остаток на конец": [2028150, 1108350, 188550, 2132900, 1129300, 125700, 2070050, 1066450, 62850, 2007200, 1003600, 0]}, "C_FLEX": {"Поступление": [50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000], "Выплаты": [50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000], "Остаток на конец": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}, "summary": [["Статус решателя", "OPTIMAL", null, null], ["Год", 2026, null, null], ["Время расчёта, сек", 9.2, null, null], ["Общий статус", "Выполнено", "Выполнено", "Расчёт завершён без критичных проблем"], ["Всего выплат", 12391800, null, null], ["Общий дефицит", 0, "Выполнено", "Дефицит отсутствует"], ["Первый месяц дефицита", "—", null, null], ["Сотрудников с дефицитом", 0, null, null], ["Договоров с кассовыми проблемами", 0, "Выполнено", null], ["Строк трудоёмкости с отклонением", 0, "Выполнено", null], ["Дроблений переменных выплат", 0, "Выполнено", "Дробления не найдено"], ["Смен схемы выплат", 1, null, null], ["Смен договора оклада", 0, null, null], ["Связок сотрудник–договор", 11, null, null], ["Несовместимых должностных назначений", 0, "Выполнено", null]], "warnings": [["ОК", "Все разделы", "—", "—", "Проблем и предупреждений не найдено", 0, "—"]], "limits": []}, "meta": {"solve_sec": 12.2, "solver": "HiGHS", "sheets": ["Итог расчета", "Проблемы и предупреждения", "План выплат", "ФОТ по договорам", "Контроль трудоёмкости", "ШР_детализация"]}, "scenarios": [{"name": "Сокращение фонда договора ГОЗ на 15 %", "what": "Фонд и поступления договора C_GOZ уменьшены на 15 %, дефицит разрешён, остальные условия неизменны.", "rows": [["Выплачено за год", "12 391 800 ₽", "10 623 032 ₽", "−1 768 768 ₽", ""], ["Общий дефицит", "0 ₽", "1 768 768 ₽", "+1 768 768 ₽", ""], ["Сотрудников с дефицитом", "0", "10", "+10", ""], ["Остаток на конец года", "0 ₽", "0 ₽", "0", "inv"], ["Смен договора оклада", "0", "0", "0", ""]], "note": "Решатель вернул частичный план: выплачено 10 623 032 ₽, недоплата 1 768 768 ₽ распределена по 10 сотрудникам и показана помесячно в отчёте «Дефициты». Недоплата в точности равна срезанной части фонда — резервов в базовом плане нет.", "sec": 31.6, "status": "OPTIMAL"}, {"name": "Увольнение сотрудника E002 с 30 июня", "what": "У сотрудника E002 установлена дата окончания 30.06.2026, дефицит разрешён.", "rows": [["Выплачено за год", "12 391 800 ₽", "11 869 799 ₽", "−522 001 ₽", ""], ["Общий дефицит", "0 ₽", "1 ₽", "+1 ₽", ""], ["Сотрудников с дефицитом", "0", "1", "+1", ""], ["Остаток на конец года", "0 ₽", "522 001 ₽", "+522 001 ₽", "inv"], ["Смен договора оклада", "0", "0", "0", ""]], "note": "Потребность снизилась на зарплату второго полугодия: выплачено 11 869 799 ₽, высвобожденный остаток 522 001 ₽ остаётся в кассе на конец года. Дефицит 1 ₽ — округление копеечного деления фонда, устраняется корректировкой поступления на один рубль.", "sec": 15.0, "status": "OPTIMAL"}, {"name": "Задержка первого транша ГОЗ на месяц", "what": "Январское поступление договора C_GOZ перенесено на февраль; квартальный график, дефицит разрешён.", "rows": [["Статус решателя", "OPTIMAL", "INFEASIBLE", "задача невыполнима", ""]], "note": "Решатель установил, что задача невыполнима даже с разрешённым дефицитом: в январе касса ГОЗ пуста, а оклад по открытым ставкам обязателен к выплате. Задержка транша при квартальном графике недопустима — это жёсткое кассовое ограничение, разбор аналогичного случая приведён в разделе анализа невыполнимости.", "sec": 3.6, "status": "INFEASIBLE"}], "infeasible": {"ctr": "C_FLEX", "status": "INFEASIBLE", "sec": 2.8, "clauses": [["полнота выплаты", "сотруднику Иванов А. П. (инженер) ежемесячно причитается 160 000 ₽"], ["приказ 2556", "оклад и надбавка 122 по должности «инженер» ограничены 110 000 ₽ в месяц"], ["виды выплат", "надбавка 124 и стимулирующая приказом разрешены только на договоре C_FLEX"], ["касса договора", "поступления C_FLEX в этом варианте равны нулю — платить недостающее нечем"]], "gap": "50 000 ₽ в месяц по сотруднику Иванов А. П.", "fixes": [["Восстановить поступления по договору C_FLEX", "базовый вариант: касса покрывает надбавку 124 и приказ"], ["Пересмотреть месячную оплату сотрудника до 110 000 ₽", "штатная часть умещается в предельный размер, надбавки не требуются"], ["Разрешить дефицит в параметрах расчёта", "решатель вернёт частичный план с адресным дефицитом вместо отказа"]]}}
+{"base": {"employees": [{"code": "E001", "fio": "Иванов А. П.", "pos": "инженер", "dep": "Отдел НИОКР", "rate": 1, "sal": 160000, "from": "11.02.2019"}, {"code": "E002", "fio": "Петров С. М.", "pos": "инженер 1 категории", "dep": "Лаборатория вычислений", "rate": 1, "sal": 87000, "from": "01.09.2020"}, {"code": "E003", "fio": "Сидоров Д. И.", "pos": "программист", "dep": "Конструкторское бюро", "rate": 1, "sal": 100800, "from": "15.03.2021"}, {"code": "E004", "fio": "Кузнецов Е. В.", "pos": "аналитик", "dep": "Отдел НИОКР", "rate": 1, "sal": 83800, "from": "01.04.2026"}, {"code": "E005", "fio": "Смирнов Н. К.", "pos": "специалист", "dep": "Лаборатория вычислений", "rate": 1, "sal": 92300, "from": "07.11.2022"}, {"code": "E006", "fio": "Попов О. Л.", "pos": "ведущий инженер", "dep": "Конструкторское бюро", "rate": 1, "sal": 111800, "from": "14.06.2018"}, {"code": "E007", "fio": "Волков Р. А.", "pos": "инженер", "dep": "Отдел НИОКР", "rate": 1, "sal": 104200, "from": "01.10.2023"}, {"code": "E008", "fio": "Соколов Т. С.", "pos": "инженер 1 категории", "dep": "Лаборатория вычислений", "rate": 1, "sal": 108700, "from": "20.01.2020"}, {"code": "E009", "fio": "Лебедев А. П.", "pos": "программист", "dep": "Конструкторское бюро", "rate": 1, "sal": 101100, "from": "03.07.2024"}, {"code": "E010", "fio": "Козлов С. М.", "pos": "аналитик", "dep": "Отдел НИОКР", "rate": 1, "sal": 103900, "from": "12.05.2017"}], "contracts": [{"code": "C_GOZ", "name": "ГОЗ НИР «Метель»", "num": "ГОЗ-2026/11", "type": "госзаказ", "goz": "да", "fot": 11791800, "kinds": {"oklad": "да", "k120": "да", "k122": "да", "k124": "нет", "k152": "нет", "prk": "нет"}}, {"code": "C_FLEX", "name": "Внебюджет НТЦ «Полюс»", "num": "ВБ-2026/07", "type": "внебюджет", "goz": "нет", "fot": 600000, "kinds": {"oklad": "нет", "k120": "нет", "k122": "нет", "k124": "да", "k152": "да", "prk": "да"}}], "inflow": {"C_GOZ": [2947950, 0, 0, 2947950, 0, 0, 2947950, 0, 0, 2947950, 0, 0], "C_FLEX": [50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000]}, "plan": [{"emp": "E001", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E001", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 69600.0}, {"emp": "E001", "m": 0, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 0, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 1, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 1, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 2, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 2, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 3, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 3, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 4, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 4, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 5, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 5, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 6, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 6, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 7, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 7, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 8, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 8, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 9, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 9, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 10, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 10, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E001", "m": 11, "ctr": "C_FLEX", "kind": "k124", "sum": 39648.9}, {"emp": "E001", "m": 11, "ctr": "C_FLEX", "kind": "prk", "sum": 10351.1}, {"emp": "E002", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E002", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E002", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 42800.0}, {"emp": "E003", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E003", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E003", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 60400.0}, {"emp": "E004", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E004", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E004", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 43400.0}, {"emp": "E005", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E005", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E005", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 51900.0}, {"emp": "E006", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E006", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 47000.0}, {"emp": "E006", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 64800.0}, {"emp": "E007", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E007", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E007", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 63800.0}, {"emp": "E008", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E008", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 44200.0}, {"emp": "E008", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 64500.0}, {"emp": "E009", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E009", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E009", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 60700.0}, {"emp": "E010", "m": 0, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 0, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 1, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 1, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 2, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 2, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 3, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 3, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 4, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 4, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 5, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 5, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 6, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 6, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 7, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 7, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 8, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 8, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 9, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 9, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 10, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 10, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}, {"emp": "E010", "m": 11, "ctr": "C_GOZ", "kind": "oklad", "sum": 40400.0}, {"emp": "E010", "m": 11, "ctr": "C_GOZ", "kind": "k122", "sum": 63500.0}], "cash": {"C_GOZ": {"Поступление": [2947950, 0, 0, 2947950, 0, 0, 2947950, 0, 0, 2947950, 0, 0], "Выплаты": [919800, 919800, 919800, 1003600, 1003600, 1003600, 1003600, 1003600, 1003600, 1003600, 1003600, 1003600], "Остаток на конец": [2028150, 1108350, 188550, 2132900, 1129300, 125700, 2070050, 1066450, 62850, 2007200, 1003600, 0]}, "C_FLEX": {"Поступление": [50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000], "Выплаты": [50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000, 50000], "Остаток на конец": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}, "summary": [["Статус решателя", "OPTIMAL", null, null], ["Год", 2026, null, null], ["Время расчета, сек", 9.2, null, null], ["Общий статус", "Выполнено", "Выполнено", "Расчет завершен без критичных проблем"], ["Всего выплат", 12391800, null, null], ["Общий дефицит", 0, "Выполнено", "Дефицит отсутствует"], ["Первый месяц дефицита", "—", null, null], ["Сотрудников с дефицитом", 0, null, null], ["Договоров с кассовыми проблемами", 0, "Выполнено", null], ["Строк трудоемкости с отклонением", 0, "Выполнено", null], ["Дроблений переменных выплат", 0, "Выполнено", "Дробления не найдено"], ["Смен схемы выплат", 1, null, null], ["Смен договора оклада", 0, null, null], ["Связок сотрудник–договор", 11, null, null], ["Несовместимых должностных назначений", 0, "Выполнено", null]], "warnings": [["ОК", "Все разделы", "—", "—", "Проблем и предупреждений не найдено", 0, "—"]], "limits": []}, "meta": {"solve_sec": 12.2, "solver": "HiGHS", "sheets": ["Итог расчета", "Проблемы и предупреждения", "План выплат", "ФОТ по договорам", "Контроль трудоемкости", "ШР_детализация"]}, "scenarios": [{"name": "Сокращение фонда договора ГОЗ на 15 %", "what": "Фонд и поступления договора C_GOZ уменьшены на 15 %, дефицит разрешен, остальные условия неизменны.", "rows": [["Выплачено за год", "12 391 800 ₽", "10 623 032 ₽", "−1 768 768 ₽", ""], ["Общий дефицит", "0 ₽", "1 768 768 ₽", "+1 768 768 ₽", ""], ["Сотрудников с дефицитом", "0", "10", "+10", ""], ["Остаток на конец года", "0 ₽", "0 ₽", "0", "inv"], ["Смен договора оклада", "0", "0", "0", ""]], "note": "Решатель вернул частичный план: выплачено 10 623 032 ₽, недоплата 1 768 768 ₽ распределена по 10 сотрудникам и показана помесячно в отчете «Дефициты». Недоплата в точности равна срезанной части фонда — резервов в базовом плане нет.", "sec": 31.6, "status": "OPTIMAL"}, {"name": "Увольнение сотрудника E002 с 30 июня", "what": "У сотрудника E002 установлена дата окончания 30.06.2026, дефицит разрешен.", "rows": [["Выплачено за год", "12 391 800 ₽", "11 869 799 ₽", "−522 001 ₽", ""], ["Общий дефицит", "0 ₽", "1 ₽", "+1 ₽", ""], ["Сотрудников с дефицитом", "0", "1", "+1", ""], ["Остаток на конец года", "0 ₽", "522 001 ₽", "+522 001 ₽", "inv"], ["Смен договора оклада", "0", "0", "0", ""]], "note": "Потребность снизилась на зарплату второго полугодия: выплачено 11 869 799 ₽, высвобожденный остаток 522 001 ₽ остается в кассе на конец года. Дефицит 1 ₽ — округление копеечного деления фонда, устраняется корректировкой поступления на один рубль.", "sec": 15.0, "status": "OPTIMAL"}, {"name": "Задержка первого транша ГОЗ на месяц", "what": "Январское поступление договора C_GOZ перенесено на февраль; квартальный график, дефицит разрешен.", "rows": [["Статус решателя", "OPTIMAL", "INFEASIBLE", "задача невыполнима", ""]], "note": "Решатель установил, что задача невыполнима даже с разрешенным дефицитом: в январе касса ГОЗ пуста, а оклад по открытым ставкам обязателен к выплате. Задержка транша при квартальном графике недопустима — это жесткое кассовое ограничение, разбор аналогичного случая приведен в разделе анализа невыполнимости.", "sec": 3.6, "status": "INFEASIBLE"}], "infeasible": {"ctr": "C_FLEX", "status": "INFEASIBLE", "sec": 2.8, "clauses": [["полнота выплаты", "сотруднику Иванов А. П. (инженер) ежемесячно причитается 160 000 ₽"], ["приказ 2556", "оклад и надбавка 122 по должности «инженер» ограничены 110 000 ₽ в месяц"], ["виды выплат", "надбавка 124 и стимулирующая приказом разрешены только на договоре C_FLEX"], ["касса договора", "поступления C_FLEX в этом варианте равны нулю — платить недостающее нечем"]], "gap": "50 000 ₽ в месяц по сотруднику Иванов А. П.", "fixes": [["Восстановить поступления по договору C_FLEX", "базовый вариант: касса покрывает надбавку 124 и приказ"], ["Пересмотреть месячную оплату сотрудника до 110 000 ₽", "штатная часть умещается в предельный размер, надбавки не требуются"], ["Разрешить дефицит в параметрах расчета", "решатель вернет частичный план с адресным дефицитом вместо отказа"]]}}
 </script>
 
 <script>
@@ -294,6 +317,13 @@
 /* ═══════════ данные ═══════════ */
 var RAW = JSON.parse(document.getElementById("demo-data").textContent);
 var D = RAW.base;            // входные данные + встроенный результат
+/* после «Очистить» встроенный кейс не показываем, пока не загрузят файл или не посчитают */
+var emptied = sessionStorage.getItem("demoCleared")==="1";
+function unEmpty(){ if(emptied){ emptied=false; sessionStorage.removeItem("demoCleared"); } }
+function emptyNote(what){
+  return '<div class="drop" style="cursor:default"><b>Данных пока нет</b>'+
+         "<small>"+what+" — раздел заполнится после загрузки документов в «Извлечении данных»</small></div>";
+}
 var SCEN = RAW.scenarios;    // реально просчитанные сценарии
 var INFEAS = RAW.infeasible; // реальный невыполнимый кейс
 var META = RAW.meta;         // время решения, версии
@@ -360,7 +390,7 @@ var QUEST=[
  {src:docName(D.contracts[0]), sh:docSheet(D.contracts[0]), cell:"G16",
   field:"Стоимость чел.-мес, договор "+D.contracts[0].code,
   raw:"8 000", got:"8 000 ₽",
-  why:"Расчётное соотношение формы не выполняется: 18,0 чел.-мес по 8 000 ₽ дают 144 000 ₽, а итог строки — 1 440 000 ₽. Похоже на потерю разряда.",
+  why:"Расчетное соотношение формы не выполняется: 18,0 чел.-мес по 8 000 ₽ дают 144 000 ₽, а итог строки — 1 440 000 ₽. Похоже на потерю разряда.",
   rec:{t:"80 000 ₽",s:"восстановлено из итога строки"},
   alt:{t:"Оставить 8 000 ₽",s:"как в документе"}, res:null},
  {src:docName(D.contracts[1]), sh:docSheet(D.contracts[1]), cell:"D19", needDoc:D.contracts[1].code,
@@ -372,7 +402,7 @@ var QUEST=[
  {src:docName(D.contracts[0]), sh:docSheet(D.contracts[0]), cell:"D16",
   field:"Количество специалистов, договор "+D.contracts[0].code,
   raw:"3 специалиста", got:"3 человека",
-  why:"Итог строки делится ровно на две части, а 14,0 чел.-мес на троих дают дробную трудоёмкость. Вероятно, исполнителей двое.",
+  why:"Итог строки делится ровно на две части, а 14,0 чел.-мес на троих дают дробную трудоемкость. Вероятно, исполнителей двое.",
   rec:{t:"2 человека",s:"по делению итога строки"},
   alt:{t:"3 человека",s:"как в документе"}, res:null}];
 function questReady(q){
@@ -439,13 +469,13 @@ function fileRow(f){
     .then(function(j){
       srvOK=true;
       if(!j.ok){ LIVE={error:j.error,file:f.name}; pstate="live"; render(); return; }
-      LIVE=j; pstate="live";
+      LIVE=j; pstate="live"; unEmpty();
       CHAT=[{who:"ai",text:"Разобрал файл «"+j.file+"». "+
         (j.ready.ok
-          ? "Данных достаточно для расчёта: сотрудников "+j.passport.employees.length+
+          ? "Данных достаточно для расчета: сотрудников "+j.passport.employees.length+
             ", договоров "+j.passport.contracts.length+
-            ". Можно править значения или запускать расчёт."
-          : "Для расчёта не хватает: "+j.ready.missing.join(", ")+". "+(j.ready.hint||""))}];
+            ". Можно править значения или запускать расчет."
+          : "Для расчета не хватает: "+j.ready.missing.join(", ")+". "+(j.ready.hint||""))}];
       render();
     })
     .catch(function(){
@@ -471,7 +501,7 @@ function vParse(){
   var h="";
 
   if(pstate==="uploading"){
-    return '<div class="plain">Читаю файл и проверяю расчётные соотношения форм…</div>';
+    return '<div class="plain">Читаю файл и проверяю расчетные соотношения форм…</div>';
   }
 
   if(pstate==="live"){
@@ -514,7 +544,7 @@ function vParse(){
     }
     if(P.contracts.length){
       h+='<div class="cap">Паспорт: договоры</div>'+
-        tbl(["код","наименование","ГОЗ","ФОТ, ₽","разрешённые виды выплат"],
+        tbl(["код","наименование","ГОЗ","ФОТ, ₽","разрешенные виды выплат"],
           P.contracts.map(function(c){
             return [{v:c.code,cls:"mono"},c.name,
                     {v:c.goz,cls:c.goz==="да"?"tWARN":"tMUTE"},
@@ -532,7 +562,7 @@ function vParse(){
 
     if(LIVE.ready&&LIVE.ready.ok){
       h+='<div class="okrow"><span class="t">'+
-         (LIVE.offline?"Паспорт демонстрационного файла":"Паспорт готов к расчёту")+"</span>"+
+         (LIVE.offline?"Паспорт демонстрационного файла":"Паспорт готов к расчету")+"</span>"+
          '<span class="s">сотрудников '+P.employees.length+", договоров "+P.contracts.length+"</span>"+
          '<button type="button" id="goplan">Рассчитать план</button></div>';
     }
@@ -544,8 +574,8 @@ function vParse(){
     h+='<input type="file" id="filepick" accept=".xlsx,.xlsm" style="display:none">';
     h+='<button type="button" class="drop" id="dropzone"><b>Загрузите документы по договорам</b>'+
        "<small>перетащите файлы или нажмите для выбора (xlsx, xlsm)</small>"+
-       "<small>форма определяется по заголовку, каждое значение проверяется расчётными соотношениями самой формы</small></button>";
-    h+='<div class="steps"><span><b>1</b>Загрузка документов</span><span><b>2</b>Подтверждение спорных значений</span><span><b>3</b>Передача паспортов договоров в расчёт</span></div>';
+       "<small>форма определяется по заголовку, каждое значение проверяется расчетными соотношениями самой формы</small></button>";
+    h+='<div class="steps"><span><b>1</b>Загрузка документов</span><span><b>2</b>Подтверждение спорных значений</span><span><b>3</b>Передача паспортов договоров в расчет</span></div>';
     return h;
   }
   var doneDocs=DOCS.filter(function(d){return d.st==="ok";}).length;
@@ -559,11 +589,11 @@ function vParse(){
   var waiting=QUEST.filter(function(q){return !q.res&&!questReady(q);}).length;
   var doneN=QUEST.filter(function(q){return q.res;}).length;
   var auto=fieldsDone-QUEST.length;
-  h+='<div class="plain">Принято автоматически: <b>'+auto+"</b> значений (расчётные соотношения форм выполнены), "+
+  h+='<div class="plain">Принято автоматически: <b>'+auto+"</b> значений (расчетные соотношения форм выполнены), "+
      "решений специалиста: <b>"+doneN+"</b>, ожидают ответа: <b>"+(left.length+waiting+badDocs)+"</b></div>";
   if(!left.length && !badDocs){
     h+='<div class="okrow"><span class="t">Все '+fieldsDone+' значений сверены</span>'+
-       '<span class="s">Паспорта '+D.contracts.length+' договоров готовы к расчёту</span>'+
+       '<span class="s">Паспорта '+D.contracts.length+' договоров готовы к расчету</span>'+
        '<button type="button" id="goplan">Рассчитать план</button></div>';
   }
   if(left.length){
@@ -598,8 +628,14 @@ function vParse(){
 
 /* ═══════════ таблицы ═══════════ */
 function tbl(head,rows,opts){
+  /* колонку считаем числовой, если так размечена первая строка данных:
+     заголовок тогда прижимается вправо, как и значения под ним */
+  var numCol=[];
+  if(rows.length) rows[0].forEach(function(c,i){
+    numCol[i] = (typeof c==="object" && ((c.cls||"").split(" ").indexOf("n")>=0));
+  });
   var h='<div class="scr"><table><thead><tr>';
-  head.forEach(function(c){h+="<th>"+c+"</th>";});
+  head.forEach(function(c,i){h+=(numCol[i]?'<th class="nh">':"<th>")+c+"</th>";});
   h+="</tr></thead><tbody>";
   rows.forEach(function(r,i){
     var cls=(opts&&opts.sel===i?"sel ":"")+(opts&&opts.total===i?"total":"");
@@ -618,13 +654,14 @@ function kindsCell(c){
               .map(function(k){return k.n;}).join(", ")||"—";
 }
 function vCtr(){
+  if(emptied) return emptyNote("Договоры");
   var rows=D.contracts.map(function(c){
     return [{v:c.code,cls:"mono"},c.name,{v:c.num,cls:"mono"},c.type,
             {v:c.goz==="да"?"да":"нет",cls:c.goz==="да"?"tWARN":"tMUTE"},
             {v:mo(c.fot),cls:"n"},kindsCell(c)];
   });
   return '<div class="split"><div>'+
-    tbl(["код","наименование","номер","тип","ГОЗ","ФОТ, ₽","разрешённые виды выплат"],rows,{key:1,sel:selC})+
+    tbl(["код","наименование","номер","тип","ГОЗ","ФОТ, ₽","разрешенные виды выплат"],rows,{key:1,sel:selC})+
     '</div><div class="side" id="side"></div></div>';
 }
 function sideCtr(){
@@ -640,7 +677,7 @@ function sideCtr(){
     "<dt>ФОТ договора</dt><dd>"+mo(c.fot)+" ₽</dd>"+
     (paid!==null?"<dt>выплачено по плану</dt><dd>"+mo(paid)+" ₽</dd>":"")+
     "</dl>"+
-    '<div class="cap">Разрешённые виды выплат</div><div class="plain">'+kindsCell(c)+"</div>"+
+    '<div class="cap">Разрешенные виды выплат</div><div class="plain">'+kindsCell(c)+"</div>"+
     '<div class="cap">Поступления по месяцам</div>'+
     '<div style="display:flex;align-items:flex-end;gap:3px;height:44px">'+
     inflow.map(function(v){return '<i style="flex:1;background:var(--acc);opacity:.75;height:'+
@@ -652,18 +689,23 @@ function sideCtr(){
 
 /* ═══════════ штатное расписание ═══════════ */
 function vEmp(){
+  if(emptied) return emptyNote("Штатное расписание");
   var rows=D.employees.map(function(e){
-    var paid=solved?(A.byEmp[e.code]?A.byEmp[e.code].total:0):null;
-    var needE=e.sal*empMonths(e);
-    return [{v:e.code,cls:"mono"},e.fio,e.pos,
+    var base=[{v:e.code,cls:"mono"},e.fio,e.pos,
             {v:String(e.rate).replace(".",","),cls:"n"},
-            {v:mo(e.sal),cls:"n"},
-            {v:paid===null?"":mo(paid),cls:"n"},
-            {v:paid===null?"":(Math.abs(paid-needE)<1?"полностью":"частично"),
-             cls:paid===null?"":(Math.abs(paid-needE)<1?"tOK":"tWARN")}];
+            {v:mo(e.sal),cls:"n"}];
+    if(!solved) return base;
+    var paid=A.byEmp[e.code]?A.byEmp[e.code].total:0;
+    var needE=e.sal*empMonths(e);
+    return base.concat([
+            {v:mo(paid),cls:"n"},
+            {v:Math.abs(paid-needE)<1?"полностью":"частично",
+             cls:Math.abs(paid-needE)<1?"tOK":"tWARN"}]);
   });
+  var head=["код","ФИО","должность","ставка","зарплата в месяц, ₽"];
+  if(solved) head=head.concat(["выплачено за год, ₽","закрытие"]);
   return '<div class="split"><div>'+
-    tbl(["код","ФИО","должность","ставка","зарплата в месяц, ₽","выплачено за год, ₽","закрытие"],rows,{key:1,sel:selE})+
+    tbl(head,rows,{key:1,sel:selE})+
     '</div><div class="side" id="side"></div></div>';
 }
 function sideEmp(){
@@ -674,9 +716,9 @@ function sideEmp(){
     "<dt>подразделение</dt><dd class=\"txt\">"+e.dep+"</dd>"+
     "<dt>ставка</dt><dd>"+String(e.rate).replace(".",",")+"</dd>"+
     "<dt>зарплата в месяц</dt><dd>"+mo(e.sal)+" ₽</dd>"+
-    "<dt>дата приёма</dt><dd>"+e["from"]+"</dd>"+
+    "<dt>дата приема</dt><dd>"+e["from"]+"</dd>"+
     (empMonths(e)<12?"<dt>в 2026 году</dt><dd>"+empMonths(e)+" мес.</dd>":"")+"</dl>";
-  if(!solved) return h+'<div class="note">Распределение по договорам и видам выплат определяется расчётом</div>';
+  if(!solved) return h+'<div class="note">Распределение по договорам и видам выплат определяется расчетом</div>';
   var rowsMap={};
   (A.byEmp[e.code]?A.byEmp[e.code].rows:[]).forEach(function(p){
     var key=p.ctr+"|"+p.kind;
@@ -705,20 +747,29 @@ var POSREF=[
   ["специалист","НТП",40400,110000]];
 var P4={"НТП":149648.90,"НР":257643.19};
 function vPos(){
-  return '<div class="plain">Справочник сервиса: <span class="mono">defaults/position_reference.py</span> '+
-    "и <span class=\"mono\">defaults/position_limits.py</span>. Оклад за одну ставку и предельные размеры выплат. "+
+  return '<div class="cap">Должности и предельные размеры</div>'+
+    '<div class="plain">Оклад за одну ставку и предельные размеры выплат. '+
     "П4 по категории: НТП — <b>"+mo2(P4["НТП"])+" ₽</b>, НР — <b>"+mo2(P4["НР"])+" ₽</b>.</div>"+
     tbl(["должность","категория","оклад за 1,0 ставки, ₽","П2556, ₽","П4, ₽"],
       POSREF.map(function(p){
         return [p[0],p[1],{v:mo(p[2]),cls:"n"},{v:p[3]?mo(p[3]):"—",cls:"n"},
                 {v:P4[p[1]]?mo2(P4[p[1]]):"—",cls:"n"}];
+      }))+
+    '<div class="cap">Нормативы года</div>'+
+    '<div class="plain">В расчете применяется только БЭП. Остальные величины относятся '+
+    "к структуре цены договора и потребуются, когда сервис будет считать полную стоимость, "+
+    "а не распределение фонда.</div>"+
+    tbl(["№","показатель","ед.","значение","источник","в расчете"],
+      NORMS.map(function(n){
+        return [{v:n[0],cls:"mono"},n[1],{v:n[2],cls:"mono"},{v:n[3],cls:"n"},n[4],
+                {v:n[5],cls:n[5]==="да"?"tOK":"tMUTE"}];
       }));
 }
 
 /* ═══════════ нормативы ═══════════ */
 var NORMS=[
   ["1.1","Среднемесячная заработная плата основных работников (БЭП)","руб.","112 261",
-   "defaults/settings.py, основание — письмо 550 ВП МО РФ","да"],
+   "справочник сервиса, основание — письмо 550 ВП МО РФ","да"],
   ["1.2","Дополнительная заработная плата основных работников","%","8,69",
    "структура цены, расшифровка ФОТ","нет"],
   ["1.3","Дополнительная заработная плата ИТР и научных работников (УВП)","%","11,31",
@@ -733,36 +784,24 @@ var NORMS=[
    "структура цены, расшифровка ФОТ","нет"],
   ["5","Порог регрессии страховых взносов","руб.","2 979 000",
    "структура цены, НК РФ, свыше — 15,3 %","нет"]];
-function vNrm(){
-  return '<div class="plain">Нормативы организации на 2026 год. Значения взяты из присланных форм '+
-    "заказчика и из справочника сервиса. В расчёте сейчас применяется только БЭП: остальные "+
-    "величины относятся к структуре цены договора и потребуются, когда сервис будет считать "+
-    "полную стоимость, а не распределение фонда.</div>"+
-    tbl(["№","показатель","ед.","значение","источник","в расчёте"],
-      NORMS.map(function(n){
-        return [{v:n[0],cls:"mono"},n[1],{v:n[2],cls:"mono"},{v:n[3],cls:"n"},n[4],
-                {v:n[5],cls:n[5]==="да"?"tOK":"tMUTE"}];
-      }));
-}
 
 /* ═══════════ агент 2: параметры ═══════════ */
 var SETTINGS=[
   ["Год планирования","2026"],["Разрешить дефицит","нет"],
   ["Максимум договоров оклада в год","2"],["Штраф смены договора оклада","500 000"],
   ["Штраф административной сложности выплат","50 000"],["Штраф неравномерного освоения","10 000"],
-  ["Штраф использования приказа","1 000 000"],["Допуск трудоёмкости","0,05"]];
+  ["Штраф использования приказа","1 000 000"],["Допуск трудоемкости","0,05"]];
 var PRESETS=[
   {re:/приказ/i, name:"минимизировать приказы",
    set:{"Штраф использования приказа":"3 000 000"}},
   {re:/равномер|гоз/i, name:"равномерное освоение ГОЗ",
-   set:{"Штраф неравномерного освоения":"60 000","Допуск трудоёмкости":"0,03"}},
+   set:{"Штраф неравномерного освоения":"60 000","Допуск трудоемкости":"0,03"}},
   {re:/оклад|смен/i, name:"сохранить договор оклада",
    set:{"Штраф смены договора оклада":"2 000 000","Максимум договоров оклада в год":"1"}}];
 var curSet={}, hotKeys={}, calMsg="";
 SETTINGS.forEach(function(s){curSet[s[0]]=s[1];});
 function vCal(){
-  var h='<div class="aghead"><span class="who">ИИ-агент 2, настройка параметров</span>'+
-    '<span class="st">требование преобразуется в веса целевой функции; значения применяются при следующем расчёте</span></div>';
+  var h='<div class="plain">Значения применяются при следующем расчете.</div>';
   h+='<div class="agrow"><input id="calq" type="text" placeholder="Например: обеспечить равномерное освоение ГОЗ и минимизировать приказы">'+
      '<button type="button" class="go" id="calgo">Подобрать параметры</button></div>';
   h+='<div class="exlist">'+PRESETS.map(function(p,i){
@@ -773,7 +812,8 @@ function vCal(){
   h+='<div class="cap">Параметры оптимизатора</div><div class="params">'+
     SETTINGS.map(function(s){
       var hot=hotKeys[s[0]];
-      return '<div class="'+(hot?"hot":"")+'"><span class="pn">'+s[0]+'</span><span class="pv">'+curSet[s[0]]+"</span></div>";
+      return '<div class="'+(hot?"hot":"")+'"><span class="pn">'+s[0]+"</span>"+
+             '<input class="pv" data-set="'+s[0]+'" value="'+curSet[s[0]]+'"></div>';
     }).join("")+"</div>";
   return h;
 }
@@ -781,8 +821,7 @@ function vCal(){
 /* ═══════════ агент 4: сценарии ═══════════ */
 var scenSel=-1, scenLive=null, scenBusy=false, scenMsg="";
 function vWhat(){
-  var h='<div class="aghead"><span class="who">ИИ-агент 4, сценарное моделирование</span>'+
-    '<span class="st">требование меняет исходные данные, решатель считает заново, результат сравнивается с базовым планом</span></div>';
+  var h='<div class="plain">Требование меняет исходные данные, решатель считает заново, результат сравнивается с базовым планом.</div>';
   h+='<div class="agrow"><input id="scq" type="text" placeholder="Например: сократить фонд ГОЗ на 20 %">'+
      '<button type="button" class="go" id="scgo">'+(scenBusy?"Считаю…":"Пересчитать")+"</button></div>";
   h+='<div class="exlist">'+SCEN.map(function(s,i){
@@ -810,7 +849,7 @@ function vWhat(){
       return [r[0],{v:r[1],cls:"n"},{v:r[2],cls:"n"},{v:String(d)==="0"?"без изменений":d,cls:"n "+cls}];
     }));
   h+='<div class="memo" style="max-width:none"><h3>Заключение</h3><div class="plain">'+sc.note+"</div>"+
-     '<div class="note">Время решения сценария: '+fmtSec(sc.sec)+" с, статус "+sc.status+"</div></div>";
+     '<div class="note">Демонстрационный пример, просчитан заранее: '+fmtSec(sc.sec)+" с, статус "+sc.status+"</div></div>";
   return h;
 }
 
@@ -818,16 +857,16 @@ function vWhat(){
 function vPlan(){
   var solveNote = liveSource==="api"
     ? "Рассчитано только что: решатель HiGHS, "+fmtSec(liveSec)+" с"
-    : "Встроенный результат расчёта: решатель HiGHS, "+fmtSec(META.solve_sec)+" с";
+    : "Встроенный результат расчета: решатель HiGHS, "+fmtSec(META.solve_sec)+" с";
   var h='<div class="kpi">'+
     kpi("Выплачено за год", solved?mo(A.total)+" ₽":"—", solved?"из потребности "+mo(NEED)+" ₽":"", solved?"ok":"mute")+
     kpi("Статус решателя", solved?String(summaryVal("Статус решателя")):"—","",solved?"ok":"mute")+
-    kpi("Время расчёта", solved?fmtSec(liveSource==="api"?liveSec:META.solve_sec)+" с":"—","полный цикл запуска",solved?"":"mute")+
+    kpi("Время расчета", solved?fmtSec(liveSource==="api"?liveSec:META.solve_sec)+" с":"—","полный цикл запуска",solved?"":"mute")+
     kpi("Дефицит", solved?mo(Number(summaryVal("Общий дефицит")||0)):"—",
         solved?"сотрудников с дефицитом: "+(summaryVal("Сотрудников с дефицитом")||0):"", solved?"ok":"mute")+
-    kpi("Строк плана", solved?mo(D.plan.length):"—","сотрудник, месяц, вид выплаты",solved?"":"mute")+
     "</div>";
   if(solved) h+='<div class="note">'+solveNote+"</div>";
+
   var maxM=0;
   for(var m=0;m<12;m++){
     var t=0,mk=A.byMK[m]||{};
@@ -864,7 +903,7 @@ function vPlan(){
     h+='<div class="monthrow"><b>'+MON[selM]+"</b>"+parts.join("")+
        '<span class="kk">итого за месяц <b>'+mo(tot)+" ₽</b></span></div>";
   } else {
-    h+='<div class="monthrow"><span class="note">План появится после расчёта</span></div>';
+    h+='<div class="monthrow"><span class="note">План появится после расчета</span></div>';
   }
   return h;
 }
@@ -875,7 +914,7 @@ function kpi(k,v,s,cls){
 
 /* ═══════════ ограничения ═══════════ */
 function vLim(){
-  if(!solved) return '<div class="note">Проверки заполняются по результату расчёта</div>';
+  if(!solved) return '<div class="note">Проверки заполняются по результату расчета</div>';
   var n=D.employees.length, mcnt=12;
   var chk=function(k){return mo(k)+" "+px(k,"проверка","проверки","проверок");};
   var rows=[
@@ -886,11 +925,11 @@ function vLim(){
     ["Приказ 4: предел по категории персонала", chk(n*mcnt), "0",
      "НТП "+mo2(P4["НТП"])+" ₽, НР "+mo2(P4["НР"])+" ₽"],
     ["Касса договора: остаток не отрицателен", chk(D.contracts.length*mcnt), "0",
-     "перенос остатка только вперёд"],
-    ["Разрешённые виды выплат по договору",
+     "перенос остатка только вперед"],
+    ["Разрешенные виды выплат по договору",
      mo(D.plan.length)+" "+px(D.plan.length,"строка","строки","строк"), "0",
      "каждая строка плана в допустимом виде"]];
-  return '<div class="plain">Жёсткие ограничения выполняются по построению оптимизационной модели: '+
+  return '<div class="plain">Жесткие ограничения выполняются по построению оптимизационной модели: '+
     "решение либо удовлетворяет всем, либо задача объявляется невыполнимой.</div>"+
     tbl(["ограничение","охват","нарушений","примечание"],
       rows.map(function(r){return [r[0],{v:r[1],cls:"n"},{v:r[2],cls:"tOK"},r[3]];}));
@@ -898,7 +937,7 @@ function vLim(){
 
 /* ═══════════ освоение ═══════════ */
 function vOsv(){
-  if(!solved) return '<div class="note">Раздел заполняется по результату расчёта</div>';
+  if(!solved) return '<div class="note">Раздел заполняется по результату расчета</div>';
   var rows=D.contracts.map(function(c){
     var cash=D.cash[c.code]||{};
     var infl=(cash["Поступление"]||[]).reduce(function(a,b){return a+b;},0);
@@ -925,24 +964,29 @@ function vOsv(){
         rows,{total:rows.length-1});
 }
 
-/* ═══════════ отчёты ═══════════ */
+/* ═══════════ отчеты ═══════════ */
 function vRep(){
   var DESC={"Итог расчета":"показатели решения","Проблемы и предупреждения":"что проверить экономисту",
     "План выплат":"строки: сотрудник, месяц, договор, вид, сумма",
     "ФОТ по договорам":"поступления, выплаты, остатки",
-    "Контроль трудоёмкости":"в демонстрационном кейсе не задействован",
+    "Контроль трудоемкости":"в демонстрационном кейсе не задействован",
     "ШР_детализация":"кадровые назначения"};
   var reps=(META.sheets||Object.keys(DESC)).map(function(nm){return [nm,DESC[nm]||""];});
-  return '<div class="plain">Результат сохраняется книгой Excel. Состав листов соответствует фактическому файлу '+
-    "<span class=\"mono\">demo_result.xlsx</span>; при разрешённом дефиците добавляются листы "+
-    "«Дефициты» и «Дефициты по месяцам».</div>"+
+  var file = (liveSource==="api") ? "_result.xlsx" : "demo_result.xlsx";
+  return '<div class="plain">Результат сохраняется книгой Excel. При разрешенном дефиците '+
+    "добавляются листы «Дефициты» и «Дефициты по месяцам».</div>"+
+    '<div class="okrow"><span class="t">Книга результата</span>'+
+    '<span class="s">' + (liveSource==="api"
+      ? "файл последнего расчета решателем"
+      : "встроенный демонстрационный результат") + "</span>"+
+    '<a class="dl" href="'+file+'" download>Скачать Excel</a></div>'+
     tbl(["лист","содержание"],reps)+
-    (solved?'<div class="cap">Итог расчёта, как в файле</div>'+
+    (solved?'<div class="cap">Итог расчета, как в файле</div>'+
       tbl(["показатель","значение","статус","комментарий"],
         D.summary.map(function(s){
           var name=s[0]===null?"":String(s[0]);
           var val=s[1]===null?"":s[1];
-          if(name==="Время расчёта, сек"){
+          if(name==="Время расчета, сек"){
             name="Время решателя (без подготовки данных), сек";
             val=fmtSec(val);
           } else if(typeof val==="number"&&Math.abs(val)>=1000){
@@ -956,8 +1000,7 @@ function vRep(){
 /* ═══════════ агент 3: невыполнимость ═══════════ */
 var diagFix=-1;
 function vDiag(){
-  var h='<div class="aghead"><span class="who">ИИ-агент 3, анализ невыполнимости</span>'+
-    '<span class="st">разбор реального случая: вариант исходных данных, при котором решения не существует</span></div>';
+  var h='<div class="plain">Демонстрационный пример: заранее просчитанный вариант данных, при котором решения не существует.</div>';
   h+='<div class="plain">Вариант: у договора '+INFEAS.ctr+" обнулены поступления. Решатель на этих данных "+
      "завершился со статусом <b>"+INFEAS.status+"</b> за "+fmtSec(INFEAS.sec)+" с — задача не имеет допустимого решения. "+
      "Агент определяет минимальный набор взаимно противоречивых условий:</div>";
@@ -976,7 +1019,7 @@ function vDiag(){
              "<small>"+f[1]+"</small></button>";
     }).join("")+"</div>";
   if(diagFix===0){
-    h+='<div class="okrow"><span class="t">Вариант проверен расчётом</span>'+
+    h+='<div class="okrow"><span class="t">Вариант проверен расчетом</span>'+
        '<span class="s">С поступлениями по договору задача решается: OPTIMAL, дефицит 0</span>'+
        '<button type="button" id="goplan">Открыть план</button></div>';
   } else if(diagFix>0){
@@ -988,7 +1031,7 @@ function vDiag(){
 
 /* ═══════════ агент 6: материалы ═══════════ */
 function vMemo(){
-  if(!solved) return '<div class="note">Материалы формируются по результатам расчёта — выполните расчёт</div>';
+  if(!solved) return '<div class="note">Материалы формируются по результатам расчета — выполните расчет</div>';
   var star=D.employees[0];
   var starRows=A.byEmp[star.code]?A.byEmp[star.code].rows:[];
   var starPrk=starRows.filter(function(p){return p.kind==="prk";})
@@ -998,12 +1041,11 @@ function vMemo(){
     var cash=D.cash[c.code]||{};
     restY+=((cash["Остаток на конец"]||[])[11]||0);
   });
-  return '<div class="aghead"><span class="who">ИИ-агент 6, пояснительные материалы</span>'+
-    '<span class="st">текст сформирован по числам результата расчёта</span></div>'+
+  return '<div class="plain">Текст сформирован по числам результата расчета.</div>'+
     '<div class="memo"><h3>Что получилось</h3><ul>'+
     "<li>Выплачено <b>"+mo(A.total)+" ₽</b> по "+D.contracts.length+" договорам, дефицит отсутствует.</li>"+
     (restY>0.5
-      ? "<li>Остаток на конец года <b>"+mo(restY)+" ₽</b> отражён предупреждениями в результате.</li>"
+      ? "<li>Остаток на конец года <b>"+mo(restY)+" ₽</b> отражен предупреждениями в результате.</li>"
       : "<li>Фонды договоров освоены полностью, переходящий остаток отсутствует.</li>")+
     "<li>Статус решателя <b>"+String(summaryVal("Статус решателя"))+"</b>, время "+
     fmtSec(liveSource==="api"?liveSec:META.solve_sec)+" с.</li>"+
@@ -1023,16 +1065,14 @@ function vMemo(){
 var factLoaded=false;
 function vFact(){
   if(!factLoaded){
-    return '<div class="aghead"><span class="who">ИИ-агент 5, сверка плана и факта</span>'+
-      '<span class="st">ежемесячное сопоставление выгрузки начислений с плановыми строками</span></div>'+
+    return ''+
       '<button type="button" class="drop" id="factdrop"><b>Загрузите выгрузку начислений за месяц</b>'+
       "<small>1С, xlsx или csv</small></button>"+
-      '<div class="plain">Приём файлов выгрузки не реализован. Кнопка строит выгрузку '+
-      "из планового января текущего расчёта и вносит в неё типовые расхождения, "+
+      '<div class="plain">Демонстрационный пример: прием файлов выгрузки не реализован. Кнопка строит выгрузку '+
+      "из планового января текущего расчета и вносит в нее типовые расхождения, "+
       "чтобы показать, как агент их разбирает.</div>";
   }
-  if(!solved) return '<div class="aghead"><span class="who">ИИ-агент 5, сверка плана и факта</span></div>'+
-    '<div class="plain">Сопоставление строится по плановым суммам: сначала выполните расчёт.</div>';
+  if(!solved) return '<div class="plain">Сопоставление строится по плановым суммам: сначала выполните расчет.</div>';
   /* строим выгрузку из реального января */
   var jan={};
   D.plan.forEach(function(p){ if(p.m===0) jan[p.emp]=(jan[p.emp]||0)+p.sum; });
@@ -1061,50 +1101,48 @@ function vFact(){
   rows.push(["Кудрявцев В. Н.",{v:"в плане отсутствует, принят 15 января",cls:"tWARN"},
              {v:"—",cls:"n"},{v:"52 000",cls:"n"},{v:"+52 000",cls:"n"},{v:"вне плана",cls:"tWARN"}]);
   var warnCnt=rows.length-okCnt-1;
-  return '<div class="aghead"><span class="who">ИИ-агент 5, сверка плана и факта</span>'+
-    '<span class="st">январь: строк совпало '+okCnt+", требуют решения "+warnCnt+", вне плана 1</span></div>"+
-    '<div class="plain">Плановые суммы взяты из текущего расчёта. Три расхождения '+
+  return '<div class="plain">Январь: строк совпало <b>'+okCnt+"</b>, требуют решения <b>"+warnCnt+"</b>, вне плана <b>1</b>.</div>"+
+    '<div class="plain">Плановые суммы взяты из текущего расчета. Три расхождения '+
     "смоделированы, чтобы показать разбор: вторая позиция штатного расписания, "+
     "разное написание фамилии и выплата сотруднику вне плана.</div>"+
     tbl(["строка выгрузки","сопоставление с планом","план, ₽","факт, ₽","расхождение","состояние"],rows)+
     '<div class="memo" style="max-width:none"><h3>Заключение</h3><div class="plain">Итог выгрузки отличается от плана на '+
-    mo(37000+52000)+" ₽. Причины: выплата по второй позиции штатного расписания и приём нового сотрудника, "+
-    "не отражённый в плане. Обе позиции подлежат внесению в штатное расписание до пересчёта остатка года.</div></div>";
+    mo(37000+52000)+" ₽. Причины: выплата по второй позиции штатного расписания и прием нового сотрудника, "+
+    "не отраженный в плане. Обе позиции подлежат внесению в штатное расписание до пересчета остатка года.</div></div>";
 }
 
 /* ═══════════ агент 7: мониторинг ═══════════ */
 function vNorm(){
   var rows=[
-    ["Предельный размер П4, категория НТП","defaults/position_limits.py",
+    ["Предельный размер П4, категория НТП","справочник сервиса, приказ № 4",
      {v:mo2(149648.90),cls:"n"},{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}],
-    ["Предельный размер П4, категория НР","defaults/position_limits.py",
+    ["Предельный размер П4, категория НР","справочник сервиса, приказ № 4",
      {v:mo2(257643.19),cls:"n"},{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}],
-    ["Средняя штатная часть по ГОЗ (БЭП)","defaults/settings.py",
+    ["Средняя штатная часть по ГОЗ (БЭП)","справочник сервиса, письмо 550 ВП МО РФ",
      {v:"112 261",cls:"n"},{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}],
-    ["Оклады должностей, "+POSREF.length+" позиций","defaults/position_reference.py",
+    ["Оклады должностей, "+POSREF.length+" позиций","справочник сервиса, положение об оплате труда",
      {v:"40 400 — 74 100",cls:"n"},{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}]];
-  return '<div class="aghead"><span class="who">ИИ-агент 7, мониторинг нормативной базы</span>'+
-    '<span class="st">сверка справочных величин с приказами и положением об оплате труда</span></div>'+
-    '<div class="plain">Сейчас показан состав справочника, который применяется при расчёте, '+
-    "и его источники в коде сервиса. Сопоставление с действующими редакциями приказов "+
+  return ''+
+    '<div class="plain">Сейчас показан состав справочника, который применяется при расчете, '+
+    "и основания его величин. Сопоставление с действующими редакциями приказов "+
     "не реализовано: для него нужен доступ к нормативным документам организации. "+
     "Колонка «по документу» заполнится, когда такой источник появится.</div>"+
-    tbl(["величина","источник значения","применяется при расчёте","по документу","состояние"],rows)+
+    tbl(["величина","источник значения","применяется при расчете","по документу","состояние"],rows)+
     '<div class="memo" style="max-width:none"><h3>Что даст модуль</h3><div class="plain">'+
     "Автоматическую проверку: не изменились ли предельные размеры по приказам 2556 и 4, "+
     "оклады должностей и средняя зарплата основных работников из писем военного "+
     "представительства. Сегодня справочник обновляется вручную, и о просрочке узнают "+
-    "после расчёта.</div></div>";
+    "после расчета.</div></div>";
 }
 
 /* ═══════════ правила ═══════════ */
 var RULES=[
   ["Виды выплат","Зарплата закрывается окладом и надбавками 120 (гостайна), 122 (качество), 124 (интенсивность), 152 (дополнительная работа); стимулирующая приказом — крайний инструмент со штрафом 1 000 000 в целевой функции. Договор разрешает свой набор видов."],
   ["Лимиты","Приказ 2556: оклад и 122 не выше лимита должности на ставку. Приказ 4: предел по категории (НТП "+mo2(149648.9)+" ₽, НР "+mo2(257643.19)+" ₽). БЭП: средняя штатная часть по ГОЗ-договору за месяц не выше норматива."],
-  ["Касса договора","Остаток на конец месяца равен остатку на начало плюс поступления минус выплаты; отрицательным быть не может, переносится только вперёд."],
+  ["Касса договора","Остаток на конец месяца равен остатку на начало плюс поступления минус выплаты; отрицательным быть не может, переносится только вперед."],
   ["Ставки","Шаг ставки 0,25; совместительство не более 0,5; суммарно на сотрудника не более 1,5. Оклад определяется должностью назначения: при двух ставках — два назначения и два оклада."],
-  ["Целевая функция","Минимизируются: смены договора оклада, административная сложность (лишние связки сотрудник—договор), неравномерность освоения, применение приказа, отклонение трудоёмкости."],
-  ["Невыполнимость","Если при запрете дефицита решения нет, задача объявляется невыполнимой; при разрешённом дефиците возвращается частичный план с адресными дефицитами по сотрудникам и месяцам."]];
+  ["Целевая функция","Минимизируются: смены договора оклада, административная сложность (лишние связки сотрудник—договор), неравномерность освоения, применение приказа, отклонение трудоемкости."],
+  ["Невыполнимость","Если при запрете дефицита решения нет, задача объявляется невыполнимой; при разрешенном дефиците возвращается частичный план с адресными дефицитами по сотрудникам и месяцам."]];
 function vRul(){
   return RULES.map(function(r,i){
     return '<details class="jr"'+(i===0?" open":"")+'><summary>'+r[0]+'</summary><div class="in"><div class="plain" style="padding:4px 3px 6px">'+r[1]+"</div></div></details>";
@@ -1115,45 +1153,43 @@ function vRul(){
 var SECS=[
   {g:"Входные данные"},
   {id:"parse",n:"Извлечение данных",z:"var(--agent)",badge:true},
-  {id:"ctr",n:"Договоры",c:function(){return D.contracts.length;}},
-  {id:"emp",n:"Штатное расписание",c:function(){return D.employees.length;}},
-  {id:"pos",n:"Должности и лимиты",c:function(){return POSREF.length;}},
-  {id:"nrm",n:"Нормативы года",c:function(){return NORMS.length;}},
-  {g:"Расчёт"},
+  {id:"ctr",n:"Договоры",c:function(){return emptied?"":D.contracts.length;}},
+  {id:"emp",n:"Штатное расписание",c:function(){return emptied?"":D.employees.length;}},
+  {id:"pos",n:"Справочники и нормативы"},
+  {g:"Расчет"},
   {id:"cal",n:"Настройка параметров",z:"var(--agent)"},
-  {id:"what",n:"Сценарное моделирование",z:"var(--agent)",c:function(){return SCEN.length;}},
+  {id:"what",n:"Сценарное моделирование",z:"var(--agent)"},
   {g:"Результат"},
   {id:"plan",n:"План выплат"},
   {id:"lim",n:"Ограничения"},
   {id:"osv",n:"Освоение по договорам"},
-  {id:"rep",n:"Отчёты Excel"},
+  {id:"rep",n:"Отчеты Excel"},
   {id:"diag",n:"Анализ невыполнимости",z:"var(--agent)"},
   {id:"memo",n:"Пояснительные материалы",z:"var(--agent)"},
   {g:"Сопровождение"},
   {id:"fact",n:"Сверка плана и факта",z:"var(--agent)"},
   {id:"norm",n:"Мониторинг нормативной базы",z:"var(--agent)"},
   {g:"Справка"},
-  {id:"rul",n:"Правила расчёта",c:function(){return RULES.length;}}
+  {id:"rul",n:"Правила расчета",c:function(){return RULES.length;}}
 ];
 var TITLES={
   parse:["Извлечение данных из документов","ИИ-агент 1: РКМ и структуры цены переносятся в паспорта договоров с проверкой каждого значения"],
   ctr:["Договоры","реальные исходные данные демонстрационного кейса"],
-  emp:["Штатное расписание","зарплата закрывается расчётом, распределение показано после расчёта"],
-  pos:["Должности и лимиты","справочник окладов и предельных размеров выплат"],
-  nrm:["Нормативы года","форма № 22 (22д), организация, 2026 год"],
-  cal:["Настройка параметров расчёта","ИИ-агент 2: формирование весов целевой функции"],
+  emp:["Штатное расписание","зарплата закрывается расчетом, распределение показано после расчета"],
+  pos:["Справочники и нормативы","оклады, предельные размеры выплат, нормативы года"],
+  cal:["Настройка параметров расчета","ИИ-агент 2: формирование весов целевой функции"],
   what:["Сценарное моделирование","ИИ-агент 4: варианты просчитаны настоящим решателем"],
   plan:["План выплат","результат оптимизации: месяцы и виды выплат"],
   lim:["Ограничения","проверки, выполненные по построению модели"],
   osv:["Освоение по договорам","поступления, выплаты, переходящие остатки"],
-  rep:["Отчёты Excel","состав выходной книги"],
+  rep:["Отчеты Excel","состав выходной книги"],
   diag:["Анализ причин невыполнимости","ИИ-агент 3: реальный разбор случая без допустимого решения"],
-  memo:["Пояснительные материалы","ИИ-агент 6: текст по результатам расчёта"],
+  memo:["Пояснительные материалы","ИИ-агент 6: текст по результатам расчета"],
   fact:["Сверка плана и факта","ИИ-агент 5: сопоставление начислений с плановыми показателями"],
   norm:["Мониторинг нормативной базы","ИИ-агент 7: контроль актуальности справочных величин"],
-  rul:["Правила расчёта","условия и ограничения модели"]};
+  rul:["Правила расчета","условия и ограничения модели"]};
 
-var VIEWS={parse:vParse,ctr:vCtr,emp:vEmp,pos:vPos,nrm:vNrm,cal:vCal,what:vWhat,
+var VIEWS={parse:vParse,ctr:vCtr,emp:vEmp,pos:vPos,cal:vCal,what:vWhat,
            plan:vPlan,lim:vLim,osv:vOsv,rep:vRep,diag:vDiag,memo:vMemo,fact:vFact,
            norm:vNorm,rul:vRul};
 
@@ -1180,7 +1216,10 @@ function render(){
   $("bd").innerHTML=VIEWS[sec]();
   var side=$("side");
   if(side) side.innerHTML=(sec==="ctr")?sideCtr():sideEmp();
-  $("stscale").textContent=D.employees.length+" сотрудников, "+D.contracts.length+" договора, 2026";
+  $("stscale").textContent = emptied
+    ? "данные не загружены"
+    : (D.employees.length+" сотр. · "+D.contracts.length+" дог. · "+
+       (curSet["Год планирования"]||"")+" · строк плана "+(solved?D.plan.length:"—"));
   wire();
 }
 
@@ -1290,7 +1329,7 @@ function wire(){
         })
         .catch(function(){
           scenBusy=false;
-          scenMsg="Локальный сервер не запущен: пересчёт по произвольному требованию "+
+          scenMsg="Локальный сервер не запущен: пересчет по произвольному требованию "+
                   "недоступен, показаны заранее просчитанные сценарии.";
           render();
         });
@@ -1303,6 +1342,13 @@ function wire(){
   });
   [].forEach.call(document.querySelectorAll(".calex"),function(b){
     b.addEventListener("click",function(){applyPreset(+b.getAttribute("data-i"),PRESETS[+b.getAttribute("data-i")].name);});
+  });
+  [].forEach.call(document.querySelectorAll(".params .pv"),function(inp){
+    inp.addEventListener("change",function(){
+      curSet[inp.getAttribute("data-set")]=inp.value.trim();
+      calMsg="Параметры изменены вручную. Нажмите «Рассчитать план», чтобы применить.";
+      render();
+    });
   });
   var cg=$("calgo");
   if(cg){
@@ -1331,7 +1377,7 @@ function applyPreset(i,label){
   hotKeys={};
   SETTINGS.forEach(function(s){curSet[s[0]]=s[1];});
   Object.keys(p.set).forEach(function(k){curSet[k]=p.set[k];hotKeys[k]=1;});
-  calMsg="Разобрано требование: «"+label+"». Изменённые параметры выделены.";
+  calMsg="Разобрано требование: «"+label+"». Измененные параметры выделены.";
   [].forEach.call(document.querySelectorAll(".calex"),function(b,bi){
     b.classList.toggle("on",bi===i);
   });
@@ -1341,11 +1387,11 @@ function applyPreset(i,label){
   });
 }
 
-/* ═══════════ расчёт: настоящий API либо встроенный результат ═══════════ */
+/* ═══════════ расчет: настоящий API либо встроенный результат ═══════════ */
 var solveTimer=null;
 function doSolve(){
   var b=$("run");
-  b.disabled=true; b.textContent="Расчёт…";
+  if(b){ b.disabled=true; b.textContent="Расчет…"; }
   $("solveline").classList.add("on");
   var t0=Date.now();
   solveTimer=setInterval(function(){
@@ -1358,14 +1404,14 @@ function doSolve(){
     if(data){ D=data; A=agg(D.plan);
       NEED=D.employees.reduce(function(a,e){return a+e.sal*empMonths(e);},0);
       TFOT=D.contracts.reduce(function(a,c){return a+c.fot;},0); }
-    solved=true; liveSource=source; liveSec=secVal;
-    b.disabled=false; b.textContent="Пересчитать";
+    solved=true; liveSource=source; liveSec=secVal; unEmpty();
+    if(b){ b.disabled=false; b.textContent="Пересчитать"; }
     $("stmain").textContent="Статус: "+String(summaryVal("Статус решателя"));
     $("stmain").className="st ok";
     $("stextra").textContent=source==="api"
       ? "рассчитано решателем только что, "+fmtSec(secVal)+" с"
-      : "встроенный результат расчёта, "+fmtSec(META.solve_sec)+" с";
-    $("srcnote").textContent=source==="api"?"локальный решатель подключён":"";
+      : "встроенный результат расчета, "+fmtSec(META.solve_sec)+" с";
+    $("srcnote").textContent=source==="api"?"локальный решатель подключен":"";
     sec="plan"; render();
   }
 
@@ -1385,9 +1431,26 @@ function doSolve(){
       setTimeout(function(){finish("embedded",null,null);},900);
     });
 }
-$("run").addEventListener("click",doSolve);
+if($("run")) $("run").addEventListener("click",doSolve);
+if($("clr")) $("clr").addEventListener("click",function(){
+  var b=$("clr"); b.disabled=true; b.textContent="Очищаю…";
+  sessionStorage.setItem("demoCleared","1");
+  fetch("/api/reset",{method:"POST"})
+    .then(function(r){return r.json();})
+    .catch(function(){return null;})
+    .then(function(){ location.reload(); });
+});
 
 render();
+
+/* индикатор подключения к решателю */
+(function(){
+  var n=$("srcnote");
+  if(location.protocol.indexOf("http")!==0){ if(n) n.textContent="автономный просмотр: демонстрационные данные"; return; }
+  fetch("/api/ping").then(function(r){return r.json();}).then(function(j){
+    if(n && j.ok) n.textContent="решатель подключен";
+  }).catch(function(){ if(n) n.textContent="автономный просмотр: демонстрационные данные"; });
+})();
 })();
 </script>
 </body>
