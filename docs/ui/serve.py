@@ -31,9 +31,255 @@ PORT = 8760
 
 sys.path.insert(0, HERE)
 import extract          # noqa: E402
+import llm_extract      # noqa: E402
 import result2json      # noqa: E402
 
+# Корень проекта — привычное место для .env; docs/ui — рядом с сервером, который
+# его читает. Имя без точки Проводник создает охотнее, поэтому принимаем оба.
+ENV_PATHS = [os.path.join(d, n) for d in (ROOT, HERE) for n in (".env", "env")]
+_ENV_SOURCE = None
+
+
+def _load_env_file():
+    """Ключи модели из .env. Все варианты пути в .gitignore, в репозиторий не попадают.
+
+    Формат: KEY=значение, по строке на ключ. Уже заданные переменные окружения
+    имеют приоритет и не перетираются.
+    """
+    global _ENV_SOURCE
+    path = next((p for p in ENV_PATHS if os.path.isfile(p)), None)
+    if path is None:
+        return []
+    _ENV_SOURCE = os.path.relpath(path, ROOT)
+    loaded = []
+    with open(path, encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k and v and not os.environ.get(k):
+                os.environ[k] = v
+                loaded.append(k)
+    return loaded
+
+
+_ENV_LOADED = _load_env_file()
+
 STATE = {"passport": None, "source": None}
+
+
+# ── справочник должностей: хранится листом входного файла ────────
+# Лист «лимиты_по_должностям» читает сам решатель (excel/load.py), поэтому
+# правка из интерфейса попадает в расчет без промежуточных копий.
+REFUP = os.path.join(HERE, "_reference_update.xlsx")
+REFSHEET = "лимиты_по_должностям"
+_num = extract._num
+REF_EDITABLE = {"оклад": 6, "П2556": 7, "П4": 8}
+
+
+def _ref_ws(write=False):
+    import openpyxl
+    wb = openpyxl.load_workbook(TEMPLATE)
+    return wb, wb[REFSHEET]
+
+
+def read_reference():
+    """Справочник должностей из листа входного файла."""
+    _wb, ws = _ref_ws()
+    rows = []
+    for r in range(2, ws.max_row + 1):
+        pos = ws.cell(r, 1).value
+        if not pos:
+            continue
+        rows.append({
+            "pos": str(pos), "cat": ws.cell(r, 2).value or "",
+            "sal": _num(ws.cell(r, 6).value), "p2556": _num(ws.cell(r, 7).value),
+            "p4": _num(ws.cell(r, 8).value), "note": ws.cell(r, 10).value or "",
+        })
+    return {"ok": True, "rows": rows, "file": os.path.basename(TEMPLATE),
+            "sheet": REFSHEET}
+
+
+def write_reference(edits):
+    """Записать правки сумм в лист. edits: [{pos, field, value}]."""
+    if not edits:
+        return {"ok": True, "applied": []}
+    wb, ws = _ref_ws(write=True)
+    at = {}
+    for r in range(2, ws.max_row + 1):
+        v = ws.cell(r, 1).value
+        if v:
+            at[str(v).strip().lower()] = r
+    applied, skipped = [], []
+    for e in edits:
+        r = at.get(str(e.get("pos", "")).strip().lower())
+        col = REF_EDITABLE.get(e.get("field"))
+        if not r or not col:
+            skipped.append(e.get("pos"))
+            continue
+        new = _num(e.get("value"))
+        old = _num(ws.cell(r, col).value)
+        if old == new:
+            continue
+        ws.cell(r, col).value = new
+        applied.append({"pos": ws.cell(r, 1).value, "field": e["field"],
+                        "old": old, "new": new})
+    if applied:
+        wb.save(TEMPLATE)
+        BASE_SUM["cache"] = None
+    return {"ok": True, "applied": applied, "skipped": skipped}
+
+
+def _changes_from_rows(rows):
+    """Список величин из документа → расхождения с действующим справочником."""
+    sys.path.insert(0, os.path.join(ROOT, "src"))
+    from fot_planner.position_reference import normalize_position
+    idx = _position_index(read_reference()["rows"])
+    key = {"оклад": "sal", "П2556": "p2556", "П4": "p4"}
+    changes, unknown, seen = [], [], set()
+    for row in rows:
+        pos = str(row.get("pos") or "").strip()
+        f = key.get(row.get("field"))
+        new = row.get("value")
+        if not pos or not f or new is None:
+            continue
+        hit = idx.get(normalize_position(pos))
+        if not hit:
+            if pos not in unknown:
+                unknown.append(pos)
+            continue
+        seen.add(row["field"])
+        old = hit[f]
+        if old != float(new):
+            changes.append({"pos": hit["pos"], "field": row["field"],
+                            "old": old, "new": float(new)})
+    return changes, unknown, seen
+
+
+_POS_INDEX = {"built_for": None, "map": {}}
+
+
+def _position_index(rows):
+    """Разрешение названия должности: нормализация плюс синонимы сервиса.
+
+    Модель возвращает должность так, как она написана в документе: «Вед. инженер»,
+    «Инженер I категории», «МНС». Сервис уже знает эти написания — берем его
+    справочник синонимов, чтобы не заводить второй.
+    """
+    names = tuple(r["pos"] for r in rows)
+    if _POS_INDEX["built_for"] == names:
+        return _POS_INDEX["map"]
+    sys.path.insert(0, os.path.join(ROOT, "src"))
+    from fot_planner.position_reference import (
+        default_position_synonyms,
+        normalize_position,
+    )
+    idx = {normalize_position(r["pos"]): r for r in rows}
+    for raw, canonical in default_position_synonyms().items():
+        target = idx.get(normalize_position(canonical))
+        if target is not None:
+            idx.setdefault(normalize_position(raw), target)
+    _POS_INDEX["built_for"] = names
+    _POS_INDEX["map"] = idx
+    return idx
+
+
+def diff_reference(data, filename, use_llm=True):
+    """Сверить присланный документ с действующим справочником.
+
+    Модель читает документ произвольного вида; якорный разбор работает, только
+    когда в книге есть таблица с ожидаемыми заголовками. Пробуем модель, при
+    ее недоступности или пустом ответе откатываемся на якорный.
+    """
+    with open(REFUP, "wb") as f:
+        f.write(data)
+
+    if use_llm:
+        r = llm_extract.parse(REFUP, filename)
+        if r.get("ok") and r.get("rows"):
+            changes, unknown, seen = _changes_from_rows(r["rows"])
+            return {"ok": True, "file": filename, "sheet": r.get("kind") or "",
+                    "by": "модель " + r["model"], "basis": r.get("basis"),
+                    "effective_from": r.get("effective_from"), "notes": r.get("notes"),
+                    "changes": changes, "unknown": unknown[:20],
+                    "fields": [f for f in ("оклад", "П2556", "П4") if f in seen],
+                    "scanned": len(r["rows"])}
+        llm_note = r.get("error") if not r.get("ok") else "модель не нашла величин"
+    else:
+        llm_note = None
+
+    out = _diff_by_anchors(filename)
+    if out.get("ok"):
+        out["by"] = "разбор по заголовкам"
+        if llm_note:
+            out["fallback"] = llm_note
+    elif llm_note:
+        out["fallback"] = llm_note
+    return out
+
+
+def _diff_by_anchors(filename):
+    """Запасной разбор: ищем таблицу по заголовкам «должность», «оклад», «П2556», «П4»."""
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(REFUP, data_only=True)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "Файл не прочитан: %s" % e}
+
+    want = {"оклад": "sal", "п2556": "p2556", "п4": "p4"}
+    best = None
+    for ws in wb.worksheets:
+        for r in range(1, min(ws.max_row, 12) + 1):
+            hdr = {}
+            for c in range(1, ws.max_column + 1):
+                t = str(ws.cell(r, c).value or "").strip().lower()
+                if t.startswith("должност"):
+                    hdr["pos"] = c
+                for k, f in want.items():
+                    if t.replace(" ", "").startswith(k):
+                        hdr[f] = c
+            if "pos" in hdr and len(hdr) > 1:
+                best = (ws, r, hdr)
+                break
+        if best:
+            break
+    if not best:
+        return {"ok": False,
+                "error": "Не нашел таблицу: нужна колонка «должность» и хотя бы одна из «оклад», «П2556», «П4»"}
+
+    ws, hrow, hdr = best
+    sys.path.insert(0, os.path.join(ROOT, "src"))
+    from fot_planner.position_reference import normalize_position
+    idx = _position_index(read_reference()["rows"])
+    changes, unknown, seen = [], [], set()
+    for r in range(hrow + 1, ws.max_row + 1):
+        pos = ws.cell(r, hdr["pos"]).value
+        if not pos:
+            continue
+        hit = idx.get(normalize_position(pos))
+        if hit is None:
+            unknown.append(str(pos))
+            continue
+        for field, col in hdr.items():
+            if field == "pos":
+                continue
+            new = _num(ws.cell(r, col).value)
+            if new is None:
+                continue
+            seen.add(field)   # величина считается найденной, только если есть значения
+            old = hit[field]
+            if old != new:
+                changes.append({"pos": hit["pos"], "field": field,
+                                "old": old, "new": new})
+    label = {"sal": "оклад", "p2556": "П2556", "p4": "П4"}
+    for c in changes:
+        c["field"] = label[c["field"]]
+    return {"ok": True, "file": filename, "sheet": ws.title,
+            "changes": changes, "unknown": unknown[:20],
+            "fields": [label[f] for f in hdr if f in seen],
+            "scanned": ws.max_row - hrow}
 
 
 def do_upload(data, filename):
@@ -312,7 +558,8 @@ def do_scenario(text):
 
 
 WORK_FILES = ["_uploaded.xlsx", "_built_input.xlsx", "_result.xlsx", "_result.json",
-              "_scenario.xlsx", "_scenario_result.xlsx", "_base_result.xlsx"]
+              "_scenario.xlsx", "_scenario_result.xlsx", "_base_result.xlsx",
+              "_reference_update.xlsx"]
 
 
 def do_reset():
@@ -344,9 +591,17 @@ class H(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def end_headers(self):
+        # демонстрация правится по ходу показа — страница не должна кешироваться
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
+
     def do_GET(self):
         if self.path == "/api/ping":
             self._send({"ok": True})
+            return
+        if self.path == "/api/reference":
+            self._send(read_reference())
             return
         super().do_GET()
 
@@ -354,6 +609,23 @@ class H(http.server.SimpleHTTPRequestHandler):
         try:
             if self.path == "/api/reset":
                 self._send(do_reset())
+                return
+            if self.path == "/api/reference":
+                n = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(n) or b"{}") if n else {}
+                self._send(write_reference(payload.get("edits") or []))
+                return
+            if self.path == "/api/reference/diff":
+                ctype = self.headers.get("Content-Type", "")
+                if "multipart/form-data" not in ctype:
+                    self._send({"ok": False, "error": "Ожидался multipart"}, 400)
+                    return
+                n = int(self.headers.get("Content-Length") or 0)
+                name, data = parse_multipart(self.rfile.read(n), ctype)
+                if data is None:
+                    self._send({"ok": False, "error": "Файл не передан"}, 400)
+                    return
+                self._send(diff_reference(data, name))
                 return
             if self.path == "/api/solve":
                 n = int(self.headers.get("Content-Length") or 0)
@@ -394,4 +666,9 @@ if __name__ == "__main__":
         sys.exit(1)
     print("Прототип: http://127.0.0.1:%d/prototype.html" % PORT)
     print("Загрузка документов и чат правок активны")
+    if _ENV_LOADED:
+        print("Ключи из %s: %s" % (_ENV_SOURCE, ", ".join(_ENV_LOADED)))
+    _p, _m, _why = llm_extract.provider()
+    print("Разбор нормативных документов:",
+          ("модель %s %s" % (_p, _m)) if _p else ("по заголовкам — %s" % _why))
     http.server.ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

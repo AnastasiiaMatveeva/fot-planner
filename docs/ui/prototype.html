@@ -236,6 +236,20 @@
   .params>div.hot{background:var(--accbg)}
   .params>div.hot .pv{color:var(--acc2)}
 
+  /* справочник: суммы правятся прямо в таблице, остальные колонки только читаются */
+  td.rv{padding:0}
+  td.rv input{width:100%;font:13px var(--m);text-align:right;border:1px solid transparent;
+              background:none;color:var(--ink);padding:6px 11px}
+  td.rv input:hover{border-color:var(--line);background:var(--s0)}
+  td.rv input:focus{outline:0;border-color:var(--acc);background:var(--s0)}
+  td.rv input.ed{background:var(--accbg);color:var(--acc2);font-weight:600}
+  .refbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px;color:var(--ink2)}
+  .refbar button{font-size:13px;padding:6px 14px;border:1px solid var(--acc);
+                 background:var(--acc);color:#fff;font-weight:600;cursor:pointer}
+  .refbar button[disabled]{border-color:var(--line);background:var(--s2);color:var(--ink3);
+                           font-weight:400;cursor:default}
+  .refbar .undo{border-color:var(--line);background:var(--s0);color:var(--ink2);font-weight:400}
+
   .infe{max-width:760px;background:var(--badbg);padding:13px 16px;display:flex;flex-direction:column;gap:9px}
   .infe h3{margin:0;font-size:15px;font-weight:700;color:var(--bad)}
   .infe .clause{background:var(--s0);padding:9px 12px;font-size:13px;display:flex;flex-direction:column;gap:4px}
@@ -739,22 +753,103 @@ function sideEmp(){
 
 /* ═══════════ должности и лимиты ═══════════ */
 var POSREF=[
-  ["инженер","НТП",40400,110000],["инженер 1 категории","НТП",44200,120000],
-  ["инженер 2 категории","НТП",42100,120000],["ведущий инженер","НТП",47000,140000],
-  ["программист","НТП",40400,110000],["ведущий программист","НТП",47000,140000],
-  ["научный сотрудник","НР",56800,110000],["старший научный сотрудник","НР",74100,120000],
-  ["аналитик","НТП",40400,110000],["ведущий специалист","НТП",47000,140000],
-  ["специалист","НТП",40400,110000]];
+  ["аналитик","НТП",40400,110000],
+  ["ведущий аналитик","НТП",47000,140000],
+  ["ведущий инженер","НТП",47000,140000],
+  ["ведущий научный сотрудник","НР",97100,140000],
+  ["ведущий программист","НТП",47000,140000],
+  ["ведущий специалист","НТП",47000,140000],
+  ["главный инженер проекта","НТП",64100,175000],
+  ["главный научный сотрудник","НР",133300,175000],
+  ["главный специалист","НТП",64100,175000],
+  ["директор","ППС",130700,175000],
+  ["директор центра","АУП",64100,175000],
+  ["заведующий лабораторией","НР",115900,175000],
+  ["заместитель директора","АУП",null,175000],
+  ["заместитель директора по административным вопросам","АУП",null,175000],
+  ["заместитель директора по информационно-аналитической работе","АУП",null,175000],
+  ["заместитель директора по информационным технологиям","АУП",null,175000],
+  ["заместитель руководителя","АУП",null,175000],
+  ["инженер","НТП",40400,110000],
+  ["инженер 1 категории","НТП",44200,120000],
+  ["инженер 2 категории","НТП",41700,120000],
+  ["инженер-исследователь","НР",45300,110000],
+  ["лаборант","НТП",38300,95000],
+  ["лаборант-исследователь","НТП",39400,95000],
+  ["младший научный сотрудник","НР",55700,null],
+  ["научный сотрудник","НР",55700,null],
+  ["начальник отдела","АУП",84200,175000],
+  ["программист","НТП",40400,110000],
+  ["редактор","ПП",41100,95000],
+  ["системный аналитик","НТП",40400,110000],
+  ["специалист","НТП",40400,110000],
+  ["старший научный сотрудник","НР",74100,120000],
+  ["техник","НТП",38300,95000],
+  ["эксперт","НТП",40400,110000]];
 var P4={"НТП":149648.90,"НР":257643.19};
+/* Встроенный список — резерв для просмотра без сервера. При открытии по http
+   он замещается листом «лимиты_по_должностям» входного файла: его же читает
+   решатель, поэтому правка из таблицы попадает прямо в расчет. */
+POSREF=POSREF.map(function(p){return [p[0],p[1],p[2],p[3],P4[p[1]]||null,""];});
+var refEdit={}, refMsg="", refBusy=false;
+function refKey(i,f){return i+"|"+f;}
+function refVal(i,f,fallback){
+  var k=refKey(i,f); return (k in refEdit)?refEdit[k]:fallback;
+}
+function moX(v){return v%1?mo2(v):mo(v);}
+function refCell(i,f,v){
+  var k=refKey(i,f), cur=refVal(i,f,v), ed=(k in refEdit);
+  return {v:'<input class="'+(ed?"ed":"")+'" data-i="'+i+'" data-f="'+f+'" value="'+
+            (cur===null||cur===undefined||cur===""?"":moX(cur))+'">', cls:"n rv"};
+}
+function refCount(){return Object.keys(refEdit).length;}
+function loadReference(){
+  if(location.protocol.indexOf("http")!==0) return;
+  fetch("/api/reference").then(function(r){return r.json();}).then(function(j){
+    if(!j.ok||!j.rows||!j.rows.length) return;
+    POSREF=j.rows.map(function(r){return [r.pos,r.cat,r.sal,r.p2556,r.p4,r.note||""];});
+    render();
+  }).catch(function(){});
+}
+function saveReference(){
+  var edits=Object.keys(refEdit).map(function(k){
+    var a=k.split("|"); return {pos:POSREF[+a[0]][0], field:a[1], value:refEdit[k]};
+  });
+  if(!edits.length) return;
+  refBusy=true; refMsg="Сохраняю…"; render();
+  fetch("/api/reference",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({edits:edits})})
+    .then(function(r){return r.json();})
+    .then(function(j){
+      refBusy=false; refEdit={};
+      refMsg=j.ok
+        ? "Сохранено: "+j.applied.length+" "+px(j.applied.length,"значение","значения","значений")+
+          ". Следующий расчет пойдет по ним."
+        : "Не сохранено: "+(j.error||"ошибка");
+      loadReference(); render();
+    })
+    .catch(function(){refBusy=false;refMsg="Сервер недоступен — правки не сохранены";render();});
+}
 function vPos(){
   return '<div class="cap">Должности и предельные размеры</div>'+
-    '<div class="plain">Оклад за одну ставку и предельные размеры выплат. '+
-    "П4 по категории: НТП — <b>"+mo2(P4["НТП"])+" ₽</b>, НР — <b>"+mo2(P4["НР"])+" ₽</b>.</div>"+
-    tbl(["должность","категория","оклад за 1,0 ставки, ₽","П2556, ₽","П4, ₽"],
-      POSREF.map(function(p){
-        return [p[0],p[1],{v:mo(p[2]),cls:"n"},{v:p[3]?mo(p[3]):"—",cls:"n"},
-                {v:P4[p[1]]?mo2(P4[p[1]]):"—",cls:"n"}];
+    '<div class="plain">Оклад за одну ставку и предельные размеры выплат, '+
+    "всего <b>"+POSREF.length+"</b> "+px(POSREF.length,"должность","должности","должностей")+". П4 установлен только для категорий "+
+    "НТП — <b>"+mo2(P4["НТП"])+" ₽</b> и НР — <b>"+mo2(P4["НР"])+" ₽</b>; "+
+    "прочерк означает, что отдельной строки для должности в источнике нет. "+
+    "Суммы правятся прямо в таблице и применяются со следующего расчета.</div>"+
+    tbl(["№","должность","категория","оклад за 1,0 ставки, ₽","П2556, ₽","П4, ₽"],
+      POSREF.map(function(p,i){
+        return [{v:i+1,cls:"mono"},p[0],p[1],
+                refCell(i,"оклад",p[2]),refCell(i,"П2556",p[3]),refCell(i,"П4",p[4])];
       }))+
+    '<div class="refbar">'+
+      '<button type="button" id="refsave"'+(refCount()&&!refBusy?"":" disabled")+">"+
+      "Сохранить</button>"+
+      (refCount()?'<button type="button" class="undo" id="refundo">Отменить</button>':"")+
+      (refCount()?"<span>изменено "+refCount()+" "+
+                  px(refCount(),"значение","значения","значений")+"</span>":"")+
+      (refMsg?"<span>"+refMsg+"</span>":"")+
+    "</div>"+
     '<div class="cap">Нормативы года</div>'+
     '<div class="plain">В расчете применяется только БЭП. Остальные величины относятся '+
     "к структуре цены договора и потребуются, когда сервис будет считать полную стоимость, "+
@@ -1112,27 +1207,123 @@ function vFact(){
 }
 
 /* ═══════════ агент 7: мониторинг ═══════════ */
+/* Обновление справочника документом: разбор → дифф → подтверждение → запись.
+   Запись идет тем же маршрутом, что и ручная правка ячейки. */
+var refDiffState="", refDiffData=null;
+function diffReference(f){
+  var fd=new FormData(); fd.append("file",f);
+  refDiffState="busy"; refDiffData=null; render();
+  fetch("/api/reference/diff",{method:"POST",body:fd})
+    .then(function(r){return r.json();})
+    .then(function(j){ refDiffState="done"; refDiffData=j; render(); })
+    .catch(function(){ refDiffState="done";
+      refDiffData={ok:false,error:"Сервер недоступен"}; render(); });
+}
+function applyDiff(){
+  var d=refDiffData;
+  if(!d||!d.ok||!d.changes.length) return;
+  refDiffState="busy"; render();
+  fetch("/api/reference",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({edits:d.changes.map(function(c){
+          return {pos:c.pos, field:c.field, value:c.new};})})})
+    .then(function(r){return r.json();})
+    .then(function(j){
+      refDiffState="done";
+      /* величины из документа сохраняем: после записи они должны показать «совпадает» */
+      refDiffData={ok:true,applied:j.applied.length,file:d.file,changes:[],fields:d.fields};
+      loadReference(); render();
+    })
+    .catch(function(){ refDiffState="done";
+      refDiffData={ok:false,error:"Не удалось записать"}; render(); });
+}
+function diffBlock(){
+  var d=refDiffData;
+  if(!d) return "";
+  if(!d.ok) return '<div class="infe"><h3>Документ не разобран</h3><div class="plain">'+d.error+"</div></div>";
+  if(d.applied!==undefined)
+    return '<div class="plain">Записано в справочник: <b>'+d.applied+"</b> "+
+           px(d.applied,"значение","значения","значений")+" из «"+d.file+
+           "». Следующий расчет пойдет по ним.</div>";
+  if(!d.changes.length)
+    return '<div class="plain">Файл «'+d.file+"» разобран, строк просмотрено "+d.scanned+
+           ". Расхождений с действующим справочником нет"+
+           (d.unknown.length?", неизвестных должностей: "+d.unknown.length:"")+".</div>";
+  return '<div class="plain">В «'+d.file+"»"+(d.sheet?", "+d.sheet:"")+": <b>"+d.changes.length+"</b> "+
+    px(d.changes.length,"расхождение","расхождения","расхождений")+" с действующим справочником"+
+    (d.unknown.length?"; должностей вне справочника — "+d.unknown.length+" ("+
+      d.unknown.slice(0,3).join(", ")+(d.unknown.length>3?" и другие":"")+"), они пропущены":"")+
+    ".</div>"+
+    '<div class="runlog">'+
+      '<div class="l">разобрано: '+(d.by||"—")+"</div>"+
+      (d.basis?'<div class="l">основание: '+d.basis+"</div>":"")+
+      (d.effective_from?'<div class="l">действует с: '+d.effective_from+"</div>":"")+
+      (d.notes?'<div class="l">примечание модели: '+d.notes+"</div>":"")+
+      (d.fallback?'<div class="l">модель не применялась: '+d.fallback+"</div>":"")+
+    "</div>"+
+    tbl(["должность","величина","сейчас","по документу","изменение"],
+      d.changes.map(function(c){
+        var dl=c.new-(c.old||0);
+        return [c.pos,c.field,{v:c.old?moX(c.old):"—",cls:"n"},{v:moX(c.new),cls:"n"},
+                {v:(c.old?(dl>0?"+":"")+moX(dl):"новое значение"),
+                 cls:"n "+(c.old?(dl>0?"tOK":"tMUTE"):"tMUTE")}];
+      }))+
+    '<div class="refbar"><button type="button" id="refapply"'+(refDiffState==="busy"?" disabled":"")+
+    ">Применить "+d.changes.length+" "+px(d.changes.length,"изменение","изменения","изменений")+
+    " к справочнику</button></div>";
+}
 function vNorm(){
+  /* «по документу» заполняется из последнего разобранного документа: пока его нет —
+     прочерк, после разбора видно, какие величины разошлись. */
+  var d=(refDiffData && refDiffData.ok && refDiffData.changes) ? refDiffData.changes : [];
+  function byField(f){return d.filter(function(c){return c.field===f;});}
+  function rng(list,idx){
+    if(!list.length) return null;
+    var v=list.map(function(c){return c[idx];}).sort(function(a,b){return a-b;});
+    return v[0]===v[v.length-1]?moX(v[0]):moX(v[0])+" — "+moX(v[v.length-1]);
+  }
+  var seen=(refDiffData && refDiffData.ok && refDiffData.fields) || [];
+  function cell(list,field){
+    if(!refDiffData || !refDiffData.ok) return [{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}];
+    if(seen.indexOf(field)<0) return [{v:"—",cls:"n"},{v:"нет в документе",cls:"tMUTE"}];
+    if(!list.length) return [{v:"без изменений",cls:"n"},{v:"совпадает",cls:"tOK"}];
+    return [{v:rng(list,"new"),cls:"n"},
+            {v:list.length+" "+px(list.length,"расхождение","расхождения","расхождений"),cls:"tWARN"}];
+  }
+  var sal=byField("оклад"), lim=byField("П2556"), p4=byField("П4");
+  var salNow=POSREF.map(function(p){return p[2];}).filter(function(v){return v;});
+  var limNow=POSREF.map(function(p){return p[3];}).filter(function(v){return v;});
+  function span(a){a=a.slice().sort(function(x,y){return x-y;});
+    return moX(a[0])+" — "+moX(a[a.length-1]);}
   var rows=[
     ["Предельный размер П4, категория НТП","справочник сервиса, приказ № 4",
-     {v:mo2(149648.90),cls:"n"},{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}],
+     {v:mo2(149648.90),cls:"n"}].concat(cell(p4,"П4")),
     ["Предельный размер П4, категория НР","справочник сервиса, приказ № 4",
-     {v:mo2(257643.19),cls:"n"},{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}],
+     {v:mo2(257643.19),cls:"n"}].concat(cell(p4,"П4")),
     ["Средняя штатная часть по ГОЗ (БЭП)","справочник сервиса, письмо 550 ВП МО РФ",
      {v:"112 261",cls:"n"},{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}],
-    ["Оклады должностей, "+POSREF.length+" позиций","справочник сервиса, положение об оплате труда",
-     {v:"40 400 — 74 100",cls:"n"},{v:"—",cls:"n"},{v:"в справочнике",cls:"tOK"}]];
+    ["Оклады должностей, "+POSREF.length+" "+px(POSREF.length,"позиция","позиции","позиций"),"справочник сервиса, положение об оплате труда",
+     {v:span(salNow),cls:"n"}].concat(cell(sal,"оклад")),
+    ["Предельные размеры П2556, "+limNow.length+" "+px(limNow.length,"позиция","позиции","позиций"),"справочник сервиса, приказ № 2556",
+     {v:span(limNow),cls:"n"}].concat(cell(lim,"П2556"))];
   return ''+
-    '<div class="plain">Сейчас показан состав справочника, который применяется при расчете, '+
-    "и основания его величин. Сопоставление с действующими редакциями приказов "+
-    "не реализовано: для него нужен доступ к нормативным документам организации. "+
-    "Колонка «по документу» заполнится, когда такой источник появится.</div>"+
+    '<div class="plain">Состав справочника, который применяется при расчете, и основания '+
+    "его величин. Колонка «по документу» заполняется после разбора загруженного ниже "+
+    "документа; БЭП сверяется отдельно — он приходит письмом военного представительства, "+
+    "а не таблицей должностей.</div>"+
     tbl(["величина","источник значения","применяется при расчете","по документу","состояние"],rows)+
-    '<div class="memo" style="max-width:none"><h3>Что даст модуль</h3><div class="plain">'+
-    "Автоматическую проверку: не изменились ли предельные размеры по приказам 2556 и 4, "+
-    "оклады должностей и средняя зарплата основных работников из писем военного "+
-    "представительства. Сегодня справочник обновляется вручную, и о просрочке узнают "+
-    "после расчета.</div></div>";
+    '<div class="cap">Обновление справочника документом</div>'+
+    '<div class="plain">Загрузите документ с новой редакцией сумм — выписку из приказа, '+
+    "письмо или обновленное положение об оплате труда в виде книги Excel. Агент найдет "+
+    "величины, сверит их с действующим справочником и покажет, что именно изменилось. "+
+    "Документ читает модель, поэтому произвольная верстка, объединенные заголовки и "+
+    "другие названия колонок разбору не мешают; если модель недоступна, применяется "+
+    "разбор по заголовкам «должность», «оклад», «П2556», «П4». Записывается только "+
+    "после подтверждения.</div>"+
+    '<input type="file" id="refdiff" accept=".xlsx,.xlsm" style="display:none">'+
+    '<div class="drop" id="refdrop2" style="cursor:pointer"><b>'+
+    (refDiffState==="busy"?"Разбираю документ…":"Загрузите документ с обновленными суммами")+
+    "</b><small>xlsx или xlsm — сверка с действующим справочником, без записи</small></div>"+
+    diffBlock();
 }
 
 /* ═══════════ правила ═══════════ */
@@ -1343,6 +1534,24 @@ function wire(){
   [].forEach.call(document.querySelectorAll(".calex"),function(b){
     b.addEventListener("click",function(){applyPreset(+b.getAttribute("data-i"),PRESETS[+b.getAttribute("data-i")].name);});
   });
+  [].forEach.call(document.querySelectorAll("td.rv input"),function(inp){
+    inp.addEventListener("change",function(){
+      var i=+inp.getAttribute("data-i"), f=inp.getAttribute("data-f"), k=refKey(i,f);
+      var was={"оклад":POSREF[i][2],"П2556":POSREF[i][3],"П4":POSREF[i][4]}[f];
+      var t=inp.value.replace(/[  ]/g,"").replace(",",".");
+      var v=t===""?null:parseFloat(t);
+      if(t!=="" && isNaN(v)){ refMsg="«"+inp.value+"» — не число, значение не принято"; render(); return; }
+      if(v===was) delete refEdit[k]; else refEdit[k]=v;
+      refMsg=""; render();
+    });
+  });
+  if($("refsave")) $("refsave").addEventListener("click",saveReference);
+  if($("refundo")) $("refundo").addEventListener("click",function(){refEdit={};refMsg="";render();});
+  if($("refdiff")) $("refdiff").addEventListener("change",function(){
+    if(this.files && this.files[0]) diffReference(this.files[0]);
+  });
+  if($("refapply")) $("refapply").addEventListener("click",applyDiff);
+  if($("refdrop2")) $("refdrop2").addEventListener("click",function(){$("refdiff").click();});
   [].forEach.call(document.querySelectorAll(".params .pv"),function(inp){
     inp.addEventListener("change",function(){
       curSet[inp.getAttribute("data-set")]=inp.value.trim();
@@ -1442,6 +1651,7 @@ if($("clr")) $("clr").addEventListener("click",function(){
 });
 
 render();
+loadReference();
 
 /* индикатор подключения к решателю */
 (function(){

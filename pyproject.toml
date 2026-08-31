@@ -18,6 +18,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+# разбор нормативных документов моделью в демонстрации (docs/ui/llm_extract.py);
+# без этого пакета демонстрация работает на разборе по заголовкам
+llm = ["anthropic>=1.0", "certifi>=2024.0"]
 
 [project.scripts]
 fot-planner = "fot_planner.cli:main"
