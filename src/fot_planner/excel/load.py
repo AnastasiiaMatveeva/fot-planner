@@ -398,15 +398,22 @@ def _split_substitutes(value: object) -> list[str]:
 
 
 def _load_substitutions(xl: pd.ExcelFile) -> dict[str, frozenset[str]]:
-    """Правила замещения: должность → кем ее можно заместить.
+    """Правила замещения: должность сотрудника → на какие должности его можно
+    поставить дополнительно.
 
-    Правила направленные, и это главное про них: главного инженера проекта
-    можно заместить инженером, обратное неверно. Симметричная окладная группа
-    такого не выражает — она либо пускает обоих, либо никого.
+    Правила направленные, и направление именно такое: строка «Директор |
+    Научный сотрудник» означает, что директор может взять себе ставку научного
+    сотрудника, а не что работу директора закроет научный сотрудник. Так
+    названы и графы исходного файла: «исходная должность» — «должность,
+    которая может быть». По этой же причине в строке «Инженер» стоит «Инженер
+    (в другом подразделении)»: двух ставок по одной должности в одном
+    подразделении у человека быть не может, поэтому вторую оформляют по
+    соседней должности из этого списка.
 
-    Замещающие перечисляются в одной ячейке через запятую, как в выгрузке
-    отдела кадров. Лист необязательный: без него остаются прежние правила —
-    точное совпадение должности и окладная группа.
+    Симметричная окладная группа такого не выражает — она либо пускает обоих,
+    либо никого. Перечисляются должности в одной ячейке через запятую, как в
+    выгрузке отдела кадров. Лист необязательный: без него остаются прежние
+    правила — точное совпадение должности и окладная группа.
     """
     if SHEET_SUBSTITUTIONS not in xl.sheet_names:
         return {}
@@ -433,14 +440,7 @@ def _load_employees(
     substitution_rules: dict[str, frozenset[str]] | None = None,
 ) -> list[Employee]:
     rows: list[Employee] = []
-    # Правила заданы со стороны замещаемой должности, а спрашивают их со
-    # стороны сотрудника: «эту строку трудоемкости закрыть можешь?». Поэтому
-    # один раз разворачиваем их в обратный указатель.
-    covers: dict[str, set[str]] = {}
-    for target, subs in (substitution_rules or {}).items():
-        for sub_key in subs:
-            covers.setdefault(sub_key, set()).add(target)
-
+    covers = substitution_rules or {}
     for _, r in df.iterrows():
         position = str(r["position"]).strip()
         ref = resolve_position(position, position_index)
@@ -457,7 +457,7 @@ def _load_employees(
                 allowed_contracts=_split_list(r.get("allowed_contracts")),
                 forbidden_contracts=_split_list(r.get("forbidden_contracts")),
                 equivalence_group=ref.equivalence_group if ref else None,
-                can_substitute=frozenset(
+                extra_positions=frozenset(
                     covers.get(normalize_position(position), frozenset())
                 ),
                 position_level=ref.level if ref else None,

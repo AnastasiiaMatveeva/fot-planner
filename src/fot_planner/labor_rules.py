@@ -31,11 +31,11 @@ def employee_matches_position_spec(
     2. Должность совпала — можно.
     3. Замена через окладную группу: она симметрична, «инженер» и
        «программист» взаимозаменяемы в обе стороны.
-    4. Замена по правилам замещения: они направленные. Главного инженера
-       проекта можно заместить инженером, обратное неверно, и симметричная
-       группа этого не выражает — она либо пускает обоих, либо никого.
-       Правило спрашивается со стороны сотрудника: закрываемая должность
-       должна быть среди тех, которые он может заместить.
+    4. Правила замещения: сотруднику можно дать ставку по соседней должности
+       из его строки правил — директор берет ставку научного сотрудника, а не
+       наоборот. Значит и работу по такой должности он выполнить может.
+       Симметричная окладная группа этого не выражает: она либо пускает
+       обоих, либо никого.
     """
     if not position and not equivalence_group:
         return True
@@ -43,7 +43,7 @@ def employee_matches_position_spec(
         return True
     if _same_position_text(employee.equivalence_group, equivalence_group):
         return True
-    if position and normalize_position(position) in employee.can_substitute:
+    if position and normalize_position(position) in employee.extra_positions:
         return True
     return False
 

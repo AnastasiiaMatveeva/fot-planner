@@ -38,12 +38,12 @@ class Employee:
     allowed_contracts: list[str] = field(default_factory=list)
     forbidden_contracts: list[str] = field(default_factory=list)
     equivalence_group: str | None = None
-    # Должности, работу по которым этот сотрудник может закрывать по
-    # правилам замещения (нормализованные названия). Правила направленные:
-    # главного инженера проекта можно заместить инженером, обратное неверно.
-    # Поэтому список считается для сотрудника заранее — «кого я могу
-    # заместить», — а не выводится из симметричной окладной группы.
-    can_substitute: frozenset[str] = field(default_factory=frozenset)
+    # Должности, которые этому сотруднику можно дать дополнительно к его
+    # собственной (нормализованные названия). Правила направленные: директор
+    # может взять ставку научного сотрудника, обратное неверно. Двух ставок по
+    # одной должности в одном подразделении у человека не бывает — поэтому в
+    # списке у «инженера» стоит «инженер (в другом подразделении)».
+    extra_positions: frozenset[str] = field(default_factory=frozenset)
     position_level: int | None = None
     reference_salary_for_rate: float | None = None
     # auto — оптимизатор выбирает; main — основное место; part_time — совместительство
@@ -259,9 +259,10 @@ class PlanningContext:
     weights: OptimizationWeights = field(default_factory=OptimizationWeights)
     salary_stability: SalaryStabilityRules = field(default_factory=SalaryStabilityRules)
     labor_plans: list[ContractLaborPlan] = field(default_factory=list)
-    # Правила замещения: нормализованная должность → нормализованные
-    # должности, которыми ее можно заместить. Нужны отчетам, чтобы объяснить,
-    # почему сотрудник закрывает чужую строку трудоемкости.
+    # Правила замещения: нормализованная должность сотрудника →
+    # нормализованные должности, которые ему можно дать дополнительно. Нужны
+    # отчетам, чтобы объяснить, почему сотрудник закрывает чужую строку
+    # трудоемкости.
     substitution_rules: dict[str, frozenset[str]] = field(default_factory=dict)
     secret_allowances: list[SecretAllowance] = field(default_factory=list)
     baseline_plan: list[AllocationRecord] | None = None
