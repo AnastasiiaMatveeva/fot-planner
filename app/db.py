@@ -184,6 +184,10 @@ class Activity(Base):
     started: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
     finished: Mapped[dt.datetime | None] = mapped_column(DateTime, default=None)
     seconds: Mapped[float | None] = mapped_column(Float, default=None)
+    # Что подано на вход и что получилось, JSON. Для ГОЗ важно уметь показать
+    # не только «сделано», но и на чем именно: сколько текста ушло в модель,
+    # что она вернула, что из этого приняли и что отбросили.
+    artifact: Mapped[str | None] = mapped_column(Text, default=None)
 
     case: Mapped[Case] = relationship(back_populates="activities")
 
@@ -214,6 +218,8 @@ class Message(Base):
     case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
     who: Mapped[str] = mapped_column(String(20))        # агент | экономист | система
     agent: Mapped[str | None] = mapped_column(String(40), default=None)
+    # Кому передано: у передач между агентами есть и отправитель, и получатель.
+    to_agent: Mapped[str | None] = mapped_column(String(40), default=None)
     text: Mapped[str] = mapped_column(Text)
     payload: Mapped[str | None] = mapped_column(Text, default=None)  # JSON: таблица, дифф, файл
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)

@@ -191,3 +191,22 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .view th.num,.view td.num{width:1%;white-space:nowrap;text-align:right;
                           font-family:var(--m);color:var(--ink3);
                           padding-left:11px;padding-right:9px}
+
+/* ── передача работы между агентами ────────────────────────── */
+.msg.pass{max-width:min(760px,92%);align-self:center;align-items:center}
+.msg.pass .bubble{background:var(--agentbg);border:1px dashed #C9C0E0;color:var(--agent);
+                  font-size:12.5px;padding:7px 13px;text-align:center}
+
+/* ── артефакты работы агента ───────────────────────────────── */
+.ag.has{cursor:pointer}
+.ag.has:hover{background:var(--s1)}
+.ag.open{background:var(--accbg)}
+.works{background:var(--s1);border-top:1px solid var(--line2);padding:2px 0 6px}
+.work{padding:7px 11px}
+.work + .work{border-top:1px dashed var(--line2)}
+.work .wh{font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:5px;
+          display:flex;flex-direction:column;gap:1px}
+.work .wh span{font-weight:400;color:var(--ink3);font-size:11px}
+.ar{display:flex;gap:8px;font-size:11.5px;padding:2px 0;align-items:baseline}
+.ar .ak{flex:0 0 40%;color:var(--ink3)}
+.ar .av{flex:1;min-width:0;color:var(--ink);white-space:pre-wrap;word-break:break-word}

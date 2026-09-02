@@ -95,11 +95,13 @@ def case_state(db, case):
         "documents": [{"id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
                        "by": d.parsed_by, "summary": d.summary,
                        "uploaded": _dt(d.uploaded), "size": d.size} for d in docs],
-        "messages": [{"id": m.id, "who": m.who, "agent": m.agent, "text": m.text,
+        "messages": [{"id": m.id, "who": m.who, "agent": m.agent,
+                      "to": m.to_agent, "text": m.text,
                       "payload": json.loads(m.payload) if m.payload else None,
                       "created": _dt(m.created)} for m in msgs],
         "activities": [{"id": a.id, "agent": a.agent, "title": a.title, "state": a.state,
                         "detail": a.detail, "seconds": a.seconds,
+                        "artifact": json.loads(a.artifact) if a.artifact else None,
                         "started": _dt(a.started)} for a in reversed(acts)],
         "questions": [{"id": q.id, "agent": q.agent, "text": q.text,
                        "options": json.loads(q.options) if q.options else None,
@@ -481,10 +483,19 @@ async def post_reference(request: Request):
     if case_id:
         db = session()
         try:
-            agents.say(db, int(case_id),
-                       "Записал в справочник %d %s." % (len(applied),
-                                                        intake._plural(len(applied), "значение", "значения", "значений")),
-                       agent="norms")
+            case_id = int(case_id)
+            agents.say(db, case_id,
+                       "Записал в справочник %d %s."
+                       % (len(applied), intake._plural(len(applied), "значение",
+                                                       "значения", "значений")),
+                       agent="norms",
+                       payload={"kind": "reference_applied", "applied": applied})
+            if applied:
+                # Оклады и предельные размеры — исходные данные расчета:
+                # после правки прежний план посчитан по старым величинам.
+                agents.handoff(db, case_id, "norms", "solver",
+                               "Справочник изменен — прежний план посчитан по "
+                               "старым величинам, нужен пересчет.")
         finally:
             db.close()
     return {"ok": True, "applied": applied}
@@ -523,8 +534,13 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
             run.summary = json.dumps({"error": (p.stderr or p.stdout or "")[-800:]},
                                      ensure_ascii=False)
             db.commit()
+            agents.handoff(db, case_id, "solver", "infeasible",
+                           "Решения нет, передаю разбор причин агенту «Анализ "
+                           "невыполнимости».")
             agents.say(db, case_id,
-                       "Решения не нашлось. Разбор причин — за агентом невыполнимости.",
+                       "Агент анализа невыполнимости в этой сборке не реализован. "
+                       "Текст отказа решателя: %s"
+                       % ((p.stderr or p.stdout or "").strip()[-300:] or "—"),
                        agent="infeasible")
             db.commit()
             return

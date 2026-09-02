@@ -69,13 +69,24 @@ def agent_list():
     return [dict(key=k, **v) for k, v in sorted(AGENTS.items(), key=lambda kv: kv[1]["n"])]
 
 
-def say(db, case_id, text, who="агент", agent=None, payload=None):
+def say(db, case_id, text, who="агент", agent=None, payload=None, to_agent=None):
     """Реплика в ленту дела."""
-    m = Message(case_id=case_id, who=who, agent=agent, text=text,
+    m = Message(case_id=case_id, who=who, agent=agent, to_agent=to_agent, text=text,
                 payload=json.dumps(payload, ensure_ascii=False) if payload else None)
     db.add(m)
     db.commit()
     return m
+
+
+def handoff(db, case_id, sender, receiver, text, payload=None):
+    """Передача работы от агента к агенту.
+
+    Передачи в сервисе были и раньше — определив вид документа, агент ввода
+    отдает нормативный документ агенту нормативной базы, — но происходили
+    молча. Экономист видел результат и не видел, кто кому что передал.
+    """
+    return say(db, case_id, text, who="передача", agent=sender,
+               to_agent=receiver, payload=payload)
 
 
 @contextmanager
@@ -89,7 +100,7 @@ def working(db, case_id, agent, title):
     db.add(act)
     db.commit()
     t0 = time.time()
-    holder = {"detail": None}
+    holder = {"detail": None, "artifact": None}
     try:
         yield holder
     except Exception as exc:  # noqa: BLE001 — след об ошибке важнее падения
@@ -101,6 +112,8 @@ def working(db, case_id, agent, title):
         raise
     act.state = "готово"
     act.detail = holder["detail"]
+    if holder.get("artifact"):
+        act.artifact = json.dumps(holder["artifact"], ensure_ascii=False)
     act.finished = now()
     act.seconds = round(time.time() - t0, 1)
     db.commit()

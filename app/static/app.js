@@ -69,6 +69,11 @@ function open(id) {
 }
 
 /* ── отрисовка ────────────────────────────────────────────── */
+function title(key) {
+  if (key === "solver") return "Оптимизатор";
+  var a = (state.agents || []).filter(function (x) { return x.key === key; })[0];
+  return a ? "Агент " + a.n : (key || "сервис");
+}
 function agentNum(key) {
   var a = (state.agents || []).filter(function (x) { return x.key === key; })[0];
   return a ? a.n : "";
@@ -82,6 +87,11 @@ function renderFeed() {
   var feed = $("feed");
   var atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
   feed.innerHTML = state.messages.map(function (m) {
+    if (m.who === "передача") {
+      return '<div class="msg pass"><div class="bubble">' +
+             esc(title(m.agent)) + " → " + esc(title(m.to)) + ": " + esc(m.text) +
+             "</div></div>";
+    }
     var cls = m.who === "экономист" ? "msg me" : (m.who === "система" ? "msg sys" : "msg");
     var who = m.who === "экономист" ? "Вы"
             : (m.agent === "solver" ? "Оптимизатор"
@@ -154,10 +164,13 @@ function renderAgents() {
         sub = (act.detail || act.title) + (act.seconds != null ? " · " + act.seconds + " с" : "");
       }
     }
-    return '<div class="' + cls + '"><span class="dot"></span>' +
-           '<span class="n">' + a.n + "</span>" +
+    var has = state.activities.some(function (x) { return x.agent === a.key; });
+    return '<div class="' + cls + (has ? " has" : "") +
+           (openAgent === a.key ? " open" : "") + '" data-agent="' + a.key + '">' +
+           '<span class="dot"></span><span class="n">' + a.n + "</span>" +
            '<span class="b"><span class="t">' + esc(a.name) + "</span><br>" +
-           '<span class="s">' + esc(sub) + "</span></span></div>";
+           '<span class="s">' + esc(sub) + "</span></span></div>" +
+           (openAgent === a.key ? '<div class="works">' + agentCard(a.key) + "</div>" : "");
   }).join("");
 
   // Оптимизатор в панель попадает, но отдельной строкой: он не агент.
@@ -168,9 +181,13 @@ function renderAgents() {
     else if (sa.state === "ошибка") { scls = "ag err"; ssub = sa.detail || "ошибка"; }
     else { scls = "ag done"; ssub = (sa.detail || s.does) + (sa.seconds != null ? " · " + sa.seconds + " с" : ""); }
   }
-  $("agents").innerHTML += '<div class="' + scls + '"><span class="dot"></span>' +
-    '<span class="n">—</span><span class="b"><span class="t">' + esc(s.name) + "</span><br>" +
-    '<span class="s">' + esc(ssub) + "</span></span></div>";
+  var shas = state.activities.some(function (x) { return x.agent === "solver"; });
+  $("agents").innerHTML += '<div class="' + scls + (shas ? " has" : "") +
+    (openAgent === "solver" ? " open" : "") + '" data-agent="solver">' +
+    '<span class="dot"></span><span class="n">—</span>' +
+    '<span class="b"><span class="t">' + esc(s.name) + "</span><br>" +
+    '<span class="s">' + esc(ssub) + "</span></span></div>" +
+    (openAgent === "solver" ? '<div class="works">' + agentCard("solver") + "</div>" : "");
 
 }
 
@@ -304,6 +321,40 @@ function solve() {
   }).then(tick);
 }
 
+
+
+/* ── артефакты работы агентов ─────────────────────────────────
+ * У каждой работы агента есть след: что подано на вход, чем разобрано, что
+ * получилось и что отброшено. Панель показывает итог одной строкой, а по
+ * клику раскрывается сам артефакт — для ГОЗ важно уметь показать не только
+ * «сделано», но и на чем именно.
+ */
+var openAgent = null;
+
+function artifactRows(a) {
+  return Object.keys(a).map(function (k) {
+    var v = a[k];
+    if (v === null || v === undefined || v === "") v = "—";
+    else if (typeof v === "boolean") v = v ? "да" : "нет";
+    else if (Array.isArray(v)) v = v.length ? v.join("\n") : "—";
+    return '<div class="ar"><span class="ak">' + esc(k) + "</span>" +
+           '<span class="av">' + esc(String(v)) + "</span></div>";
+  }).join("");
+}
+
+function agentCard(key) {
+  var acts = state.activities.filter(function (a) { return a.agent === key; });
+  if (!acts.length) return '<div class="none">Этот агент в деле еще не работал.</div>';
+  return acts.slice().reverse().map(function (a) {
+    return '<div class="work"><div class="wh">' + esc(a.title) +
+           '<span>' + esc(a.state) + (a.seconds != null ? " · " + a.seconds + " с" : "") +
+           " · " + esc(a.started) + "</span></div>" +
+           (a.artifact ? artifactRows(a.artifact)
+                       : '<div class="ar"><span class="ak">итог</span><span class="av">' +
+                         esc(a.detail || "—") + "</span></div>") +
+           "</div>";
+  }).join("");
+}
 
 /* ── просмотр данных ──────────────────────────────────────────
  * Лента — основной режим работы, но собранное должно открываться и читаться:
@@ -527,6 +578,14 @@ function tick() {
 }
 
 /* ── события ──────────────────────────────────────────────── */
+$("agents").addEventListener("click", function (e) {
+  var el = e.target.closest(".ag");
+  if (!el) return;
+  var key = el.getAttribute("data-agent");
+  openAgent = openAgent === key ? null : key;
+  render();
+});
+
 $("tabs").addEventListener("click", function (e) {
   var b = e.target.closest(".tab");
   if (b) setView(b.getAttribute("data-view"));

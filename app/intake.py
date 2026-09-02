@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
 
 import extract          # noqa: E402
 import llm              # noqa: E402
-from agents import say, working  # noqa: E402
+from agents import handoff, say, working  # noqa: E402
 from db import Contract, Document, Employee, Question, Substitution, now  # noqa: E402
 
 # Слова, по которым книга опознается как нормативный документ, а не как
@@ -51,6 +51,11 @@ def _peek(path, limit=4000):
         return "", None
     return text.lower(), None
 
+
+#: Обработчик -> агент, который его выполняет. Правила замещения читает тот же
+#: агент ввода данных, поэтому передачи между агентами там не возникает.
+AGENT_OF = {"intake": "intake", "substitutions": "intake", "norms": "norms"}
+AGENT_TITLE = {"intake": "Извлечение данных", "norms": "Нормативная база"}
 
 #: Вид документа -> кто его обрабатывает. «штатное расписание» и документы по
 #: договору идут одному агенту: разбор у них общий.
@@ -132,6 +137,10 @@ def run_substitutions(db, case, doc):
         doc.parsed_by = "разбор по заголовкам"
         doc.summary = "правил %d" % pairs
         w["detail"] = doc.summary
+        w["artifact"] = {"файл": doc.name, "правил замещения": pairs,
+                         "применяется в расчете": False,
+                         "почему": "правила направленные, модель работает "
+                                   "симметричными группами взаимозаменяемости"}
         db.commit()
 
     say(db, case.id,
@@ -182,6 +191,10 @@ def run_intake(db, case, doc):
         ctr = len(passport.get("contracts") or [])
         doc.summary = "сотрудников %d, договоров %d" % (emp, ctr)
         w["detail"] = doc.summary
+        w["artifact"] = {"файл": doc.name, "сотрудников": emp, "договоров": ctr,
+                         "прочитано в документе": out.get("log") or [],
+                         "спорных значений": len(out.get("questions") or []),
+                         "готово к расчету": bool((out.get("ready") or {}).get("ok"))}
         _store_passport(db, case, passport, doc.name)
         db.commit()
 
@@ -228,6 +241,14 @@ def run_norms(db, case, doc):
         doc.parsed_by = by
         doc.summary = "расхождений %d" % len(changes)
         w["detail"] = doc.summary
+        w["artifact"] = {"файл": doc.name, "чем разобрано": by,
+                         "извлечено величин": len(rows or []),
+                         "величины": sorted(seen) or [],
+                         "основание": res.get("basis"),
+                         "действует с": res.get("effective_from"),
+                         "расхождений со справочником": len(changes),
+                         "должностей вне справочника": len(unknown),
+                         "примечание модели": res.get("notes")}
         db.commit()
 
     if not changes:
@@ -285,6 +306,10 @@ def handle_document(db, case, doc):
     with working(db, case.id, "intake", "определяет вид «%s»" % doc.name) as w:
         kind, owner, by = classify(doc.path, doc.name)
         w["detail"] = kind
+        w["artifact"] = {"файл": doc.name, "формат": docread.kind_of(doc.path),
+                         "размер, байт": doc.size, "определен вид": kind,
+                         "чем определен": by or "не удалось прочитать",
+                         "передан агенту": AGENT_TITLE.get(AGENT_OF.get(owner), "—")}
         db.commit()
 
     # Два разных отказа, и путать их нельзя. Файл, который не читается,
@@ -320,6 +345,14 @@ def handle_document(db, case, doc):
 
     doc.kind = kind
     doc.parsed_by = by
+    db.commit()
+
+    target = AGENT_OF.get(owner, owner)
+    if target != "intake":
+        handoff(db, case.id, "intake", target,
+                "«%s» — это %s, передаю агенту «%s»."
+                % (doc.name, kind, AGENT_TITLE.get(target, target)),
+                payload={"kind": "handoff", "document": doc.name, "as": kind})
 
     try:
         if owner == "norms":
