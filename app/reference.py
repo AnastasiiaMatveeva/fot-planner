@@ -181,3 +181,60 @@ def rows_by_anchors(path):
                             rows.append({"pos": str(pos), "field": field, "value": v})
                 return rows
     return []
+
+
+def upsert_position(pos, cat=None, sal=None, p2556=None, p4=None, bep=None,
+                    note=None):
+    """Завести должность в справочнике или дописать ей недостающие величины.
+
+    ``apply`` умеет только править числа у должности, которая в листе уже
+    есть: строки, которой нет, он молча пропускает. Для документа, где названа
+    новая должность, этого мало — ее надо завести.
+
+    Страницу, номер группы и уровень не выдумываем: решатель без них обходится,
+    такая должность попадает в группу «без окладной группы». Соврать здесь
+    хуже, чем оставить пусто, — по этим полям строятся группы
+    взаимозаменяемости.
+
+    Возвращает ("заведена"|"дополнена"|"без изменений", что именно изменилось).
+    """
+    from fot_planner.position_reference import normalize_position
+
+    name = str(pos or "").strip()
+    if not name:
+        return "без изменений", []
+
+    wb = openpyxl.load_workbook(TEMPLATE)
+    ws = wb[SHEET]
+    at = {}
+    for r in range(2, ws.max_row + 1):
+        v = ws.cell(r, 1).value
+        if v:
+            at[normalize_position(v)] = r
+
+    values = {2: cat, 6: sal, 7: p2556, 8: p4, 9: bep, 10: note}
+    row = at.get(normalize_position(name))
+    what = "дополнена"
+    if row is None:
+        row = ws.max_row + 1
+        ws.cell(row, 1).value = name
+        what = "заведена"
+
+    changed = []
+    titles = {2: "категория", 6: "оклад", 7: "П2556", 8: "П4", 9: "БЭП",
+              10: "примечание"}
+    for col, value in values.items():
+        if value in (None, ""):
+            continue
+        old = ws.cell(row, col).value
+        new = _num(value) if col in (6, 7, 8, 9) else str(value).strip()
+        if old == new or (old not in (None, "") and _num(old) == new
+                          and col in (6, 7, 8, 9)):
+            continue
+        ws.cell(row, col).value = new
+        changed.append((titles[col], old, new))
+
+    if what == "заведена" or changed:
+        wb.save(TEMPLATE)
+        return what, changed
+    return "без изменений", []

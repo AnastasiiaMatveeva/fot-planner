@@ -530,6 +530,10 @@ FREEFORM_SYSTEM = """Ты читаешь документ планово-эко�
 Договор: шифр, наименование, номер, вид работ, признак гособоронзаказа,
 фонд оплаты труда в рублях, срок действия.
 Правило замещения: должность и должности, которыми ее можно заместить.
+Должность справочника: название должности и категория персонала (НТП, НР,
+АУП, ППС, ПП), а если в документе есть — оклад за полную ставку, предельный
+размер по приказу № 2556, предельный размер по приказу № 4, БЭП. Это перечень
+должностей организации, а не люди: ФИО у такой строки нет.
 
 Правила:
 - бери только то, что в документе действительно написано; ничего не выводи
@@ -539,6 +543,8 @@ FREEFORM_SYSTEM = """Ты читаешь документ планово-эко�
 - для каждой строки заполни поле «место»: где она в документе — лист и номер
   строки, адрес ячейки или короткая цитата;
 - суммы возвращай числом без пробелов и знака рубля;
+- перечень должностей с категориями — это positions, а не employees:
+  сотрудника без ФИО и табельного номера не бывает;
 - если строк какого-то вида в документе нет, верни пустой список;
 - если документ вообще не об этом, верни три пустых списка."""
 
@@ -551,7 +557,9 @@ FREEFORM_SHAPE = """Ответь одним объектом JSON:
                 "from": "01.01.2026", "to": "31.12.2026",
                 "место": "лист «договоры», строка 3"}],
  "substitutions": [{"position": "должность", "replaced_by": "кем",
-                    "место": "строка 12"}]}"""
+                    "место": "строка 12"}],
+ "positions": [{"pos": "Инженер", "cat": "НТП", "sal": 40400, "p2556": 110000,
+                "p4": 149648.9, "bep": 112261, "место": "лист «ШР», строка 20"}]}"""
 
 _FF_EMP = {
     "type": "object",
@@ -583,20 +591,31 @@ _FF_SUB = {
     },
     "additionalProperties": False,
 }
+_FF_POS = {
+    "type": "object",
+    "properties": {
+        "pos": {"type": ["string", "null"]}, "cat": {"type": ["string", "null"]},
+        "sal": {"type": ["number", "null"]}, "p2556": {"type": ["number", "null"]},
+        "p4": {"type": ["number", "null"]}, "bep": {"type": ["number", "null"]},
+        "место": {"type": ["string", "null"]},
+    },
+    "additionalProperties": False,
+}
 FREEFORM_SCHEMA = {
     "type": "object",
     "properties": {
         "employees": {"type": "array", "items": _FF_EMP},
         "contracts": {"type": "array", "items": _FF_CTR},
         "substitutions": {"type": "array", "items": _FF_SUB},
+        "positions": {"type": "array", "items": _FF_POS},
     },
-    "required": ["employees", "contracts", "substitutions"],
+    "required": ["employees", "contracts", "substitutions", "positions"],
     "additionalProperties": False,
 }
 
 #: По каким полям строка считается той же самой на стыке частей документа.
 _FF_KEY = {"employees": ("code", "fio"), "contracts": ("code", "num"),
-           "substitutions": ("position", "replaced_by")}
+           "substitutions": ("position", "replaced_by"), "positions": ("pos",)}
 
 
 def freeform(path, filename="", max_chunks=8):
@@ -611,7 +630,8 @@ def freeform(path, filename="", max_chunks=8):
         return {"ok": False, "error": str(e)}
 
     filename = filename or os.path.basename(path)
-    found = {"employees": [], "contracts": [], "substitutions": []}
+    found = {"employees": [], "contracts": [], "substitutions": [],
+             "positions": []}
     seen = {k: set() for k in found}
     parts = _chunks(text)[:max_chunks]
     errors = []

@@ -397,7 +397,9 @@ async def decide_proposals(doc_id: int, request: Request):
         rows = (db.query(Proposal)
                 .filter(Proposal.document_id == doc_id,
                         Proposal.state == "предложено").all())
-        added = {"сотрудник": 0, "договор": 0, "правило замещения": 0}
+        added = {"сотрудник": 0, "договор": 0, "правило замещения": 0,
+                 "должность": 0}
+        ref_log = []
         for pr in rows:
             if pr.id in drop:
                 pr.state = "отклонено"
@@ -417,6 +419,15 @@ async def decide_proposals(doc_id: int, request: Request):
                                 goz=f.get("goz"), fund=f.get("fot"),
                                 date_from=f.get("from"), date_to=f.get("to"),
                                 source=doc.name, document_id=doc.id))
+            elif pr.entity == "должность":
+                # Должность живет не в базе, а листом «лимиты_по_должностям»
+                # входного файла: оттуда ее читает сам решатель.
+                what, changed = reference.upsert_position(
+                    f.get("pos"), f.get("cat"), f.get("sal"), f.get("p2556"),
+                    f.get("p4"), f.get("bep"))
+                ref_log.append("«%s» %s%s" % (
+                    f.get("pos"), what,
+                    " (%s)" % ", ".join(c[0] for c in changed) if changed else ""))
             else:
                 db.add(Substitution(position=str(f.get("position") or ""),
                                     replaced_by=str(f.get("replaced_by") or ""),
@@ -430,13 +441,14 @@ async def decide_proposals(doc_id: int, request: Request):
         db.commit()
 
         if any(added.values()) and doc.case_id:
-            agents.say(db, doc.case_id,
-                       "Принято из «%s»: %s. Строки записаны в реестр, источник "
-                       "— этот документ." % (doc.name, ", ".join(
-                           "%s %d" % (k, v) for k, v in added.items() if v)),
-                       agent="intake")
+            text = ("Принято из «%s»: %s. Строки записаны в реестр, источник — "
+                    "этот документ." % (doc.name, ", ".join(
+                        "%s %d" % (k, v) for k, v in added.items() if v)))
+            if ref_log:
+                text += (" В справочнике должностей: %s." % "; ".join(ref_log))
+            agents.say(db, doc.case_id, text, agent="intake")
             db.commit()
-        return {"ok": True, "added": added, "left": left}
+        return {"ok": True, "added": added, "left": left, "reference": ref_log}
     finally:
         db.close()
 

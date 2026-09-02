@@ -221,6 +221,28 @@ def _known(db, entity, f):
         code = str(f.get("code") or "").strip()
         return bool(code) and any((c.code or "").strip().lower() == code.lower()
                                   for c in db.query(Contract).all())
+    if entity == "должность":
+        # Должность считается известной, только если она уже в справочнике и
+        # документ не приносит по ней других величин: перечень должностей
+        # обычно совпадает со справочником целиком, а вот новая редакция
+        # приказа меняет оклад — про это молчать нельзя.
+        import reference
+        from fot_planner.position_reference import normalize_position
+        name = normalize_position(str(f.get("pos") or "").strip())
+        if not name:
+            return True
+        for row in reference.read_rows():
+            if normalize_position(row["pos"]) != name:
+                continue
+            for key in ("sal", "p2556", "p4"):
+                v = f.get(key)
+                if v is not None and row.get(key) != v:
+                    return False        # величина расходится — предложить
+            cat = str(f.get("cat") or "").strip()
+            if cat and str(row.get("cat") or "").strip() != cat:
+                return False
+            return True
+        return False                     # должности в справочнике нет
     pos = str(f.get("position") or "").strip().lower()
     return bool(pos) and any((s.position or "").strip().lower() == pos
                              for s in db.query(Substitution).all())
@@ -248,7 +270,8 @@ def propose_entities(db, case, doc):
             return False
 
         buckets = (("employees", "сотрудник"), ("contracts", "договор"),
-                   ("substitutions", "правило замещения"))
+                   ("substitutions", "правило замещения"),
+                   ("positions", "должность"))
         counts, skipped = {}, 0
         for key, entity in buckets:
             counts[entity] = 0
