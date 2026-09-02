@@ -33,6 +33,7 @@ import llm               # noqa: E402
 import reference         # noqa: E402
 from db import (         # noqa: E402
     Activity, Case, Contract, Document, Employee, Message, Question, Run,
+    Substitution,
     RESULT_DIR, UPLOAD_DIR, init_db, now, session,
 )
 
@@ -87,7 +88,9 @@ def case_state(db, case):
                  "has_data": bool(case.passport),
                  "counts": {
                      "employees": db.query(Employee).filter_by(case_id=case.id).count(),
-                     "contracts": db.query(Contract).filter_by(case_id=case.id).count()}},
+                     "contracts": db.query(Contract).filter_by(case_id=case.id).count(),
+                     "substitutions": db.query(Substitution)
+                                        .filter_by(case_id=case.id).count()}},
         "documents": [{"id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
                        "by": d.parsed_by, "summary": d.summary,
                        "uploaded": _dt(d.uploaded), "size": d.size} for d in docs],
@@ -171,6 +174,39 @@ def _process(case_id: int, doc_id: int):
         db.close()
 
 
+def _cyrillic(text):
+    return sum(1 for c in text if "А" <= c <= "я" or c in "Ёё")
+
+
+def _filename(raw):
+    """Имя файла из multipart — в нормальную кодировку.
+
+    Разбор multipart отдает имя как latin-1, а прислано оно может быть в UTF-8
+    (браузеры) или в кодировке консоли Windows (командная строка). «должности»
+    превращается то в «Ð´Ð¾Ð»Ð¶Ð½Ð¾ÑÑи», то в «äîëæíîñòè». Пробуем обе и берем
+    ту, где получилась кириллица; если ни одна не помогла — оставляем как есть.
+    """
+    if not raw:
+        return "документ"
+    if _cyrillic(raw):
+        return raw
+    try:
+        data = raw.encode("latin-1")
+    except UnicodeEncodeError:
+        return raw
+    # Порядок важен: cp1251 декодирует что угодно и выдает правдоподобную
+    # кириллическую кашу, а UTF-8 на чужих байтах просто не разбирается —
+    # поэтому его успех и есть признак, что угадали верно.
+    for enc in ("utf-8", "cp1251"):
+        try:
+            candidate = data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        if _cyrillic(candidate):
+            return candidate
+    return raw
+
+
 @app.post("/api/case/{case_id}/upload")
 async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFile]):
     db = session()
@@ -181,15 +217,16 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
         added = []
         for f in files:
             data = await f.read()
-            safe = "%d_%d_%s" % (case_id, int(time.time() * 1000), os.path.basename(f.filename))
+            name = _filename(f.filename)
+            safe = "%d_%d_%s" % (case_id, int(time.time() * 1000), os.path.basename(name))
             path = os.path.join(UPLOAD_DIR, safe)
             with open(path, "wb") as out:
                 out.write(data)
-            doc = Document(case_id=case_id, name=f.filename, path=path, size=len(data))
+            doc = Document(case_id=case_id, name=name, path=path, size=len(data))
             db.add(doc)
             db.commit()
             added.append(doc.id)
-            agents.say(db, case_id, "Загружен документ «%s»." % f.filename, who="экономист")
+            agents.say(db, case_id, "Загружен документ «%s»." % name, who="экономист")
         case.stage = "сбор данных"
         db.commit()
         for doc_id in added:
@@ -283,6 +320,10 @@ def case_data(case_id: int):
             "contracts": [{"code": c.code, "name": c.name, "number": c.number,
                            "kind": c.kind, "goz": c.goz, "fund": c.fund,
                            "kinds": c.kinds, "source": c.source} for c in ctrs],
+            "substitutions": [{"position": s.position, "replaced_by": s.replaced_by,
+                               "source": s.source} for s in
+                              db.query(Substitution).filter_by(case_id=case_id)
+                              .order_by(Substitution.id).all()],
             "reference": reference.read_rows(),
         }
     finally:

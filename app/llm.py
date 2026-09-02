@@ -35,6 +35,8 @@ import ssl
 import urllib.error
 import urllib.request
 
+import docread
+
 FIELDS = ("оклад", "П2556", "П4")
 MAX_CHARS = 60000          # хватает на выписку в несколько листов
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
@@ -98,30 +100,11 @@ def available():
 
 
 # ── документ в текст ────────────────────────────────────────────
+# Нормативные документы приходят книгами Excel, PDF и старыми .doc — приведение
+# к тексту вынесено в docread, здесь остается только запрос к модели.
 def workbook_to_text(path):
-    """Все листы книги в виде текстовой сетки с координатами ячеек.
-
-    Координаты нужны, чтобы объединенные и многоэтажные заголовки не теряли
-    привязку к своим колонкам, а модель могла сослаться на место в документе.
-    """
-    import openpyxl
-    wb = openpyxl.load_workbook(path, data_only=True)
-    out = []
-    for ws in wb.worksheets:
-        out.append("### Лист: %s (строк %d, колонок %d)" % (ws.title, ws.max_row, ws.max_column))
-        for r in range(1, min(ws.max_row, 400) + 1):
-            cells = []
-            for c in range(1, min(ws.max_column, 40) + 1):
-                v = ws.cell(r, c).value
-                if v is None or str(v).strip() == "":
-                    continue
-                cells.append("%s%d=%s" % (chr(64 + c) if c <= 26 else "?", r, v))
-            if cells:
-                out.append(" | ".join(cells))
-        if ws.merged_cells.ranges:
-            out.append("объединенные диапазоны: " +
-                       ", ".join(str(x) for x in list(ws.merged_cells.ranges)[:40]))
-    return "\n".join(out)[:MAX_CHARS]
+    """Совместимость: раньше умели только книги Excel."""
+    return docread.to_text(path, MAX_CHARS)
 
 
 SYSTEM = """Ты разбираешь документ российской организации об оплате труда: выписку
@@ -269,7 +252,9 @@ RESPONSE_SCHEMA = {
 
 
 def _call_openai_compatible(text, filename, model, url, api_key=None,
-                            schema=False, no_thinking=False, insecure=False):
+                            schema=False, no_thinking=False, insecure=False,
+                            system=None, shape=None, json_schema=None,
+                            schema_name="reference_update"):
     """Запрос к любому серверу с OpenAI-совместимым API.
 
     Один адаптер на облачный DeepSeek и на vLLM в своей сети: протокол тот же,
@@ -279,10 +264,12 @@ def _call_openai_compatible(text, filename, model, url, api_key=None,
     выключает рассуждение у моделей Qwen3: с ним ответ из четырех токенов
     занимает сотню, а на длинном документе бюджет заканчивается раньше ответа.
     """
+    system = system or SYSTEM
+    shape = shape or JSON_SHAPE
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM if schema else SYSTEM + "\n\n" + JSON_SHAPE},
+            {"role": "system", "content": system if schema else system + "\n\n" + shape},
             {"role": "user", "content": "Документ «%s»:\n\n%s" % (filename, text)},
         ],
         "temperature": 0,
@@ -291,7 +278,8 @@ def _call_openai_compatible(text, filename, model, url, api_key=None,
     if schema:
         payload["response_format"] = {
             "type": "json_schema",
-            "json_schema": {"name": "reference_update", "schema": RESPONSE_SCHEMA,
+            "json_schema": {"name": schema_name,
+                            "schema": json_schema or RESPONSE_SCHEMA,
                             "strict": True}}
     else:
         payload["response_format"] = {"type": "json_object"}
@@ -313,41 +301,211 @@ def _call_openai_compatible(text, filename, model, url, api_key=None,
     return json.loads(answer["choices"][0]["message"]["content"])
 
 
-def parse(path, filename=""):
+#: Сколько текста уходит в один запрос и насколько части перекрываются.
+#: Перекрытие нужно, чтобы строка таблицы не разрезалась пополам на границе.
+CHUNK = 40000
+OVERLAP = 2000
+
+
+def _chunks(text):
+    """Длинный документ — по частям.
+
+    Положение об оплате труда — 165 тысяч знаков и полторы сотни сумм; обрезать
+    его до одного запроса значит не увидеть две трети документа. Режем по
+    границам строк, чтобы таблицы не рвались посреди значения.
+    """
+    if len(text) <= CHUNK:
+        return [text]
+    parts, start = [], 0
+    while start < len(text):
+        end = min(start + CHUNK, len(text))
+        if end < len(text):
+            cut = text.rfind("\n", start + CHUNK // 2, end)
+            if cut > start:
+                end = cut
+        parts.append(text[start:end])
+        if end >= len(text):
+            break
+        start = max(end - OVERLAP, start + 1)
+    return parts
+
+
+def _ask(name, model, text, filename):
+    """Один запрос к выбранному провайдеру."""
+    if name == "anthropic":
+        return _call_anthropic(text, filename, model)
+    if name == "local":
+        base = os.environ["FOT_LLM_BASE_URL"].strip().rstrip("/")
+        return _call_openai_compatible(
+            text, filename, model, base + "/chat/completions",
+            api_key=os.environ.get("FOT_LLM_API_KEY"),
+            schema=not _truthy(os.environ.get("FOT_LLM_NO_SCHEMA")),
+            no_thinking=not _truthy(os.environ.get("FOT_LLM_THINKING")),
+            insecure=_truthy(os.environ.get("FOT_LLM_INSECURE_TLS")))
+    return _call_openai_compatible(text, filename, model, DEEPSEEK_URL,
+                                   api_key=os.environ["DEEPSEEK_API_KEY"])
+
+
+def parse(path, filename="", max_chunks=8):
     """Разобрать документ. Всегда возвращает dict; ok=False — откат на якорный разбор."""
     name, model, why = provider()
     if name is None:
         return {"ok": False, "unavailable": True, "error": why}
 
     try:
-        text = workbook_to_text(path)
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": "Файл не прочитан: %s" % e}
-    if not text.strip():
-        return {"ok": False, "error": "Документ пуст"}
+        text = docread.to_text(path, CHUNK * max_chunks)
+    except docread.Unreadable as e:
+        return {"ok": False, "error": str(e)}
+
+    filename = filename or os.path.basename(path)
+    parts = _chunks(text)
+    merged, seen, notes = {"rows": []}, set(), []
+    errors = 0
+    for i, part in enumerate(parts, 1):
+        label = filename if len(parts) == 1 else "%s, часть %d из %d" % (filename, i, len(parts))
+        try:
+            raw = _ask(name, model, part, label)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:200]
+            errors += 1
+            notes.append("часть %d: %s ответил %s %s" % (i, name, e.code, detail))
+            continue
+        except Exception as e:  # noqa: BLE001 — сеть, ключ, лимиты, битый JSON
+            errors += 1
+            notes.append("часть %d: %s" % (i, e))
+            continue
+        if not raw:
+            continue
+        for key in ("document_kind", "basis", "effective_from"):
+            if not merged.get(key) and raw.get(key):
+                merged[key] = raw[key]
+        if raw.get("notes") and len(parts) == 1:
+            notes.append(raw["notes"])
+        for row in raw.get("rows") or []:
+            k = (str(row.get("position", "")).strip().lower(), row.get("field"))
+            if k in seen:                 # части перекрываются, повторы отбрасываем
+                continue
+            seen.add(k)
+            merged["rows"].append(row)
+
+    if errors == len(parts):
+        return {"ok": False, "error": "; ".join(notes)[:400] or "модель не ответила"}
+    if len(parts) > 1:
+        notes.insert(0, "Документ разобран по частям: %d." % len(parts))
+    merged["notes"] = " ".join(n for n in notes if n) or None
+    return _result(merged, "%s, %s" % (model, PROVIDER_LABEL.get(name, name)))
+
+
+# ── определение вида документа ──────────────────────────────────
+#: Виды, каждый со своим обработчиком. «иное» — честный ответ, когда документ
+#: не про оплату труда; агент тогда спрашивает экономиста, а не гадает.
+DOC_KINDS = ("документ по договору", "нормативный документ",
+             "правила замещения должностей", "штатное расписание", "иное")
+
+CLASSIFY_SYSTEM = """Определи, что за документ перед тобой. Это документы
+российской организации, относящиеся к планированию фонда оплаты труда.
+
+Виды:
+- «документ по договору» — расчетно-калькуляционные материалы, структура цены,
+  калькуляция, сметы, формы с трудоемкостью и стоимостью работ по договору;
+- «нормативный документ» — приказ, письмо, положение об оплате труда, справка
+  об окладах и предельных размерах выплат;
+- «правила замещения должностей» — таблица вида «должность → кем может быть
+  замещена»;
+- «штатное расписание» — перечень сотрудников с должностями и ставками;
+- «иное» — все остальное.
+
+Отвечай по существу документа, а не по названию файла."""
+
+CLASSIFY_SHAPE = """Ответь одним объектом JSON:
+{"kind": "один из видов", "title": "как называется документ, одной фразой",
+ "why": "по каким признакам решил, одной фразой"}"""
+
+CLASSIFY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": list(DOC_KINDS)},
+        "title": {"type": "string"},
+        "why": {"type": "string"},
+    },
+    "required": ["kind"],
+    "additionalProperties": False,
+}
+
+
+def classify(path, filename="", head=6000):
+    """Что за документ. Возвращает dict; ok=False — решать вызывающей стороне.
+
+    Модели хватает начала документа: вид виден по шапке и первым строкам,
+    а гонять через нее семьдесят шесть страниц положения об оплате труда
+    ради одного слова незачем.
+    """
+    name, model, why = provider()
+    if name is None:
+        return {"ok": False, "unavailable": True, "error": why}
+    try:
+        text = docread.to_text(path, head)
+    except docread.Unreadable as e:
+        return {"ok": False, "error": str(e)}
 
     filename = filename or os.path.basename(path)
     try:
         if name == "anthropic":
-            raw = _call_anthropic(text, filename, model)
-        elif name == "local":
-            base = os.environ["FOT_LLM_BASE_URL"].strip().rstrip("/")
-            raw = _call_openai_compatible(
-                text, filename, model, base + "/chat/completions",
-                api_key=os.environ.get("FOT_LLM_API_KEY"),
-                schema=not _truthy(os.environ.get("FOT_LLM_NO_SCHEMA")),
-                no_thinking=not _truthy(os.environ.get("FOT_LLM_THINKING")),
-                insecure=_truthy(os.environ.get("FOT_LLM_INSECURE_TLS")))
+            raw = _classify_anthropic(text, filename, model)
         else:
             raw = _call_openai_compatible(
-                text, filename, model, DEEPSEEK_URL,
-                api_key=os.environ["DEEPSEEK_API_KEY"])
+                text, filename, model,
+                _endpoint(name), api_key=_key(name),
+                schema=_use_schema(name), no_thinking=_no_thinking(name),
+                insecure=_truthy(os.environ.get("FOT_LLM_INSECURE_TLS")),
+                system=CLASSIFY_SYSTEM, shape=CLASSIFY_SHAPE,
+                json_schema=CLASSIFY_SCHEMA, schema_name="document_kind")
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
-        return {"ok": False, "error": "%s ответил %s: %s" % (name, e.code, detail)}
-    except Exception as e:  # noqa: BLE001 — сеть, ключ, лимиты, битый JSON
+        return {"ok": False, "error": "%s ответил %s" % (name, e.code)}
+    except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": "%s: %s" % (name, e)}
-    if not raw:
-        return {"ok": False, "error": "Модель вернула пустой разбор"}
 
-    return _result(raw, "%s, %s" % (model, PROVIDER_LABEL.get(name, name)))
+    kind = (raw or {}).get("kind")
+    if kind not in DOC_KINDS:
+        return {"ok": False, "error": "модель вернула неизвестный вид: %r" % kind}
+    return {"ok": True, "kind": kind, "title": (raw.get("title") or "").strip(),
+            "why": (raw.get("why") or "").strip(),
+            "model": "%s, %s" % (model, PROVIDER_LABEL.get(name, name))}
+
+
+def _classify_anthropic(text, filename, model):
+    from typing import Literal, Optional
+
+    import anthropic
+    from pydantic import BaseModel
+
+    class Kind(BaseModel):
+        kind: Literal["документ по договору", "нормативный документ",
+                      "правила замещения должностей", "штатное расписание", "иное"]
+        title: Optional[str] = None
+        why: Optional[str] = None
+
+    msg = anthropic.Anthropic().messages.parse(
+        model=model, max_tokens=500, system=CLASSIFY_SYSTEM,
+        messages=[{"role": "user", "content": "Документ «%s»:\n\n%s" % (filename, text)}],
+        output_format=Kind)
+    return msg.parsed_output.model_dump() if msg.parsed_output else None
+
+
+def _endpoint(name):
+    if name == "local":
+        return os.environ["FOT_LLM_BASE_URL"].strip().rstrip("/") + "/chat/completions"
+    return DEEPSEEK_URL
+
+
+def _key(name):
+    return os.environ.get("FOT_LLM_API_KEY") if name == "local" \
+        else os.environ.get("DEEPSEEK_API_KEY")
+
+
+def _use_schema(name):
+    return name == "local" and not _truthy(os.environ.get("FOT_LLM_NO_SCHEMA"))
+
+
+def _no_thinking(name):
+    return name == "local" and not _truthy(os.environ.get("FOT_LLM_THINKING"))

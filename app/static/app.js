@@ -243,7 +243,7 @@ function safely(name, fn) {
 
 function renderTabs() {
   var c = (state.case && state.case.counts) || {};
-  var n = { emp: c.employees, ctr: c.contracts };
+  var n = { emp: c.employees, ctr: c.contracts, sub: c.substitutions };
   Array.prototype.forEach.call(document.querySelectorAll(".tabs .tab"), function (b) {
     var k = b.getAttribute("data-view");
     var base = (b.getAttribute("data-label")
@@ -331,7 +331,7 @@ function setView(v) {
   $("view").hidden = v === "feed";
   if (v === "feed") return;
   $("view").innerHTML = '<div class="none">Загружаю…</div>';
-  var need = (v === "emp" || v === "ctr" || v === "ref")
+  var need = (v === "emp" || v === "ctr" || v === "ref" || v === "sub")
     ? api("/api/case/" + caseId + "/data").then(function (d) { vdata = d; })
     : loadResult();
   need.then(renderView).catch(function (e) {
@@ -415,6 +415,17 @@ function renderView() {
       "Справочник должностей: <b>" + r.length + "</b> " +
       px(r.length, "позиция", "позиции", "позиций") +
       ". Прочерк — отдельной строки для должности в источнике нет.");
+    return;
+  }
+
+  if (view === "sub") {
+    var s = (vdata && vdata.substitutions) || [];
+    el.innerHTML = table(
+      ["должность", "может быть замещена"],
+      s.map(function (x) { return [x.position, x.replaced_by]; }),
+      "Правила замещения: <b>" + s.length + "</b>. Правила направленные — " +
+      "кого кем можно заменить, не наоборот. В расчет пока не подставляются: " +
+      "модель работает симметричными группами взаимозаменяемости.");
     return;
   }
 

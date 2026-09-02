@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import openpyxl
@@ -74,6 +75,22 @@ def _index(rows):
     return idx
 
 
+def _names(raw):
+    """Одна строка документа — в список должностей.
+
+    В положении об оплате труда оклад задан не должности, а квалификационной
+    группе: «Аналитик; архитектор; аудитор; бухгалтер» — одна сумма на всех.
+    Разворачиваем такую строку, иначе ни одна должность не сопоставится.
+    Скобочные уточнения вида «Начальник (директор, заведующий)» не режем: там
+    перечислены синонимы одной должности, а не разные.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    parts = [p.strip(" .;,") for p in re.split(r"[;\n]+", text)]
+    return [p for p in parts if p] or [text]
+
+
 def compare(rows):
     """Величины из документа против действующего справочника."""
     from fot_planner.position_reference import normalize_position
@@ -81,22 +98,28 @@ def compare(rows):
     idx = _index(current)
     changes, unknown, seen = [], [], set()
     for row in rows or []:
-        pos = str(row.get("pos") or "").strip()
         field = row.get("field")
         value = row.get("value")
         key = FIELD_KEY.get(field)
-        if not pos or not key or value is None:
+        if not key or value is None:
             continue
-        hit = idx.get(normalize_position(pos))
-        if hit is None:
-            if pos not in unknown:
-                unknown.append(pos)
-            continue
-        seen.add(field)
-        old = hit[key]
-        if old != float(value):
-            changes.append({"pos": hit["pos"], "field": field,
-                            "old": old, "new": float(value)})
+        names = _names(row.get("pos"))
+        matched = False
+        for pos in names:
+            hit = idx.get(normalize_position(pos))
+            if hit is None:
+                continue
+            matched = True
+            seen.add(field)
+            old = hit[key]
+            if old != float(value) and not any(
+                    c["pos"] == hit["pos"] and c["field"] == field for c in changes):
+                changes.append({"pos": hit["pos"], "field": field,
+                                "old": old, "new": float(value)})
+        if not matched:
+            label = names[0] if len(names) == 1 else str(row.get("pos"))[:80]
+            if label not in unknown:
+                unknown.append(label)
     return changes, unknown[:20], sorted(seen)
 
 

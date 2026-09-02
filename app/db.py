@@ -67,6 +67,8 @@ class Case(Base):
                                                        cascade="all, delete-orphan")
     contracts: Mapped[list["Contract"]] = relationship(back_populates="case",
                                                        cascade="all, delete-orphan")
+    substitutions: Mapped[list["Substitution"]] = relationship(
+        back_populates="case", cascade="all, delete-orphan")
     documents: Mapped[list["Document"]] = relationship(back_populates="case",
                                                        cascade="all, delete-orphan")
     messages: Mapped[list["Message"]] = relationship(back_populates="case",
@@ -120,6 +122,26 @@ class Contract(Base):
     source: Mapped[str | None] = mapped_column(String(300), default=None)
 
     case: Mapped[Case] = relationship(back_populates="contracts")
+
+
+class Substitution(Base):
+    """Правило замещения должности: кого кем можно заменить.
+
+    Направленное, а не симметричное: главного инженера проекта можно заместить
+    инженером, обратное неверно. Модель расчета пока оперирует симметричными
+    группами взаимозаменяемости, поэтому правила хранятся и показываются, но в
+    решатель не подставляются.
+    """
+
+    __tablename__ = "substitutions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
+    position: Mapped[str] = mapped_column(String(200))
+    replaced_by: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+
+    case: Mapped[Case] = relationship(back_populates="substitutions")
 
 
 class Document(Base):
