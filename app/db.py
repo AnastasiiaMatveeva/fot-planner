@@ -82,17 +82,17 @@ class Case(Base):
 
 
 class Employee(Base):
-    """Строка штатного расписания.
+    """Строка штатного расписания организации.
 
-    Отдельной таблицей, а не полем в деле: это то, что экономист открывает и
-    просматривает чаще всего, по этому же списку сверяют ставки и оклады.
-    Собирается агентом из документов, дальше живет в деле самостоятельно.
+    Штатка не принадлежит плану: она одна на организацию и меняется приказами
+    о приеме, переводе и увольнении, а не с каждым новым планом. Поэтому
+    ``case_id`` пуст — строка общая.
     """
 
     __tablename__ = "employees"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
+    case_id: Mapped[int | None] = mapped_column(ForeignKey("cases.id"), default=None)
     code: Mapped[str] = mapped_column(String(60))
     fio: Mapped[str | None] = mapped_column(String(200), default=None)
     position: Mapped[str | None] = mapped_column(String(200), default=None)
@@ -101,17 +101,31 @@ class Employee(Base):
     date_from: Mapped[str | None] = mapped_column(String(20), default=None)
     date_to: Mapped[str | None] = mapped_column(String(20), default=None)
     source: Mapped[str | None] = mapped_column(String(300), default=None)
+    # Из какого документа взята строка. По имени файла связь ненадежна:
+    # документ можно загрузить повторно или удалить, и данные должны уйти
+    # вместе с ним, а не остаться сиротами.
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
 
     case: Mapped[Case] = relationship(back_populates="employees")
 
 
 class Contract(Base):
-    """Договор: фонд, признак ГОЗ, разрешенные виды выплат."""
+    """Договор: фонд, признак ГОЗ, разрешенные виды выплат.
+
+    Договор длиннее плана: он заключается на несколько лет, а планов по нему
+    столько же, сколько лет. Держать его условия в деле значит загружать два
+    десятка документов каждый январь заново. Поэтому договоры — реестр
+    организации, а план на год берет из него действующие в этом году.
+    """
 
     __tablename__ = "contracts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
+    case_id: Mapped[int | None] = mapped_column(ForeignKey("cases.id"), default=None)
+    # Срок действия: по нему план на год отбирает свои договоры.
+    date_from: Mapped[str | None] = mapped_column(String(20), default=None)
+    date_to: Mapped[str | None] = mapped_column(String(20), default=None)
     code: Mapped[str] = mapped_column(String(60))
     name: Mapped[str | None] = mapped_column(String(300), default=None)
     number: Mapped[str | None] = mapped_column(String(120), default=None)
@@ -120,6 +134,11 @@ class Contract(Base):
     fund: Mapped[float | None] = mapped_column(Float, default=None)
     kinds: Mapped[str | None] = mapped_column(String(200), default=None)
     source: Mapped[str | None] = mapped_column(String(300), default=None)
+    # Из какого документа взята строка. По имени файла связь ненадежна:
+    # документ можно загрузить повторно или удалить, и данные должны уйти
+    # вместе с ним, а не остаться сиротами.
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
 
     case: Mapped[Case] = relationship(back_populates="contracts")
 
@@ -144,6 +163,11 @@ class Substitution(Base):
     position: Mapped[str] = mapped_column(String(200))
     replaced_by: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str | None] = mapped_column(String(300), default=None)
+    # Из какого документа взята строка. По имени файла связь ненадежна:
+    # документ можно загрузить повторно или удалить, и данные должны уйти
+    # вместе с ним, а не остаться сиротами.
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
 
     case: Mapped[Case] = relationship(back_populates="substitutions")
 
@@ -154,7 +178,9 @@ class Document(Base):
     __tablename__ = "documents"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
+    # Документ принадлежит организации, а не плану: договор на три года
+    # обслуживает три плана, и перезагружать его в каждый незачем.
+    case_id: Mapped[int | None] = mapped_column(ForeignKey("cases.id"), default=None)
     name: Mapped[str] = mapped_column(String(300))
     path: Mapped[str] = mapped_column(String(500))
     size: Mapped[int] = mapped_column(Integer, default=0)

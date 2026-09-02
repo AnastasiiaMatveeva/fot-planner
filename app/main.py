@@ -76,7 +76,9 @@ def _dt(v):
 
 
 def case_state(db, case):
-    docs = db.query(Document).filter_by(case_id=case.id).order_by(Document.id).all()
+    # Документы общие для организации: договор на три года обслуживает три
+    # плана, и перезагружать его в каждый незачем.
+    docs = db.query(Document).order_by(Document.id).all()
     msgs = db.query(Message).filter_by(case_id=case.id).order_by(Message.id).all()
     acts = (db.query(Activity).filter_by(case_id=case.id)
             .order_by(Activity.id.desc()).limit(40).all())
@@ -88,8 +90,8 @@ def case_state(db, case):
                  "stage": case.stage, "updated": _dt(case.updated),
                  "has_data": bool(case.passport),
                  "counts": {
-                     "employees": db.query(Employee).filter_by(case_id=case.id).count(),
-                     "contracts": db.query(Contract).filter_by(case_id=case.id).count(),
+                     "employees": db.query(Employee).count(),
+                     "contracts": db.query(Contract).count(),
                      "substitutions": db.query(Substitution).count()}},
         "documents": [{"id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
                        "by": d.parsed_by, "summary": d.summary,
@@ -238,6 +240,64 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
         for doc_id in added:
             background.add_task(_process, case_id, doc_id)
         return {"ok": True, "documents": added}
+    finally:
+        db.close()
+
+
+@app.get("/api/documents")
+def all_documents():
+    """Все загруженные документы организации и что из каждого извлечено."""
+    db = session()
+    try:
+        out = []
+        for d in db.query(Document).order_by(Document.id.desc()).all():
+            out.append({
+                "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
+                "by": d.parsed_by, "summary": d.summary, "size": d.size,
+                "uploaded": _dt(d.uploaded), "case_id": d.case_id,
+                "produced": {
+                    "сотрудников": db.query(Employee).filter_by(document_id=d.id).count(),
+                    "договоров": db.query(Contract).filter_by(document_id=d.id).count(),
+                    "правил замещения": db.query(Substitution)
+                                          .filter_by(document_id=d.id).count(),
+                }})
+        return out
+    finally:
+        db.close()
+
+
+@app.delete("/api/document/{doc_id}")
+def delete_document(doc_id: int):
+    """Убрать документ вместе со всем, что из него извлечено.
+
+    Данные помнят документ-источник, поэтому удаление не оставляет сирот:
+    ушел документ — ушли его сотрудники, договоры и правила замещения.
+    Сам файл тоже удаляется: держать его без учетной записи незачем.
+    """
+    db = session()
+    try:
+        doc = db.get(Document, doc_id)
+        if doc is None:
+            raise HTTPException(404, "документ не найден")
+        gone = {
+            "сотрудников": db.query(Employee).filter_by(document_id=doc_id).delete(),
+            "договоров": db.query(Contract).filter_by(document_id=doc_id).delete(),
+            "правил замещения": db.query(Substitution).filter_by(document_id=doc_id).delete(),
+        }
+        name, case_id, path = doc.name, doc.case_id, doc.path
+        db.delete(doc)
+        db.commit()
+        if case_id:
+            lost = ", ".join("%s %d" % (k, v) for k, v in gone.items() if v)
+            agents.say(db, case_id,
+                       "Удален документ «%s»%s." % (name, ", с ним " + lost if lost else ""),
+                       who="экономист")
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+        return {"ok": True, "removed": gone}
     finally:
         db.close()
 
@@ -429,10 +489,8 @@ def case_data(case_id: int):
     """Входные данные дела: то, что экономист открывает и читает."""
     db = session()
     try:
-        emps = (db.query(Employee).filter_by(case_id=case_id)
-                .order_by(Employee.code).all())
-        ctrs = (db.query(Contract).filter_by(case_id=case_id)
-                .order_by(Contract.code).all())
+        emps = db.query(Employee).order_by(Employee.code).all()
+        ctrs = db.query(Contract).order_by(Contract.code).all()
         return {
             "employees": [{"code": e.code, "fio": e.fio, "position": e.position,
                            "rate": e.rate, "salary": e.salary,
@@ -440,7 +498,8 @@ def case_data(case_id: int):
                            "source": e.source} for e in emps],
             "contracts": [{"code": c.code, "name": c.name, "number": c.number,
                            "kind": c.kind, "goz": c.goz, "fund": c.fund,
-                           "kinds": c.kinds, "source": c.source} for c in ctrs],
+                           "kinds": c.kinds, "source": c.source,
+                           "from": c.date_from, "to": c.date_to} for c in ctrs],
             # Нормативная база общая: правила и справочник не привязаны к делу.
             "substitutions": [{"position": s.position, "replaced_by": s.replaced_by,
                                "source": s.source} for s in

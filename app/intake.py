@@ -132,7 +132,7 @@ def run_substitutions(db, case, doc):
                 continue
             db.add(Substitution(position=str(src).strip(),
                                 replaced_by=str(dst).strip() if dst else "",
-                                source=doc.name))
+                                source=doc.name, document_id=doc.id))
             pairs += 1
         doc.state = "разобран"
         doc.kind = "правила замещения должностей"
@@ -157,29 +157,51 @@ def run_substitutions(db, case, doc):
     db.commit()
 
 
-def _store_passport(db, case, passport, source):
-    """Разложить разобранное по таблицам, чтобы это можно было открыть и читать.
+def _excel_date(v):
+    """Даты в книгах приходят порядковым номером — приводим к читаемому виду."""
+    if v is None or v == "":
+        return None
+    s = str(v).strip()
+    try:
+        n = float(s)
+    except ValueError:
+        return s                      # уже строка вида 01.01.2026
+    if not (1 <= n <= 80000):
+        return s
+    import datetime as _dt
+    # Excel считает от 30.12.1899: 1900 год ошибочно високосный, эпоха сдвинута.
+    return (_dt.date(1899, 12, 30) + _dt.timedelta(days=int(n))).strftime("%d.%m.%Y")
 
-    Паспорт остается в деле целиком — из него собирается вход решателя. Но для
-    просмотра нужны обычные строки: сотрудники и договоры, отсортированные,
-    с указанием, из какого документа взяты. Пересобираем их заново на каждый
-    разбор: документ — источник истины, ручные правки идут через ленту.
+
+def _store_passport(db, case, passport, doc):
+    """Разложить разобранное по реестрам организации.
+
+    Ни штатка, ни договоры не принадлежат плану: договор заключается на
+    несколько лет и обслуживает столько же планов, штатка меняется приказами,
+    а не с каждым расчетом. Поэтому строки общие, а план на год берет из
+    реестра то, что в этом году действует.
+
+    Строки заменяются в пределах одного документа: повторная загрузка того же
+    файла обновляет только то, что из него пришло, и не трогает остальное.
     """
-    db.query(Employee).filter_by(case_id=case.id).delete()
-    db.query(Contract).filter_by(case_id=case.id).delete()
+    db.query(Employee).filter_by(document_id=doc.id).delete()
+    db.query(Contract).filter_by(document_id=doc.id).delete()
     for e in passport.get("employees") or []:
-        db.add(Employee(case_id=case.id, code=str(e.get("code") or ""),
+        db.add(Employee(code=str(e.get("code") or ""),
                         fio=e.get("fio"), position=e.get("pos"),
                         rate=e.get("rate"), salary=e.get("sal"),
                         date_from=_excel_date(e.get("from")),
-                        date_to=_excel_date(e.get("to")), source=source))
+                        date_to=_excel_date(e.get("to")),
+                        source=doc.name, document_id=doc.id))
     for c in passport.get("contracts") or []:
         kinds = c.get("kinds")
-        db.add(Contract(case_id=case.id, code=str(c.get("code") or ""),
+        db.add(Contract(code=str(c.get("code") or ""),
                         name=c.get("name"), number=c.get("num"), kind=c.get("type"),
                         goz=c.get("goz"), fund=c.get("fot"),
                         kinds=", ".join(kinds) if isinstance(kinds, list) else kinds,
-                        source=source))
+                        date_from=_excel_date(c.get("from")),
+                        date_to=_excel_date(c.get("to")),
+                        source=doc.name, document_id=doc.id))
     db.commit()
 
 
@@ -199,7 +221,7 @@ def run_intake(db, case, doc):
                          "прочитано в документе": out.get("log") or [],
                          "спорных значений": len(out.get("questions") or []),
                          "готово к расчету": bool((out.get("ready") or {}).get("ok"))}
-        _store_passport(db, case, passport, doc.name)
+        _store_passport(db, case, passport, doc)
         db.commit()
 
     ready = out.get("ready") or {}

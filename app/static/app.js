@@ -197,13 +197,17 @@ function renderDocs() {
     el.innerHTML = '<div class="empty">Документов пока нет. Приложите файлы кнопкой «+» внизу ленты.</div>';
     return;
   }
-  el.innerHTML = state.documents.map(function (d) {
-    var cls = d.state === "разобран" ? "ok" : (d.state === "ожидает" ? "wait" : "bad");
-    return '<div class="doc ' + cls + '"><div class="nm">' + esc(d.name) + "</div>" +
-           '<div class="mt">' + esc(d.kind || d.state) +
-           (d.summary ? " · " + esc(d.summary) : "") +
-           (d.by ? " · " + esc(d.by) : "") + "</div></div>";
-  }).join("");
+  el.innerHTML = '<div class="dnote">Общие для организации: договор служит ' +
+    "всем планам своего срока, перезагружать его в каждый не нужно.</div>" +
+    state.documents.map(function (d) {
+      var cls = d.state === "разобран" ? "ok" : (d.state === "ожидает" ? "wait" : "bad");
+      return '<div class="doc ' + cls + '"><div class="nm">' + esc(d.name) +
+             '<button class="del" data-doc="' + d.id +
+             '" title="Убрать документ и все, что из него извлечено">×</button></div>' +
+             '<div class="mt">' + esc(d.kind || d.state) +
+             (d.summary ? " · " + esc(d.summary) : "") +
+             (d.by ? " · " + esc(d.by) : "") + "</div></div>";
+    }).join("");
 }
 
 function renderRuns() {
@@ -581,6 +585,15 @@ function tick() {
 }
 
 /* ── события ──────────────────────────────────────────────── */
+$("docs").addEventListener("click", function (e) {
+  var b = e.target.closest(".del");
+  if (!b) return;
+  var card = b.closest(".doc"), name = card.querySelector(".nm").textContent.replace(/×$/, "");
+  if (!confirm("Убрать «" + name.trim() + "» и все данные, извлеченные из него?")) return;
+  b.disabled = true;
+  api("/api/document/" + b.getAttribute("data-doc"), { method: "DELETE" }).then(tick);
+});
+
 $("agents").addEventListener("click", function (e) {
   var el = e.target.closest(".ag");
   if (!el) return;

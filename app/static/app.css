@@ -218,3 +218,12 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
                         background:var(--agent);margin-right:6px;vertical-align:middle;opacity:.55}
 .tabs .tab.norm.on{color:var(--agent);border-bottom-color:var(--agent)}
 .tabs .tab.norm.on::before{opacity:1}
+
+/* Документы — реестр организации, отсюда же их можно убрать */
+.dnote{font-size:11.5px;color:var(--ink3);margin-bottom:9px;line-height:1.45}
+.doc .nm{display:flex;align-items:flex-start;gap:6px;justify-content:space-between}
+.doc .del{flex:0 0 auto;width:18px;height:18px;line-height:1;border:1px solid transparent;
+          background:none;color:var(--ink3);font-size:15px;cursor:pointer;border-radius:2px;
+          padding:0}
+.doc .del:hover{border-color:var(--bad);color:var(--bad);background:var(--badbg)}
+.doc .del[disabled]{opacity:.4;cursor:default}
