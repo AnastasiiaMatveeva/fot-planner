@@ -194,3 +194,8 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
            background:var(--s2);color:var(--ink2)}
 .view .tag.goz{background:var(--warnbg);color:var(--warn)}
 .view .scroller{max-height:100%;overflow:auto}
+
+/* нумерация строк в перечнях */
+.view th.num,.view td.num{width:1%;white-space:nowrap;text-align:right;
+                          font-family:var(--m);color:var(--ink3);
+                          padding-left:11px;padding-right:9px}

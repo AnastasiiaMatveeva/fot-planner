@@ -287,27 +287,38 @@ def handle_document(db, case, doc):
         w["detail"] = kind
         db.commit()
 
-    if owner is not None:
-        doc.kind = kind
+    # Два разных отказа, и путать их нельзя. Файл, который не читается,
+    # не станет читаемым от того, что экономист назовет его вид: спрашивать
+    # тут нечего, надо сказать, чем помочь. Вопрос уместен только когда
+    # документ прочитан, а вид непонятен — тогда ответ меняет обработчик.
+    if by is None:
+        doc.state = "не прочитан"
+        doc.summary = kind                      # без by в kind лежит причина
+        db.commit()
+        say(db, case.id, "Не смог прочитать «%s». %s" % (doc.name, kind),
+            agent="intake")
+        db.commit()
+        return
+
     if owner is None:
         doc.state = "не распознан"
-        doc.kind = kind if by else None
+        doc.kind = kind
         doc.parsed_by = by
-        doc.summary = None if by else kind      # без by в kind лежит причина
         db.commit()
         db.add(Question(
             case_id=case.id, agent="intake",
-            text="Не понял, что за документ «%s». Что это?" % doc.name,
+            text="Что за документ «%s»? Прочитал его, но по содержанию это не "
+                 "похоже ни на один вид, с которым я работаю." % doc.name,
             options=json.dumps(["документ по договору", "нормативный документ",
                                 "правила замещения должностей",
                                 "не нужен, удалить"], ensure_ascii=False)))
         say(db, case.id,
-            ("Не смог прочитать «%s»: %s" % (doc.name, kind)) if not by
-            else ("Определил «%s» как «%s» — с этим видом пока не работаю. "
-                  "Подскажите, что это." % (doc.name, kind)),
-            agent="intake")
+            "Прочитал «%s», но не понял, что это за документ. Подскажите вид — "
+            "разберу заново." % doc.name, agent="intake")
         db.commit()
         return
+
+    doc.kind = kind
     doc.parsed_by = by
 
     try:

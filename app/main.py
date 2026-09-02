@@ -338,6 +338,9 @@ FORMATS = {
 
 def _cannot_reprocess(doc, owner):
     """Причина, по которой переразбор невозможен, либо None."""
+    if doc.state == "не прочитан":
+        return ("«%s» не читается: %s Указание вида это не изменит."
+                % (doc.name, doc.summary or "файл не удалось привести к тексту."))
     if owner is None:
         return None
     ext = os.path.splitext(doc.path)[1].lower()

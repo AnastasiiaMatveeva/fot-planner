@@ -348,19 +348,24 @@ function loadResult() {
   });
 }
 
-function table(head, rows, note) {
+/* Перечни всегда нумеруются: по номеру строки удобно сослаться в разговоре
+   и найти место в длинной таблице. Колонку добавляем здесь, а не в каждом
+   вызове, — чтобы нумерация была одинаковой везде. Отключается opts.plain. */
+function table(head, rows, note, opts) {
+  var num = !(opts && opts.plain);
   var h = note ? '<div class="vh">' + note + "</div>" : "";
   if (!rows.length) return h + '<div class="none">Пусто</div>';
-  h += '<table><thead><tr>' +
+  h += '<table><thead><tr>' + (num ? '<th class="num">№</th>' : "") +
        head.map(function (c) {
          return (typeof c === "object" ? '<th class="n">' + esc(c.t) : "<th>" + esc(c)) + "</th>";
        }).join("") + "</tr></thead><tbody>";
-  h += rows.map(function (r) {
-    return "<tr>" + r.map(function (c) {
-      return (c && typeof c === "object")
-        ? '<td class="' + (c.cls || "") + '">' + (c.v == null ? "—" : c.v) + "</td>"
-        : "<td>" + (c == null || c === "" ? "—" : esc(c)) + "</td>";
-    }).join("") + "</tr>";
+  h += rows.map(function (r, i) {
+    return "<tr>" + (num ? '<td class="num">' + (i + 1) + "</td>" : "") +
+      r.map(function (c) {
+        return (c && typeof c === "object")
+          ? '<td class="' + (c.cls || "") + '">' + (c.v == null ? "—" : c.v) + "</td>"
+          : "<td>" + (c == null || c === "" ? "—" : esc(c)) + "</td>";
+      }).join("") + "</tr>";
   }).join("");
   return h + "</tbody></table>";
 }
