@@ -27,7 +27,9 @@ sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
 import extract          # noqa: E402
 import llm              # noqa: E402
 from agents import handoff, say, working  # noqa: E402
-from db import Contract, Document, Employee, Question, Substitution, now  # noqa: E402
+from db import (  # noqa: E402
+    Contract, Document, Employee, Proposal, Question, Substitution, now,
+)
 
 # Слова, по которым книга опознается как нормативный документ, а не как
 # расчетно-калькуляционные материалы по договору.
@@ -205,6 +207,101 @@ def _store_passport(db, case, passport, doc):
     db.commit()
 
 
+# ── документ незнакомой формы ───────────────────────────────────
+def _known(db, entity, f):
+    """Уже есть такая строка в реестре? Тогда предлагать ее незачем."""
+    if entity == "сотрудник":
+        code = str(f.get("code") or "").strip()
+        fio = str(f.get("fio") or "").strip()
+        rows = db.query(Employee).all()
+        return any((code and (e.code or "").strip().lower() == code.lower())
+                   or (fio and (e.fio or "").strip().lower() == fio.lower())
+                   for e in rows)
+    if entity == "договор":
+        code = str(f.get("code") or "").strip()
+        return bool(code) and any((c.code or "").strip().lower() == code.lower()
+                                  for c in db.query(Contract).all())
+    pos = str(f.get("position") or "").strip().lower()
+    return bool(pos) and any((s.position or "").strip().lower() == pos
+                             for s in db.query(Substitution).all())
+
+
+def propose_entities(db, case, doc):
+    """Прочитать документ без шаблона и предложить найденное экономисту.
+
+    Записать прочитанное прямо в реестр нельзя: у формы не по шаблону величина
+    лежит не там, где ее ждут, и модель может взять оклад из соседней графы.
+    Расчет от этого не упадет — он выдаст правдоподобный неверный план, а это
+    ГОЗ. Поэтому строки кладутся в отдельную таблицу и ждут, пока экономист
+    их посмотрит: до подтверждения их нет ни в реестре, ни в паспорте дела,
+    ни во входном файле решателя.
+
+    Возвращает True, если что-то предложено.
+    """
+    with working(db, case.id, "intake", "перечитывает «%s» без шаблона" % doc.name) as w:
+        res = llm.freeform(doc.path, doc.name)
+        db.query(Proposal).filter_by(document_id=doc.id, state="предложено").delete()
+
+        if not res.get("ok"):
+            w["detail"] = res.get("error") or "не разобрал"
+            db.commit()
+            return False
+
+        buckets = (("employees", "сотрудник"), ("contracts", "договор"),
+                   ("substitutions", "правило замещения"))
+        counts, skipped = {}, 0
+        for key, entity in buckets:
+            counts[entity] = 0
+            for item in res.get(key) or []:
+                where = item.pop("место", None)
+                if _known(db, entity, item):
+                    # Знакомый обработчик уже записал эту строку — предлагать
+                    # ее второй раз значит просить подтвердить проверенное.
+                    skipped += 1
+                    continue
+                db.add(Proposal(document_id=doc.id, entity=entity,
+                                payload=json.dumps(item, ensure_ascii=False),
+                                evidence=str(where)[:400] if where else None))
+                counts[entity] += 1
+        total = sum(counts.values())
+        w["detail"] = ("предложено %d, уже в реестре %d" % (total, skipped)
+                       if total or skipped else "сверх разобранного ничего")
+        w["artifact"] = {"файл": doc.name, "прочитано частями": res.get("parts"),
+                         "предложено строк": total,
+                         "пропущено как уже известные": skipped,
+                         "в расчет пойдет": "только после подтверждения"}
+        if total:
+            doc.state = "ждет подтверждения"
+            doc.summary = ", ".join("%s %d" % (k, v) for k, v in counts.items() if v)
+        db.commit()
+
+    if not total:
+        return False
+
+    say(db, case.id,
+        "В «%s» нашлось сверх разобранного: %s. В реестр и в расчет это пока "
+        "не пошло — откройте документ в реестре, проверьте строки и "
+        "подтвердите те, что верны. У каждой написано, откуда она взята."
+        % (doc.name, doc.summary), agent="intake")
+    db.commit()
+    return True
+
+
+def _ask_kind(db, case, doc):
+    """Спросить вид документа — когда прочитать содержимое не удалось."""
+    db.add(Question(
+        case_id=case.id, agent="intake",
+        text="Что за документ «%s»? Прочитал его, но по содержанию это не "
+             "похоже ни на один вид, с которым я работаю." % doc.name,
+        options=json.dumps(["документ по договору", "нормативный документ",
+                            "правила замещения должностей",
+                            "не нужен, удалить"], ensure_ascii=False)))
+    say(db, case.id,
+        "Прочитал «%s», но не понял, что это за документ, и строк из него не "
+        "достал. Подскажите вид — разберу заново." % doc.name, agent="intake")
+    db.commit()
+
+
 # ── агент 1: данные договоров ───────────────────────────────────
 def run_intake(db, case, doc):
     """Разобрать документ по договору и доложить в ленту."""
@@ -353,21 +450,14 @@ def handle_document(db, case, doc):
         return
 
     if owner is None:
-        doc.state = "не распознан"
+        # Форма незнакомая — это не повод не читать документ. Раньше здесь
+        # разбор кончался вопросом «что это?», и документ не давал ничего.
         doc.kind = kind
         doc.parsed_by = by
+        doc.state = "не распознан"
         db.commit()
-        db.add(Question(
-            case_id=case.id, agent="intake",
-            text="Что за документ «%s»? Прочитал его, но по содержанию это не "
-                 "похоже ни на один вид, с которым я работаю." % doc.name,
-            options=json.dumps(["документ по договору", "нормативный документ",
-                                "правила замещения должностей",
-                                "не нужен, удалить"], ensure_ascii=False)))
-        say(db, case.id,
-            "Прочитал «%s», но не понял, что это за документ. Подскажите вид — "
-            "разберу заново." % doc.name, agent="intake")
-        db.commit()
+        if not propose_entities(db, case, doc):
+            _ask_kind(db, case, doc)
         return
 
     doc.kind = kind
@@ -388,6 +478,11 @@ def handle_document(db, case, doc):
             run_substitutions(db, case, doc)
         else:
             run_intake(db, case, doc)
+        # Вид документа не обещает, что в нем нет ничего сверх этого вида.
+        # Служебная записка проходит как нормативный документ, а внутри —
+        # трое сотрудников и договор, и знакомый обработчик их не заметит.
+        # Поэтому после него документ читается еще раз, уже без шаблона.
+        propose_entities(db, case, doc)
     except Exception as exc:  # noqa: BLE001 — сообщение вместо падения фона
         doc.state = "не распознан"
         doc.summary = str(exc)[:300]

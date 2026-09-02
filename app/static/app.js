@@ -1027,7 +1027,7 @@ function meta(pairs) {
     }).join("") + "</dl>";
 }
 
-function docCard(id) {
+function openDocument(id) {
   // Две карточки одна поверх другой ни к чему: щелчок по второму имени
   // заменяет первую.
   var open = document.querySelector(".drawer");
@@ -1072,6 +1072,37 @@ function docCard(id) {
         d.substitutions.map(function (x) { return [x.position, x.replaced_by]; }),
         "") + "</div>";
     }
+    // Предложения — до подтверждения, поэтому идут первыми и отдельно от
+    // того, что уже в реестре: смешать их значило бы стереть разницу между
+    // «проверено» и «модель так прочитала».
+    var prop = "";
+    if (d.proposals && d.proposals.length) {
+      var byEntity = {};
+      d.proposals.forEach(function (p) {
+        (byEntity[p.entity] = byEntity[p.entity] || []).push(p);
+      });
+      prop = '<div class="grp ask"><h4>Ждет подтверждения</h4>' +
+        '<p class="hint">Документ не похож ни на одну знакомую форму, поэтому ' +
+        'прочитан как есть. В реестр и в расчет эти строки не попадут, пока ' +
+        'вы их не примете.</p>' +
+        Object.keys(byEntity).map(function (ent) {
+          return '<div class="pgrp"><h5>' + esc(ent) + "</h5>" +
+            byEntity[ent].map(function (p) {
+              return '<label class="prow"><input type="checkbox" data-prop="' +
+                p.id + '" checked><span class="pv">' +
+                esc(Object.keys(p.fields)
+                      .filter(function (k) { return p.fields[k] != null && p.fields[k] !== ""; })
+                      .map(function (k) { return p.fields[k]; }).join(" · ")) +
+                "</span>" +
+                (p.evidence ? '<span class="pw">' + esc(p.evidence) + "</span>" : "") +
+                "</label>";
+            }).join("") + "</div>";
+        }).join("") +
+        '<div class="pacts"><button type="button" class="take">Принять отмеченные' +
+        '</button><button type="button" class="drop">Отклонить остальные</button>' +
+        "</div></div>";
+    }
+
     if (!got) {
       // Пусто — это не всегда сбой: нормативный документ дает не строки, а
       // расхождения. Что именно вышло, сказано в сводке разбора.
@@ -1088,12 +1119,44 @@ function docCard(id) {
         (d.exists
           ? '<a class="dfile" href="/api/document/' + d.id + '/file">Открыть файл</a>'
           : '<div class="none">Файла нет на диске</div>') +
-        got +
+        prop + got +
       "</div>" +
       '<footer class="dfoot"><button type="button" class="del">Удалить документ</button>' +
       "</footer>";
 
     back.querySelector(".x").onclick = close;
+
+    var take = back.querySelector(".take");
+    if (take) {
+      var decide = function (acceptChecked) {
+        var boxes = Array.prototype.slice.call(
+          back.querySelectorAll("[data-prop]"));
+        var accept = [], reject = [];
+        boxes.forEach(function (b) {
+          var id = +b.getAttribute("data-prop");
+          if (acceptChecked && b.checked) accept.push(id);
+          else reject.push(id);
+        });
+        if (!accept.length && !reject.length) return;
+        api("/api/document/" + d.id + "/proposals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accept: accept, reject: reject }),
+        }).then(function () {
+          close();
+          loadRegistry();
+          tick();
+        });
+      };
+      take.onclick = function () { decide(true); };
+      back.querySelector(".drop").onclick = function () {
+        ask("Отклонить непринятые строки?",
+            "Они исчезнут из карточки. Документ останется, его можно " +
+            "загрузить заново.", "Отклонить").then(function (yes) {
+          if (yes) decide(false);
+        });
+      };
+    }
     back.querySelector(".del").onclick = function () {
       close();
       removeDoc(d.id, d.name, function () { loadRegistry(); tick(); });
@@ -1369,7 +1432,7 @@ $("regview").addEventListener("keydown", function (e) {
   var nm = e.target.closest(".dname");
   if (!nm) return;
   e.preventDefault();
-  docCard(+nm.getAttribute("data-doc"));
+  openDocument(+nm.getAttribute("data-doc"));
 });
 
 $("regview").addEventListener("click", function (e) {
@@ -1392,7 +1455,7 @@ $("regview").addEventListener("click", function (e) {
 
   var nm = e.target.closest(".dname");
   if (nm) {
-    docCard(+nm.getAttribute("data-doc"));
+    openDocument(+nm.getAttribute("data-doc"));
     return;
   }
 

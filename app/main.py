@@ -33,7 +33,7 @@ import intake            # noqa: E402
 import llm               # noqa: E402
 import reference         # noqa: E402
 from db import (         # noqa: E402
-    Activity, Case, Contract, Document, Employee, Message, Question, Run,
+    Activity, Case, Contract, Document, Employee, Message, Proposal, Question, Run,
     Substitution,
     RESULT_DIR, UPLOAD_DIR, init_db, now, session,
 )
@@ -367,7 +367,76 @@ def one_document(doc_id: int):
                            "to": c.date_to} for c in ctr],
             "substitutions": [{"position": s.position, "replaced_by": s.replaced_by}
                               for s in sub],
+            "proposals": [{"id": pr.id, "entity": pr.entity,
+                           "fields": json.loads(pr.payload),
+                           "evidence": pr.evidence, "state": pr.state}
+                          for pr in db.query(Proposal)
+                          .filter_by(document_id=d.id, state="предложено")
+                          .order_by(Proposal.id).all()],
         }
+    finally:
+        db.close()
+
+
+@app.post("/api/document/{doc_id}/proposals")
+async def decide_proposals(doc_id: int, request: Request):
+    """Принять или отклонить строки, предложенные по документу.
+
+    Принятая строка только здесь становится строкой реестра — и получает
+    document_id, то есть источник. До этого ее нет нигде, кроме таблицы
+    предложений, и ни в какой расчет она попасть не может.
+    """
+    body = await request.json()
+    take = {int(x) for x in (body.get("accept") or [])}
+    drop = {int(x) for x in (body.get("reject") or [])}
+    db = session()
+    try:
+        doc = db.get(Document, doc_id)
+        if doc is None:
+            raise HTTPException(404, "документ не найден")
+        rows = (db.query(Proposal)
+                .filter(Proposal.document_id == doc_id,
+                        Proposal.state == "предложено").all())
+        added = {"сотрудник": 0, "договор": 0, "правило замещения": 0}
+        for pr in rows:
+            if pr.id in drop:
+                pr.state = "отклонено"
+                continue
+            if pr.id not in take:
+                continue
+            f = json.loads(pr.payload)
+            if pr.entity == "сотрудник":
+                db.add(Employee(code=str(f.get("code") or ""), fio=f.get("fio"),
+                                position=f.get("pos"), rate=f.get("rate"),
+                                salary=f.get("sal"), date_from=f.get("from"),
+                                date_to=f.get("to"), source=doc.name,
+                                document_id=doc.id))
+            elif pr.entity == "договор":
+                db.add(Contract(code=str(f.get("code") or ""), name=f.get("name"),
+                                number=f.get("num"), kind=f.get("type"),
+                                goz=f.get("goz"), fund=f.get("fot"),
+                                date_from=f.get("from"), date_to=f.get("to"),
+                                source=doc.name, document_id=doc.id))
+            else:
+                db.add(Substitution(position=str(f.get("position") or ""),
+                                    replaced_by=str(f.get("replaced_by") or ""),
+                                    source=doc.name, document_id=doc.id))
+            pr.state = "принято"
+            added[pr.entity] += 1
+
+        left = sum(1 for pr in rows if pr.state == "предложено")
+        if not left:
+            doc.state = "разобран" if any(added.values()) else "не распознан"
+        db.commit()
+
+        if any(added.values()) and doc.case_id:
+            agents.say(db, doc.case_id,
+                       "Принято из «%s»: %s. Строки записаны в реестр, источник "
+                       "— этот документ." % (doc.name, ", ".join(
+                           "%s %d" % (k, v) for k, v in added.items() if v)),
+                       agent="intake")
+            db.commit()
+        return {"ok": True, "added": added, "left": left}
     finally:
         db.close()
 
@@ -398,6 +467,10 @@ def _forget_document(db, doc):
         "договоров": db.query(Contract).filter_by(document_id=doc.id).delete(),
         "правил замещения": db.query(Substitution).filter_by(document_id=doc.id).delete(),
     }
+    # Непринятые предложения уходят вместе с документом: подтверждать строки
+    # файла, которого больше нет, не по чему. ON DELETE CASCADE в схеме есть,
+    # но SQLite не применяет внешние ключи без PRAGMA foreign_keys.
+    db.query(Proposal).filter_by(document_id=doc.id).delete()
     path = doc.path
     db.delete(doc)
     db.commit()

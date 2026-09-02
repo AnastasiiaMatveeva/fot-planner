@@ -280,6 +280,35 @@ engine = create_engine("sqlite:///" + DB_PATH, future=True,
 SessionLocal = sessionmaker(bind=engine, autoflush=False, future=True)
 
 
+class Proposal(Base):
+    """Строка, вычитанная моделью из документа неизвестной формы, — до
+    подтверждения экономистом.
+
+    Лежит отдельно от реестра нарочно. Пока строка не подтверждена, она
+    физически не может попасть ни в реестр, ни в паспорт дела, ни во входной
+    файл решателя: ее там просто нет. Для ГОЗ это и есть разница между «ИИ
+    помог разобрать» и «ИИ подсунул правдоподобное»: в расчет уходит только
+    то, что человек посмотрел и принял.
+
+    ``evidence`` — откуда строка взята в документе: лист и номер строки, адрес
+    ячейки или цитата. Без этого предложение нечем проверить, кроме как искать
+    значение в файле глазами.
+    """
+
+    __tablename__ = "proposals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"))
+    # сотрудник | договор | правило замещения
+    entity: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[str | None] = mapped_column(String(400), default=None)
+    # предложено | принято | отклонено
+    state: Mapped[str] = mapped_column(String(20), default="предложено")
+    created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+
+
 def init_db():
     Base.metadata.create_all(engine)
 

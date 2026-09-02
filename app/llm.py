@@ -509,3 +509,158 @@ def _use_schema(name):
 
 def _no_thinking(name):
     return name == "local" and not _truthy(os.environ.get("FOT_LLM_THINKING"))
+
+
+# ── разбор документа неизвестной формы ───────────────────────────────────
+#
+# Экономисты просят загружать в сервис любой документ, а не четыре знакомые
+# формы. Модель это вытянет, но записывать вытянутое прямо в реестр нельзя:
+# если оклад взят не из той графы, расчет пройдет и даст правдоподобный
+# неверный ответ, а это ГОЗ. Поэтому здесь только чтение — куда положить
+# прочитанное, решает сервис, а подтверждает человек.
+#
+# У каждой строки спрашиваем, откуда она в документе. Без этого проверить
+# предложение нельзя: экономисту пришлось бы искать значение в файле глазами.
+
+FREEFORM_SYSTEM = """Ты читаешь документ планово-экономического отдела и
+достаешь из него строки трех видов.
+
+Сотрудник: табельный номер, ФИО, должность, доля ставки, оклад в рублях,
+срок работы.
+Договор: шифр, наименование, номер, вид работ, признак гособоронзаказа,
+фонд оплаты труда в рублях, срок действия.
+Правило замещения: должность и должности, которыми ее можно заместить.
+
+Правила:
+- бери только то, что в документе действительно написано; ничего не выводи
+  по смыслу и не достраивай по образцу;
+- поля from и to — это только срок, даты вида 01.01.2026; если срок в
+  документе не указан, оставь их пустыми и ничего туда не подставляй;
+- для каждой строки заполни поле «место»: где она в документе — лист и номер
+  строки, адрес ячейки или короткая цитата;
+- суммы возвращай числом без пробелов и знака рубля;
+- если строк какого-то вида в документе нет, верни пустой список;
+- если документ вообще не об этом, верни три пустых списка."""
+
+FREEFORM_SHAPE = """Ответь одним объектом JSON:
+{"employees": [{"code": "табельный", "fio": "ФИО", "pos": "должность",
+                "rate": 1.0, "sal": 50000, "from": "01.01.2026",
+                "to": "31.12.2026", "место": "лист «штат», строка 7"}],
+ "contracts": [{"code": "шифр", "name": "наименование", "num": "номер",
+                "type": "вид", "goz": "да", "fot": 1000000,
+                "from": "01.01.2026", "to": "31.12.2026",
+                "место": "лист «договоры», строка 3"}],
+ "substitutions": [{"position": "должность", "replaced_by": "кем",
+                    "место": "строка 12"}]}"""
+
+_FF_EMP = {
+    "type": "object",
+    "properties": {
+        "code": {"type": ["string", "null"]}, "fio": {"type": ["string", "null"]},
+        "pos": {"type": ["string", "null"]}, "rate": {"type": ["number", "null"]},
+        "sal": {"type": ["number", "null"]}, "from": {"type": ["string", "null"]},
+        "to": {"type": ["string", "null"]}, "место": {"type": ["string", "null"]},
+    },
+    "additionalProperties": False,
+}
+_FF_CTR = {
+    "type": "object",
+    "properties": {
+        "code": {"type": ["string", "null"]}, "name": {"type": ["string", "null"]},
+        "num": {"type": ["string", "null"]}, "type": {"type": ["string", "null"]},
+        "goz": {"type": ["string", "null"]}, "fot": {"type": ["number", "null"]},
+        "from": {"type": ["string", "null"]}, "to": {"type": ["string", "null"]},
+        "место": {"type": ["string", "null"]},
+    },
+    "additionalProperties": False,
+}
+_FF_SUB = {
+    "type": "object",
+    "properties": {
+        "position": {"type": ["string", "null"]},
+        "replaced_by": {"type": ["string", "null"]},
+        "место": {"type": ["string", "null"]},
+    },
+    "additionalProperties": False,
+}
+FREEFORM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "employees": {"type": "array", "items": _FF_EMP},
+        "contracts": {"type": "array", "items": _FF_CTR},
+        "substitutions": {"type": "array", "items": _FF_SUB},
+    },
+    "required": ["employees", "contracts", "substitutions"],
+    "additionalProperties": False,
+}
+
+#: По каким полям строка считается той же самой на стыке частей документа.
+_FF_KEY = {"employees": ("code", "fio"), "contracts": ("code", "num"),
+           "substitutions": ("position", "replaced_by")}
+
+
+def freeform(path, filename="", max_chunks=8):
+    """Достать сущности из документа любой формы. ok=False — не получилось."""
+    name, model, why = provider()
+    if name is None:
+        return {"ok": False, "unavailable": True, "error": why}
+
+    try:
+        text = docread.to_text(path, CHUNK * max_chunks)
+    except docread.Unreadable as e:
+        return {"ok": False, "error": str(e)}
+
+    filename = filename or os.path.basename(path)
+    found = {"employees": [], "contracts": [], "substitutions": []}
+    seen = {k: set() for k in found}
+    parts = _chunks(text)[:max_chunks]
+    errors = []
+
+    for part in parts:
+        try:
+            raw = _ask_freeform(name, model, part, filename)
+        except Exception as e:  # noqa: BLE001 — сеть, лимиты, битый JSON
+            errors.append(str(e))
+            continue
+        if not isinstance(raw, dict):
+            continue
+        for key in found:
+            for item in raw.get(key) or []:
+                if not isinstance(item, dict):
+                    continue
+                # Части перекрываются на 2000 знаков, и строка со стыка
+                # приходит дважды.
+                mark = tuple(str(item.get(f) or "").strip().lower()
+                             for f in _FF_KEY[key])
+                if not any(mark) or mark in seen[key]:
+                    continue
+                seen[key].add(mark)
+                found[key].append(item)
+
+    if errors and not any(found.values()):
+        return {"ok": False, "error": errors[0]}
+    return {"ok": True, "model": "%s %s" % (name, model), "parts": len(parts),
+            **found}
+
+
+def _ask_freeform(name, model, text, filename):
+    if name == "anthropic":
+        return _freeform_anthropic(text, filename, model)
+    url = (os.environ["FOT_LLM_BASE_URL"].strip().rstrip("/") + "/chat/completions"
+           if name == "local" else DEEPSEEK_URL)
+    return _call_openai_compatible(
+        text, filename, model, url, api_key=_key(name), schema=_use_schema(name),
+        no_thinking=_no_thinking(name),
+        insecure=_truthy(os.environ.get("FOT_LLM_INSECURE_TLS")),
+        system=FREEFORM_SYSTEM, shape=FREEFORM_SHAPE,
+        json_schema=FREEFORM_SCHEMA, schema_name="freeform_entities")
+
+
+def _freeform_anthropic(text, filename, model):
+    import anthropic
+
+    msg = anthropic.Anthropic().messages.create(
+        model=model, max_tokens=8000, system=FREEFORM_SYSTEM + "\n\n" + FREEFORM_SHAPE,
+        messages=[{"role": "user",
+                   "content": "Документ «%s»:\n\n%s" % (filename, text)}])
+    return _clean("".join(b.text for b in msg.content if b.type == "text"))
