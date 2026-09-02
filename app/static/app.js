@@ -825,14 +825,15 @@ function renderView() {
  * разом, — а не по одному через меню строки. Поэтому в реестре флажки
  * и панель действий, которая появляется, только когда что-то отмечено.
  */
-var picked = {}, selecting = false;
+var picked = {};
 
 function pickedIds() {
   return Object.keys(picked).filter(function (k) { return picked[k]; });
 }
 
-/* Панель выбора — плавающая полоса внизу, а не блок над таблицей: так
-   она не отодвигает содержимое и не спорит с ним за внимание. */
+/* Панель действий подменяет ряд вкладок, а не добавляется над таблицей:
+   так содержимое не съезжает, когда что-то отмечено. Так устроено в Carbon
+   и PatternFly — панель занимает место обычной, отмена справа. */
 function pickBar() {
   var ids = pickedIds();
   if (!ids.length) return "";
@@ -840,30 +841,23 @@ function pickBar() {
          "<span>" + px(ids.length, "документ отмечен", "документа отмечено",
                        "документов отмечено") + "</span>" +
          '<button type="button" id="pickdel">Удалить</button>' +
-         '<button type="button" class="x" id="pickclear" aria-label="Снять отметки">' +
-         '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ' +
-         'stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>' +
-         "</button></div>";
+         '<button type="button" class="x" id="pickclear">Отмена</button></div>';
 }
 
 /* Панель отметок живет отдельно от таблицы: так выбор строк не заставляет
    перерисовывать список. */
+/* Панель и ряд вкладок делят одно место, поэтому переключаем их вместе. */
 function refreshPickBar() {
-  var bar = document.querySelector("body > .pickbar");
-  var html = pickBar();
-  if (!html) {
-    if (bar) bar.remove();
-    return;
-  }
-  if (bar) bar.outerHTML = html;
-  else document.body.insertAdjacentHTML("beforeend", html);
+  if (regTab === "docs") renderRegistry();
 }
 
+/* Снять все отметки. Флажки остаются на месте — они появляются по наведению,
+   а не по режиму. */
 function stopSelecting() {
-  selecting = false;
   picked = {};
+  Array.prototype.forEach.call(document.querySelectorAll("#regview input[type=checkbox]"),
+    function (b) { b.checked = false; });
   refreshPickBar();
-  if (inRegistry) renderRegistry();
 }
 
 function removePicked() {
@@ -886,7 +880,6 @@ function removePicked() {
       return api("/api/document/" + id, { method: "DELETE" }).catch(function () {});
     })).then(function () {
       picked = {};
-      selecting = false;
       loadRegistry();
       tick();
     });
@@ -932,7 +925,6 @@ function leaveRegistry() {
   if (!inRegistry) return;
   inRegistry = false;
   picked = {};
-  selecting = false;
   refreshPickBar();
   $("regview").hidden = true;
   document.querySelector(".tabs").hidden = false;
@@ -965,9 +957,9 @@ function renderRegistry() {
     // чтобы сослаться на строку.
     var allOn = docs.length > 0 && docs.every(function (x) { return picked[x.id]; });
     body = table(
-        [{ v: selecting
-              ? '<input type="checkbox" class="pickall"' + (allOn ? " checked" : "") + ">"
-              : '<span class="num">№</span>', cls: "pick" },
+        [{ v: '<input type="checkbox" class="pickall"' + (allOn ? " checked" : "") + ">",
+           cls: "pick" },
+         { v: "№", cls: "num" },
          "документ", "вид", "что дал", "загружен", ""],
         docs.map(function (x, i) {
           var made = Object.keys(x.produced || {})
@@ -975,10 +967,9 @@ function renderRegistry() {
             .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
           var bad = x.state !== "разобран";
           return [
-            { v: selecting
-                 ? '<input type="checkbox" data-pick="' + x.id + '"' +
-                   (picked[x.id] ? " checked" : "") + ">"
-                 : '<span class="num">' + (i + 1) + "</span>", cls: "pick" },
+            { v: '<input type="checkbox" data-pick="' + x.id + '"' +
+                 (picked[x.id] ? " checked" : "") + ">", cls: "pick" },
+            { v: String(i + 1), cls: "num" },
             x.name,
             x.kind,
             { v: made ? esc(made)
@@ -1030,17 +1021,7 @@ function renderRegistry() {
       "В расчет пока не подставляются.");
   }
 
-  // Режим выбора включается кнопкой: без него в таблице стоят номера, а не
-  // ряд пустых квадратиков. Кнопка есть только там, где выбор осмыслен.
-  var pickBtn = regTab === "docs"
-    ? '<button type="button" class="selmode' + (selecting ? " on" : "") + '" id="selmode">' +
-      '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ' +
-      'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
-      '<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5.5 8.2l1.8 1.8 3.4-3.6"/>' +
-      "</svg>" + (selecting ? "Готово" : "Выбрать") + "</button>"
-    : "";
-
-  $("regview").innerHTML =
+  var tabsRow =
     '<div class="rtabs">' + REG_TABS.map(function (t) {
       var n = { docs: docs.length, ctr: (d.contracts || []).length,
                 emp: (d.employees || []).length, ref: (d.reference || []).length,
@@ -1048,7 +1029,17 @@ function renderRegistry() {
       return '<button type="button" data-rtab="' + t.key + '"' +
              (regTab === t.key ? ' class="on"' : "") + ">" + esc(t.title) +
              (n ? '<span class="c"> ' + n + "</span>" : "") + "</button>";
-    }).join("") + pickBtn + "</div>" + body;
+    }).join("") + "</div>";
+
+  var bar = pickBar();
+  $("regview").innerHTML = (bar || tabsRow) + body;
+  // Промежуточное состояние: отмечена часть строк.
+  var head = document.querySelector("#regview .pickall");
+  if (head) {
+    var n = pickedIds().length, all = (regData.documents || []).length;
+    head.indeterminate = n > 0 && n < all;
+  }
+  return;
 }
 
 /* ── опрос ────────────────────────────────────────────────── */
@@ -1102,7 +1093,9 @@ $("openreg").addEventListener("click", openRegistry);
 if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
 
 document.addEventListener("keydown", function (e) {
-  if (e.key === "Escape" && selecting && !document.querySelector(".modal")) stopSelecting();
+  if (e.key === "Escape" && pickedIds().length && !document.querySelector(".modal")) {
+    stopSelecting();
+  }
 });
 
 document.addEventListener("click", function (e) {
@@ -1115,22 +1108,19 @@ $("regview").addEventListener("change", function (e) {
   // теряются отметки при быстром выборе. Обновляем только панель и подсветку.
   var all = e.target.closest(".pickall");
   if (all) {
-    Array.prototype.forEach.call(document.querySelectorAll("#regview [data-pick]"),
-      function (box) {
-        box.checked = all.checked;
-        picked[box.getAttribute("data-pick")] = all.checked;
-      });
+    (regData.documents || []).forEach(function (d) { picked[d.id] = all.checked; });
     refreshPickBar();
     return;
   }
   var one = e.target.closest("[data-pick]");
   if (one) {
-    picked[one.getAttribute("data-pick")] = one.checked;
-    var head = document.querySelector("#regview .pickall");
-    if (head) {
-      head.checked = !document.querySelector("#regview [data-pick]:not(:checked)");
-    }
+    var id = one.getAttribute("data-pick");
+    picked[id] = one.checked;
     refreshPickBar();
+    // Перерисовка заменила узел — возвращаем фокус, иначе клавиатурой
+    // не отметить вторую строку подряд.
+    var back = document.querySelector('#regview [data-pick="' + id + '"]');
+    if (back && document.activeElement === document.body) back.focus();
   }
 });
 
@@ -1138,13 +1128,7 @@ $("regview").addEventListener("click", function (e) {
   var t = e.target.closest("[data-rtab]");
   if (t) {
     regTab = t.getAttribute("data-rtab");
-    if (regTab !== "docs") { picked = {}; selecting = false; refreshPickBar(); }
-    renderRegistry();
-    return;
-  }
-  if (e.target.closest("#selmode")) {
-    selecting = !selecting;
-    if (!selecting) { picked = {}; refreshPickBar(); }
+    if (regTab !== "docs") { picked = {}; refreshPickBar(); }
     renderRegistry();
     return;
   }

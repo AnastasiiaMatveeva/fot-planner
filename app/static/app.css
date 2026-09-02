@@ -419,31 +419,34 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 /* ── выделение строк и панель действий ─────────────────────── */
 /* Панель появляется только когда что-то отмечено: пустая полоса над
    таблицей занимала бы место и ничего не сообщала. */
-/* Плавающая полоса внизу: появляется только при выборе, не отодвигает
-   таблицу и уходит вместе с отметками. */
-.pickbar{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:55;
-         display:flex;align-items:center;gap:10px;padding:8px 10px 8px 14px;
-         background:var(--ink);color:#fff;border-radius:999px;
-         box-shadow:0 8px 24px rgba(16,24,40,.24);font-size:13px;white-space:nowrap}
-.pickbar .n{display:grid;place-items:center;min-width:20px;height:20px;padding:0 6px;
-            border-radius:999px;background:rgba(255,255,255,.16);
+/* Панель действий занимает место ряда вкладок, а не добавляется над
+   таблицей: содержимое не съезжает, когда что-то отмечено. */
+.pickbar{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:8px 8px 8px 16px;
+         background:var(--acc);color:#fff;border-radius:999px;font-size:13px}
+.pickbar .n{display:grid;place-items:center;min-width:22px;height:22px;padding:0 7px;
+            border-radius:999px;background:rgba(255,255,255,.2);
             font:600 12px var(--f);font-variant-numeric:tabular-nums}
-.pickbar #pickdel{padding:6px 14px;border:0;border-radius:999px;background:var(--bad);
-                  color:#fff;font:600 12.5px var(--f);cursor:pointer}
-.pickbar #pickdel:hover{filter:brightness(1.08)}
-.pickbar .x{display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;
-            border-radius:50%;background:none;color:rgba(255,255,255,.7);cursor:pointer}
-.pickbar .x:hover{background:rgba(255,255,255,.14);color:#fff}
+.pickbar > span:nth-child(2){flex:1;min-width:0}
+.pickbar button{padding:7px 15px;border:0;border-radius:999px;font:600 13px var(--f);
+                cursor:pointer}
+.pickbar #pickdel{background:#fff;color:var(--bad)}
+.pickbar #pickdel:hover{background:var(--badbg)}
+.pickbar .x{background:rgba(255,255,255,.16);color:#fff}
+.pickbar .x:hover{background:rgba(255,255,255,.26)}
 
-.view th.pick,.view td.pick{width:1%;padding-left:13px;padding-right:4px}
-.view input[type=checkbox]{width:15px;height:15px;margin:0;accent-color:var(--acc);
-                           cursor:pointer;vertical-align:-2px}
-/* Подсветка отмеченной строки. :has поддерживают все нынешние браузеры;
-   если правило не сработает, выбор все равно виден по флажку. */
-.view tbody tr:has(input[type=checkbox]:checked) td{background:var(--accbg)}
+/* ── номер и выбор строк ───────────────────────────────────── */
+/* Флажки в первом столбце видны всегда — так в Carbon и PatternFly:
+   спрятанные до наведения элементы выбора не столько убирают шум, сколько
+   прячут саму возможность. Нумерация идет отдельным столбцом. */
+.view td.pick,.view th.pick{width:1%;padding:8px 4px 8px 14px;white-space:nowrap}
+.view td.num,.view th.num{width:1%;text-align:right;padding-left:4px;padding-right:12px;
+                          color:var(--ink3);font-variant-numeric:tabular-nums;
+                          white-space:nowrap}
 
 /* ── действия на строке плана ──────────────────────────────── */
-.case{position:relative;padding-right:56px}
+/* Два действия — две кнопки: меню при таком наборе только добавляет щелчок.
+   Появляются при наведении, чтобы не рябить в спокойном списке. */
+.case{position:relative;padding-right:58px}
 .case .acts{position:absolute;top:7px;right:6px;display:flex;gap:1px;opacity:0;
             transition:opacity .12s}
 .case:hover .acts,.case.on .acts,.case:focus-within .acts{opacity:1}
@@ -455,18 +458,3 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .case .rename{width:100%;font:600 13px var(--f);color:var(--ink);padding:1px 5px;
               border:1px solid var(--acc);border-radius:var(--r3);background:var(--s0)}
 .case .rename:focus{outline:0}
-
-/* ── номер и выбор строк ───────────────────────────────────── */
-/* В спокойном состоянии в первом столбце номер: по нему ссылаются на строку.
-   Флажки появляются только в режиме выбора, включаемом кнопкой над таблицей,
-   — ряд пустых квадратиков без нужды глаз не занимает. */
-.view td.pick,.view th.pick{width:1%;text-align:right;padding-left:13px;
-                            padding-right:6px;white-space:nowrap}
-.view .pick .num{color:var(--ink3);font-variant-numeric:tabular-nums;font-size:12.5px}
-
-.selmode{display:inline-flex;align-items:center;gap:7px;margin-left:auto;
-         padding:7px 14px;border:1px solid var(--line);border-radius:999px;
-         background:var(--s0);color:var(--ink2);font:600 13px var(--f);cursor:pointer}
-.selmode:hover{border-color:var(--acc);color:var(--acc)}
-.selmode.on{border-color:var(--acc);background:var(--acc);color:#fff}
-#regview .rtabs{align-items:center}
