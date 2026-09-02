@@ -49,9 +49,13 @@ def read_rows():
         if not pos:
             continue
         out.append({"pos": str(pos), "cat": ws.cell(r, 2).value or "",
+                    "page": ws.cell(r, 3).value or "",
+                    "group": ws.cell(r, 4).value,
+                    "level": ws.cell(r, 5).value,
                     "sal": _num(ws.cell(r, 6).value),
                     "p2556": _num(ws.cell(r, 7).value),
                     "p4": _num(ws.cell(r, 8).value),
+                    "bep": _num(ws.cell(r, 9).value),
                     "note": ws.cell(r, 10).value or ""})
     return out
 

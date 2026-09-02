@@ -810,13 +810,15 @@ function renderView() {
     var r = (vdata && vdata.reference) || [];
     var pgr = paged("v-ref", r);
     el.innerHTML = table(
-      ["должность", "категория", { t: "оклад за 1,0 ставки, ₽" }, { t: "П2556, ₽" },
-       { t: "П4, ₽" }, "примечание"],
+      ["должность", "категория", "окладная группа",
+       { t: "оклад за 1,0 ставки, ₽" }, { t: "П2556, ₽" }, { t: "П4, ₽" },
+       { t: "БЭП, ₽" }, "примечание"],
       pgr.rows.map(function (x) {
-        return [x.pos, x.cat,
+        return [x.pos, x.cat, refGroup(x),
                 { v: x.sal == null ? null : mo(x.sal), cls: "n" },
                 { v: x.p2556 == null ? null : mo(x.p2556), cls: "n" },
                 { v: x.p4 == null ? null : mo(x.p4), cls: "n" },
+                { v: x.bep == null ? null : mo(x.bep), cls: "n" },
                 x.note];
       }),
       "<b>Нормативная база организации</b>, общая для всех планов. " +
@@ -1013,6 +1015,16 @@ function removePicked() {
  * Карточка выезжает панелью справа и не уносит из реестра: закрыл — и ты на
  * том же месте списка, с теми же отметками.
  */
+/* Страница, номер группы и уровень порознь ничего не говорят: значение имеет
+   их сочетание — по нему решатель считает должности взаимозаменяемыми.
+   Показываем одной графой, как их и читают. */
+function refGroup(x) {
+  var parts = [x.page, x.group, x.level].filter(function (v) {
+    return v != null && v !== "";
+  });
+  return parts.length ? parts.join(" · ") : null;
+}
+
 function bytes(n) {
   if (!n) return "—";
   if (n < 1024) return n + " Б";
@@ -1296,13 +1308,18 @@ function renderRegistry() {
       "", { startNum: pge.from }) + pager("emp", pge);
   } else if (regTab === "ref") {
     var pgr = paged("ref", d.reference || []);
-    body = table(["должность", "категория", { t: "оклад за 1,0 ставки, ₽" },
-                  { t: "П2556, ₽" }, { t: "П4, ₽" }, "примечание"],
+    // Окладная группа и БЭП были невидимы, хотя решатель по ним работает:
+    // страница, номер группы и уровень задают взаимозаменяемость должностей,
+    // БЭП — средний предел по ГОЗ-договору.
+    body = table(["должность", "категория", "окладная группа",
+                  { t: "оклад за 1,0 ставки, ₽" }, { t: "П2556, ₽" },
+                  { t: "П4, ₽" }, { t: "БЭП, ₽" }, "примечание"],
       pgr.rows.map(function (x) {
-        return [x.pos, x.cat,
+        return [x.pos, x.cat, refGroup(x),
                 { v: x.sal == null ? null : mo(x.sal), cls: "n" },
                 { v: x.p2556 == null ? null : mo(x.p2556), cls: "n" },
-                { v: x.p4 == null ? null : mo(x.p4), cls: "n" }, x.note];
+                { v: x.p4 == null ? null : mo(x.p4), cls: "n" },
+                { v: x.bep == null ? null : mo(x.bep), cls: "n" }, x.note];
       }),
       "Прочерк — отдельной строки для должности в источнике нет.",
       { startNum: pgr.from }) + pager("ref", pgr);
