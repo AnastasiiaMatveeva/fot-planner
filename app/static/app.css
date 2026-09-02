@@ -591,3 +591,16 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .pacts .take:hover{background:var(--acc2);border-color:var(--acc2)}
 .pacts .drop{border:1px solid var(--line);background:var(--s0);color:var(--ink2)}
 .pacts .drop:hover{border-color:var(--ink3);color:var(--ink)}
+
+/* ── статус документа ──────────────────────────────────────── */
+/* Не плашка: слово с точкой. Плашка в каждой строке превращает таблицу в
+   светофор, а статус здесь читают, а не выхватывают взглядом. */
+.view td.status{white-space:nowrap}
+.view .st{display:inline-flex;align-items:center;gap:7px}
+.view .st::before{content:"";width:6px;height:6px;border-radius:50%;
+                  background:var(--ink3);flex:0 0 auto}
+.view .st.ok::before{background:var(--ok)}
+.view .st.ask::before{background:var(--acc)}
+.view .st.warn::before{background:var(--warn)}
+.view .st.bad::before{background:var(--bad)}
+.view .st.wait::before{background:var(--line)}

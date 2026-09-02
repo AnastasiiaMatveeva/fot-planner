@@ -1025,6 +1025,37 @@ function refGroup(x) {
   return parts.length ? parts.join(" · ") : null;
 }
 
+/* Статус — закрытый перечень, а не свободный текст. Состояния названы так,
+   как назвал бы их финансист: «файл не прочитан» и «данные не извлечены» —
+   разные вещи, и путать их нельзя. Почему именно так вышло, сказано в
+   карточке документа: в реестре нужен статус, а не диагностика. */
+var STATUS = {
+  "разобран": { text: "Обработан", cls: "ok" },
+  "ждет подтверждения": { text: "Требует подтверждения", cls: "ask" },
+  "не распознан": { text: "Данные не извлечены", cls: "warn" },
+  "не прочитан": { text: "Файл не прочитан", cls: "bad" },
+  "ожидает": { text: "В обработке", cls: "wait" },
+};
+
+function docStatus(state) {
+  return STATUS[state] || { text: state || "—", cls: "wait" };
+}
+
+/* Что документ внес в реестр — только счетчики по сущностям, ничего больше. */
+function produced(made) {
+  var forms = {
+    "сотрудников": ["сотрудник", "сотрудника", "сотрудников"],
+    "договоров": ["договор", "договора", "договоров"],
+    "правил замещения": ["правило замещения", "правила замещения",
+                         "правил замещения"],
+  };
+  return Object.keys(made || {}).filter(function (k) { return made[k]; })
+    .map(function (k) {
+      var f = forms[k];
+      return made[k] + " " + (f ? px(made[k], f[0], f[1], f[2]) : k);
+    }).join(" · ");
+}
+
 function bytes(n) {
   if (!n) return "—";
   if (n < 1024) return n + " Б";
@@ -1242,9 +1273,13 @@ function renderRegistry() {
   var body = "";
 
   if (regTab === "docs") {
-    // Точку состояния в таблице не ставим: цветной кружок в начале строки
-    // читается как управляющий элемент. Состояние и так видно в графе
-    // «что дал» — там либо результат, либо причина отказа.
+    // Реестр документов, а не заметки по файлам: графы формальные, с закрытым
+    // содержимым. «Что дал» держал в одной клетке и счетчики, и состояние, и
+    // английскую диагностику библиотеки — свалка, которой в продукте для
+    // финансиста быть не должно. Разведено надвое: «статус» из закрытого
+    // перечня и «внесено в реестр» — только счетчики. Вид документа убран:
+    // он нужен сервису, чтобы выбрать разборщик, а в списке не говорит
+    // ничего; остался в карточке.
     // Номер виден всегда, флажок подменяет его при наведении: ряд пустых
     // квадратиков в спокойном состоянии — лишний шум, а нумерация нужна,
     // чтобы сослаться на строку.
@@ -1259,12 +1294,9 @@ function renderRegistry() {
     body = table(
         nPick
         ? [pickBox, { v: pickCell(nPick), cls: "pickcell", span: 5 }]
-        : [pickBox, "документ", "вид", "что дал", "загружен", ""],
+        : [pickBox, "документ", "загружен", "статус", "внесено в реестр", ""],
         pg.rows.map(function (x, i) {
-          var made = Object.keys(x.produced || {})
-            .filter(function (k) { return x.produced[k]; })
-            .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
-          var bad = x.state !== "разобран";
+          var s = docStatus(x.state);
           return [
             { v: pk('<input type="checkbox" data-pick="' + x.id + '"' +
                     (picked[x.id] ? " checked" : "") + ">",
@@ -1272,11 +1304,10 @@ function renderRegistry() {
               cls: "pick" },
             { v: '<span class="dname" data-doc="' + x.id + '" role="button" ' +
                  'tabindex="0">' + esc(x.name) + "</span>" },
-            x.kind,
-            { v: made ? esc(made)
-                      : '<span class="' + (bad ? "warn" : "") + '">' +
-                        esc(x.summary || x.state) + "</span>" },
             x.uploaded,
+            { v: '<span class="st ' + s.cls + '">' + esc(s.text) + "</span>",
+              cls: "status" },
+            { v: produced(x.produced) || "—" },
             { v: rowMenu("data-docmenu", x.id), cls: "act" }];
         }), "",
         { plain: true, headCls: nPick ? "picking" : "",

@@ -207,6 +207,25 @@ def _store_passport(db, case, passport, doc):
     db.commit()
 
 
+#: Какие форматы читает каждый обработчик. Разбор документов по договору и
+#: правил замещения читает ячейки книги: PDF и .doc туда отдавать бессмысленно.
+FORMATS = {
+    "intake": (".xlsx", ".xlsm", ".xls"),
+    "substitutions": (".xlsx", ".xlsm", ".xls"),
+    "norms": (".xlsx", ".xlsm", ".xls", ".pdf", ".doc", ".docx"),
+}
+
+
+def _wrong_format(doc, owner):
+    """Человеческая причина, если формат обработчику не подходит."""
+    ext = os.path.splitext(doc.path)[1].lower()
+    allowed = FORMATS.get(owner, ())
+    if not allowed or ext in allowed:
+        return None
+    return ("файл %s, а такие документы читаются только из %s"
+            % (ext or "без расширения", ", ".join(allowed)))
+
+
 # ── документ незнакомой формы ───────────────────────────────────
 def _known(db, entity, f):
     """Уже есть такая строка в реестре? Тогда предлагать ее незачем."""
@@ -487,6 +506,19 @@ def handle_document(db, case, doc):
     doc.parsed_by = by
     db.commit()
 
+    # Формат проверяем до разбора. Иначе openpyxl роняет PDF и его английское
+    # «does not support .pdf file format» уходит прямо в реестр — финансисту
+    # это не сообщение, а шум.
+    bad = _wrong_format(doc, owner)
+    if bad:
+        doc.state = "не прочитан"
+        doc.summary = bad
+        db.commit()
+        say(db, case.id, "«%s»: %s" % (doc.name, bad), agent="intake")
+        db.commit()
+        propose_entities(db, case, doc)
+        return
+
     target = AGENT_OF.get(owner, owner)
     if target != "intake":
         handoff(db, case.id, "intake", target,
@@ -507,8 +539,10 @@ def handle_document(db, case, doc):
         # Поэтому после него документ читается еще раз, уже без шаблона.
         propose_entities(db, case, doc)
     except Exception as exc:  # noqa: BLE001 — сообщение вместо падения фона
+        # Текст исключения — для ленты и карточки, но не для графы реестра:
+        # там нужно состояние, а не английская диагностика библиотеки.
         doc.state = "не распознан"
-        doc.summary = str(exc)[:300]
+        doc.summary = "разбор не удался"
         db.commit()
         say(db, case.id, "Не смог разобрать «%s»: %s" % (doc.name, exc), agent=owner)
         db.commit()
