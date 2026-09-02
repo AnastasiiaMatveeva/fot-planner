@@ -25,9 +25,14 @@ function esc(s) {
 }
 function mo(v) {
   if (v == null) return "—";
-  var s = (Math.round(v * 100) / 100).toString().replace(".", ",");
+  // Разряды разделяем неразрывным пробелом: с обычным «110 000» переносится
+  // на две строки. Дробную часть у денег дописываем до копеек.
+  var neg = v < 0;
+  var n = Math.abs(Math.round(v * 100) / 100);
+  var s = (n % 1 ? n.toFixed(2) : String(n)).replace(".", ",");
   var p = s.split(",");
-  return p[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ") + (p[1] ? "," + p[1] : "");
+  return (neg ? "−" : "") +
+         p[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ") + (p[1] ? "," + p[1] : "");
 }
 function px(n, a, b, c) {
   var d = n % 10, h = n % 100;

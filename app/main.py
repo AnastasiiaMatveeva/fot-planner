@@ -729,4 +729,21 @@ def health():
             "env": {"source": ENV_SOURCE, "keys": ENV_LOADED}}
 
 
-app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
+class NoCacheStatic(StaticFiles):
+    """Статика без кеша.
+
+    Приложение правится по ходу показа, а браузер держит прежнюю копию
+    скрипта и стилей: правка есть на диске, а на экране старое поведение.
+    Шрифты кешируем — они не меняются и весят заметно больше.
+    """
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if path.startswith("fonts/"):
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        return resp
+
+
+app.mount("/", NoCacheStatic(directory=STATIC, html=True), name="static")

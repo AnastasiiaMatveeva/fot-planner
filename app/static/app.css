@@ -84,7 +84,7 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
          border-bottom:1px solid var(--line2);font-size:12px}
 .card td{padding:5px 12px;border-bottom:1px solid var(--line2)}
 .card tr:last-child td{border-bottom:0}
-.card td.n{text-align:right;font-family:var(--m)}
+.card td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .card .up{color:var(--ok)}
 .card .foot{padding:9px 12px;display:flex;gap:8px;align-items:center;background:var(--s1)}
 .card .log{padding:8px 12px;font:12px var(--m);color:var(--ink3);white-space:pre-wrap}
@@ -120,7 +120,8 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 .agents{display:flex;flex-direction:column;gap:1px;background:var(--line2);
         border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden}
 .ag{background:var(--s0);padding:8px 11px;display:flex;gap:9px;align-items:flex-start;font-size:12.5px}
-.ag .n{font:600 11px var(--m);color:var(--ink3);flex:0 0 16px;padding-top:2px}
+.ag .n{font:600 11.5px var(--f);font-variant-numeric:tabular-nums;
+       color:var(--ink3);flex:0 0 16px;padding-top:2px}
 .ag .b{flex:1;min-width:0}
 .ag .b .t{font-weight:600;color:var(--ink)}
 .ag .b .s{color:var(--ink3);font-size:11.5px}
@@ -170,7 +171,8 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
            cursor:pointer;white-space:nowrap}
 .tabs .tab:hover{color:var(--ink);background:var(--s1)}
 .tabs .tab.on{color:var(--acc2);background:var(--accbg)}
-.tabs .tab .c{font-weight:400;color:var(--ink3);margin-left:5px;font-family:var(--m);font-size:11.5px}
+.tabs .tab .c{font-weight:400;color:var(--ink3);margin-left:5px;font-size:12px;
+              font-variant-numeric:tabular-nums}
 
 .view{flex:1;overflow:auto;padding:18px 22px;background:var(--s1)}
 .view[hidden]{display:none}
@@ -182,7 +184,8 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .view th{position:sticky;top:0;text-align:left;font-weight:600;color:var(--ink3);
          padding:9px 13px;background:var(--s1);border-bottom:1px solid var(--line);
          font-size:12px;white-space:nowrap}
-.view th.n,.view td.n{text-align:right;font-family:var(--m)}
+.view th.n,.view td.n{text-align:right;font-variant-numeric:tabular-nums;
+                      white-space:nowrap}
 .view td{padding:8px 13px;border-bottom:1px solid var(--line2);vertical-align:top}
 .view tr:last-child td{border-bottom:0}
 .view tr:hover td{background:var(--s1)}
@@ -196,8 +199,8 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 
 /* нумерация строк в перечнях */
 .view th.num,.view td.num{width:1%;white-space:nowrap;text-align:right;
-                          font-family:var(--m);color:var(--ink3);
-                          padding-left:11px;padding-right:9px}
+                          font-variant-numeric:tabular-nums;color:var(--ink3);
+                          padding-left:13px;padding-right:10px}
 
 /* ── передача работы между агентами ────────────────────────── */
 .msg.pass{max-width:min(760px,92%);align-self:center;align-items:center}
@@ -244,7 +247,8 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .dgh.on{background:var(--s2);color:var(--ink)}
 .dgh::before{content:"▸";margin-right:6px;color:var(--ink3);font-size:10px}
 .dgh.on::before{content:"▾"}
-.dgh .c{font-family:var(--m);font-weight:400;color:var(--ink3);font-size:11.5px}
+.dgh .c{font-weight:400;color:var(--ink3);font-size:12px;
+        font-variant-numeric:tabular-nums}
 .dgrp .doc{margin-top:5px}
 
 /* Дело можно убрать: крестик появляется при наведении, чтобы не мозолил глаза */
