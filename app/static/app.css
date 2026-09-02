@@ -358,13 +358,6 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .navi .ic{flex:0 0 16px;display:grid;place-items:center;color:var(--ink3)}
 .navi.on .ic,.navi:hover .ic{color:currentColor}
 
-.acct{display:flex;align-items:center;gap:10px;margin:4px 12px 0;padding:10px 2px 2px;
-      border-top:1px solid var(--line2)}
-.acct .av{flex:0 0 30px;height:30px;border-radius:50%;background:var(--accbg);
-          color:var(--acc2);display:grid;place-items:center;font:600 11.5px var(--f)}
-.acct .who{display:flex;flex-direction:column;font-size:13px;color:var(--ink);min-width:0}
-.acct .who small{font-size:11.5px;color:var(--ink3)}
-
 /* ── верхняя полоса: режим и переключатель колонки ─────────── */
 .brandbar .spacer{flex:1}
 .brandbar .mode{font-size:12.5px;color:var(--ink3);white-space:nowrap}
