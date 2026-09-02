@@ -280,7 +280,7 @@ function docCard(d) {
 function renderDocs() {
   var el = $("docs");
   if (!state.documents.length) {
-    el.innerHTML = '<div class="empty">Документов пока нет. Приложите файлы кнопкой «+» внизу ленты.</div>';
+    el.innerHTML = '<div class="empty">Документов пока нет</div>';
     return;
   }
   // Документы разложены по видам: в общей куче двадцать договоров вперемешку
@@ -325,7 +325,7 @@ function renderDocs() {
 
 function renderRuns() {
   var el = $("runs");
-  if (!state.runs.length) { el.innerHTML = '<div class="empty">Расчет не выполнялся</div>'; return; }
+  if (!state.runs.length) { el.innerHTML = '<div class="empty">Расчет еще не выполнен</div>'; return; }
   el.innerHTML = state.runs.map(function (r) {
     var cls = r.status === "OPTIMAL" ? "" : (r.status === "идет" ? "work" : "bad");
     var s = r.summary || {};
@@ -354,7 +354,7 @@ function renderAsk() {
                         return '<button type="button" data-q="' + q.id + '" data-opt="' +
                                esc(o) + '">' + esc(o) + "</button>";
                       }).join("") + "</div>"
-                    : '<div class="empty">Ответьте в строке ниже.</div>');
+                    : '<div class="empty">Ответьте в строке ниже</div>');
 }
 
 function renderStage() {
@@ -461,7 +461,7 @@ function artifactRows(a) {
 
 function agentCard(key) {
   var acts = state.activities.filter(function (a) { return a.agent === key; });
-  if (!acts.length) return '<div class="none">Этот агент в деле еще не работал.</div>';
+  if (!acts.length) return '<div class="none">Агент еще не работал</div>';
   return acts.slice().reverse().map(function (a) {
     return '<div class="work"><div class="wh">' + esc(a.title) +
            '<span>' + esc(a.state) + (a.seconds != null ? " · " + a.seconds + " с" : "") +
@@ -603,7 +603,7 @@ function renderView() {
   }
 
   if (!vresult) {
-    el.innerHTML = '<div class="none">Расчет еще не выполнялся — смотреть нечего.</div>';
+    el.innerHTML = '<div class="none">Расчет еще не выполнен</div>';
     return;
   }
 
@@ -670,14 +670,14 @@ function renderView() {
             lim.map(function (l) {
               return Array.isArray(l) ? l.map(String) : [String(l), "", ""];
             }))
-        : '<div class="none">Решатель не отметил ни одного ограничения связывающим.</div>') +
+        : '<div class="none">Связывающих ограничений нет</div>') +
       "</div>" +
       '<div class="grp"><h4>Предупреждения</h4>' +
       (warn.length
         ? table(["сообщение"], warn.map(function (w) {
             return [Array.isArray(w) ? w.join(" · ") : String(w)];
           }))
-        : '<div class="none">Предупреждений нет.</div>') + "</div>";
+        : '<div class="none">Предупреждений нет</div>') + "</div>";
   }
 }
 
