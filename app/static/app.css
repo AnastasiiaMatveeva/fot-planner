@@ -604,3 +604,27 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .view .st.warn::before{background:var(--warn)}
 .view .st.bad::before{background:var(--bad)}
 .view .st.wait::before{background:var(--line)}
+
+/* ── предпросмотр документа ────────────────────────────────── */
+/* Заглянуть в документ, не выходя из карточки. Книга — таблицей, PDF — как
+   есть, остальное — тем текстом, который увидел разборщик: там, где текст
+   оказался кашей, причина отказа видна глазами, а не со слов агента. */
+.dbody .pdf{width:100%;height:520px;border:1px solid var(--line2);
+            border-radius:var(--r2);background:var(--s1)}
+.dbody .sheet{margin-bottom:14px}
+.dbody .sheet .sn{display:flex;align-items:baseline;gap:8px;margin-bottom:6px;
+                  font-size:12px;font-weight:600;color:var(--ink2)}
+.dbody .sheet .sn .c{font-weight:400;color:var(--ink3);
+                     font-variant-numeric:tabular-nums}
+.dbody .scroll{overflow-x:auto;border:1px solid var(--line2);
+               border-radius:var(--r2)}
+.dbody .scroll table{border:0;border-radius:0;font-size:12px;min-width:100%}
+.dbody .scroll td,.dbody .scroll th{white-space:nowrap;max-width:260px;
+                                    overflow:hidden;text-overflow:ellipsis;
+                                    padding:5px 9px}
+.dbody .ptext{margin:0;padding:12px 13px;border:1px solid var(--line2);
+              border-radius:var(--r2);background:var(--s1);color:var(--ink2);
+              font:12px/1.55 ui-monospace,"Cascadia Mono",Consolas,monospace;
+              white-space:pre-wrap;word-break:break-word;
+              max-height:420px;overflow:auto}
+.dbody .more{margin-top:6px;font-size:11.5px;color:var(--ink3)}

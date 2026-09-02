@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
 
 import agents            # noqa: E402
 import chat              # noqa: E402
+import docread           # noqa: E402
 import intake            # noqa: E402
 import llm               # noqa: E402
 import reference         # noqa: E402
@@ -367,7 +368,7 @@ def one_document(doc_id: int):
                            "to": c.date_to} for c in ctr],
             "substitutions": [{"position": s.position, "replaced_by": s.replaced_by}
                               for s in sub],
-            "работа": _document_work(db, d.name),
+            "предпросмотр": _preview(d),
             "proposals": [{"id": pr.id, "entity": pr.entity,
                            "fields": json.loads(pr.payload),
                            "evidence": pr.evidence, "state": pr.state}
@@ -501,6 +502,57 @@ async def decide_proposals(doc_id: int, request: Request):
         return {"ok": True, "added": added, "left": left, "reference": ref_log}
     finally:
         db.close()
+
+
+#: Сколько показывать в предпросмотре. Карточка — это заглянуть в документ, а
+#: не прочитать его целиком: для того есть «Открыть файл».
+PREVIEW_ROWS = 24
+PREVIEW_COLS = 12
+PREVIEW_CHARS = 2500
+
+
+def _preview(doc):
+    """Заглянуть в документ, не выходя из карточки.
+
+    Показываем не пересказ агента, а сам документ: книгу — таблицей, PDF —
+    как есть, остальное — тем текстом, который увидел разборщик. Последнее
+    важнее всего там, где текст оказался кашей: причина отказа видна глазами,
+    а не со слов.
+    """
+    ext = os.path.splitext(doc.path)[1].lower()
+    if not os.path.exists(doc.path):
+        return {"вид": "нет", "почему": "файла нет на диске"}
+    if ext == ".pdf":
+        return {"вид": "документ"}
+    if ext in (".xlsx", ".xlsm", ".xltx", ".xltm"):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(doc.path, data_only=True, read_only=True)
+        except Exception as e:  # noqa: BLE001 — битая книга не должна ронять карточку
+            return {"вид": "нет", "почему": str(e)[:200]}
+        sheets = []
+        for ws in wb.worksheets:
+            rows = []
+            for r in ws.iter_rows(min_row=1, max_row=PREVIEW_ROWS,
+                                  max_col=PREVIEW_COLS, values_only=True):
+                if any(v is not None and str(v).strip() for v in r):
+                    rows.append(["" if v is None else str(v) for v in r])
+            if rows:
+                sheets.append({"лист": ws.title, "строки": rows,
+                               "всего строк": ws.max_row})
+            if len(sheets) >= 4:
+                break
+        wb.close()
+        return {"вид": "таблица", "листы": sheets} if sheets else {
+            "вид": "нет", "почему": "в книге нет заполненных строк"}
+    try:
+        text = docread.to_text(doc.path, PREVIEW_CHARS)
+    except docread.Unreadable as e:
+        return {"вид": "нет", "почему": str(e)}
+    except Exception as e:  # noqa: BLE001
+        return {"вид": "нет", "почему": str(e)[:200]}
+    return {"вид": "текст", "текст": text[:PREVIEW_CHARS],
+            "обрезано": len(text) >= PREVIEW_CHARS}
 
 
 #: Что браузер показывает сам, не скачивая.

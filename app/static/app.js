@@ -1047,6 +1047,43 @@ function produced(made) {
     }).join(" · ");
 }
 
+/* Предпросмотр: книга — таблицей, PDF — как есть, остальное — тем текстом,
+   который увидел разборщик. Последнее важнее всего там, где текст оказался
+   кашей: причина отказа видна глазами, а не со слов агента. */
+function preview(d) {
+  var p = d["предпросмотр"] || {};
+  var head = '<div class="grp"><h4>Предпросмотр</h4>';
+
+  if (p["вид"] === "документ") {
+    return head + '<iframe class="pdf" src="/api/document/' + d.id +
+           '/file" title="Предпросмотр документа"></iframe></div>';
+  }
+  if (p["вид"] === "таблица") {
+    return head + (p["листы"] || []).map(function (s) {
+      var rows = s["строки"];
+      return '<div class="sheet"><div class="sn">' + esc(s["лист"]) +
+        '<span class="c">' + s["всего строк"] + " " +
+        px(s["всего строк"], "строка", "строки", "строк") + "</span></div>" +
+        '<div class="scroll"><table>' + rows.map(function (r, i) {
+          var cell = i ? "td" : "th";
+          return "<tr>" + r.map(function (v) {
+            return "<" + cell + ">" + esc(v) + "</" + cell + ">";
+          }).join("") + "</tr>";
+        }).join("") + "</table></div>" +
+        (s["всего строк"] > rows.length
+          ? '<div class="more">показаны первые ' + rows.length + "</div>" : "") +
+        "</div>";
+    }).join("") + "</div>";
+  }
+  if (p["вид"] === "текст") {
+    return head + '<pre class="ptext">' + esc(p["текст"]) + "</pre>" +
+           (p["обрезано"] ? '<div class="more">показано начало документа</div>' : "") +
+           "</div>";
+  }
+  return head + '<div class="none">' + esc(p["почему"] || "показать нечего") +
+         "</div></div>";
+}
+
 function bytes(n) {
   if (!n) return "—";
   if (n < 1024) return n + " Б";
@@ -1139,19 +1176,11 @@ function openDocument(id) {
         "</div></div>";
     }
 
-    // У нормативного документа строк реестра нет вовсе, и графа «что дал»
-    // пустовала — хотя агент знает про него многое: сколько величин извлек,
-    // с какой даты действует, сколько должностей не нашел в справочнике.
-    // Показываем это одним перечнем, без разбивки по шагам разбора.
-    var work = d["работа"] || [];
-    if (work.length) {
-      got += '<div class="grp"><h4>Что дал</h4>' +
-        meta(work.map(function (kv) {
-          var v = kv[1];
-          return [kv[0], Array.isArray(v) ? v.join(", ")
-                       : (typeof v === "boolean" ? (v ? "да" : "нет") : v)];
-        })) + "</div>";
-    }
+    // Пересказ агента — «извлечено величин 94, величины: оклад» — это его
+    // телеметрия, а не документ. Экономисту нужен сам документ: заглянуть и
+    // убедиться, что разобрано именно то. Поэтому здесь предпросмотр, а
+    // подробности работы остаются в ленте агентов.
+    got += preview(d);
 
     if (!got) {
       got = '<div class="grp"><h4>Что дал</h4><div class="none">' +
