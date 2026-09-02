@@ -551,12 +551,15 @@ def handle_document(db, case, doc):
     # это не сообщение, а шум.
     bad = _wrong_format(doc, owner)
     if bad:
-        doc.state = "не прочитан"
+        doc.state = "не распознан"
         doc.summary = bad
         db.commit()
-        say(db, case.id, "«%s»: %s" % (doc.name, bad), agent="intake")
+        say(db, case.id,
+            "«%s»: %s. Прочитаю его без шаблона." % (doc.name, bad), agent="intake")
         db.commit()
-        propose_entities(db, case, doc)
+        if not propose_entities(db, case, doc):
+            doc.summary = "%s; сверх этого данных не нашлось" % bad
+            db.commit()
         return
 
     target = AGENT_OF.get(owner, owner)
