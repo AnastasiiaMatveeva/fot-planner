@@ -1003,6 +1003,107 @@ function removePicked() {
   });
 }
 
+/* ── карточка документа ───────────────────────────────────────
+ * В реестре у документа были имя, вид и счетчик «сотрудников 4». Проверить
+ * по такой строке нечего: какие это сотрудники, откуда взялся оклад — не
+ * видно, а сам файл нельзя даже открыть. Для ГОЗ это главный вопрос
+ * проверяющего, и отвечать на него экономист должен здесь, а не роясь в
+ * папке загрузок.
+ *
+ * Карточка выезжает панелью справа и не уносит из реестра: закрыл — и ты на
+ * том же месте списка, с теми же отметками.
+ */
+function bytes(n) {
+  if (!n) return "—";
+  if (n < 1024) return n + " Б";
+  if (n < 1024 * 1024) return Math.round(n / 1024) + " КБ";
+  return (n / 1024 / 1024).toFixed(1).replace(".", ",") + " МБ";
+}
+
+function meta(pairs) {
+  return '<dl class="meta">' + pairs.filter(function (p) { return p[1]; })
+    .map(function (p) {
+      return "<dt>" + esc(p[0]) + "</dt><dd>" + esc(p[1]) + "</dd>";
+    }).join("") + "</dl>";
+}
+
+function docCard(id) {
+  // Две карточки одна поверх другой ни к чему: щелчок по второму имени
+  // заменяет первую.
+  var open = document.querySelector(".drawer");
+  if (open) open.remove();
+
+  var back = document.createElement("div");
+  back.className = "drawer";
+  back.innerHTML = '<div class="scrim"></div><aside class="panel" role="dialog" ' +
+                   'aria-modal="true"><div class="none">Загружаю…</div></aside>';
+  document.body.appendChild(back);
+
+  function close() {
+    document.removeEventListener("keydown", onKey);
+    back.remove();
+  }
+  function onKey(e) { if (e.key === "Escape") close(); }
+  document.addEventListener("keydown", onKey);
+  back.querySelector(".scrim").onclick = close;
+
+  api("/api/document/" + id).then(function (d) {
+    var got = "";
+    if (d.employees.length) {
+      got += '<div class="grp"><h4>Сотрудники</h4>' + table(
+        ["табельный", "ФИО", "должность", { t: "ставка" }, { t: "оклад, ₽" }],
+        d.employees.map(function (x) {
+          return [x.code, x.fio, x.position,
+                  { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
+                  { v: x.salary == null ? null : mo(x.salary), cls: "n" }];
+        }), "") + "</div>";
+    }
+    if (d.contracts.length) {
+      got += '<div class="grp"><h4>Договоры</h4>' + table(
+        ["шифр", "наименование", "ГОЗ", { t: "фонд, ₽" }],
+        d.contracts.map(function (x) {
+          return [x.code, x.name, x.goz,
+                  { v: x.fund == null ? null : mo(x.fund), cls: "n" }];
+        }), "") + "</div>";
+    }
+    if (d.substitutions.length) {
+      got += '<div class="grp"><h4>Правила замещения</h4>' + table(
+        ["должность", "может быть замещена"],
+        d.substitutions.map(function (x) { return [x.position, x.replaced_by]; }),
+        "") + "</div>";
+    }
+    if (!got) {
+      // Пусто — это не всегда сбой: нормативный документ дает не строки, а
+      // расхождения. Что именно вышло, сказано в сводке разбора.
+      got = '<div class="grp"><h4>Что дал</h4><div class="none">' +
+            esc(d.summary || "ничего не извлечено") + "</div></div>";
+    }
+
+    back.querySelector(".panel").innerHTML =
+      '<header class="dhead"><h3>' + esc(d.name) + "</h3>" +
+        '<button type="button" class="x" aria-label="Закрыть">×</button></header>' +
+      '<div class="dbody">' +
+        meta([["Вид", d.kind], ["Состояние", d.state], ["Разобран", d.by],
+              ["Размер", bytes(d.size)], ["Загружен", d.uploaded]]) +
+        (d.exists
+          ? '<a class="dfile" href="/api/document/' + d.id + '/file">Открыть файл</a>'
+          : '<div class="none">Файла нет на диске</div>') +
+        got +
+      "</div>" +
+      '<footer class="dfoot"><button type="button" class="del">Удалить документ</button>' +
+      "</footer>";
+
+    back.querySelector(".x").onclick = close;
+    back.querySelector(".del").onclick = function () {
+      close();
+      removeDoc(d.id, d.name, function () { loadRegistry(); tick(); });
+    };
+  }).catch(function (e) {
+    back.querySelector(".panel").innerHTML =
+      '<div class="none">' + esc(e.message || "не загрузилось") + "</div>";
+  });
+}
+
 /* ── реестр организации ───────────────────────────────────────
  * Документы, договоры, штатное расписание и нормативы служат всем планам
  * сразу: договор заключается на несколько лет, штатка меняется приказами,
@@ -1094,7 +1195,8 @@ function renderRegistry() {
                     (picked[x.id] ? " checked" : "") + ">",
                     String(pg.from + i + 1)),
               cls: "pick" },
-            x.name,
+            { v: '<span class="dname" data-doc="' + x.id + '" role="button" ' +
+                 'tabindex="0">' + esc(x.name) + "</span>" },
             x.kind,
             { v: made ? esc(made)
                       : '<span class="' + (bad ? "warn" : "") + '">' +
@@ -1262,6 +1364,14 @@ $("regview").addEventListener("change", function (e) {
   }
 });
 
+$("regview").addEventListener("keydown", function (e) {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  var nm = e.target.closest(".dname");
+  if (!nm) return;
+  e.preventDefault();
+  docCard(+nm.getAttribute("data-doc"));
+});
+
 $("regview").addEventListener("click", function (e) {
   var pgb = e.target.closest("[data-pg]");
   if (pgb && !pgb.disabled) {
@@ -1277,6 +1387,12 @@ $("regview").addEventListener("click", function (e) {
     regTab = t.getAttribute("data-rtab");
     if (regTab !== "docs") { picked = {}; refreshPickBar(); }
     renderRegistry();
+    return;
+  }
+
+  var nm = e.target.closest(".dname");
+  if (nm) {
+    docCard(+nm.getAttribute("data-doc"));
     return;
   }
 

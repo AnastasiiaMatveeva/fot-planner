@@ -335,6 +335,58 @@ def all_documents():
         db.close()
 
 
+@app.get("/api/document/{doc_id}")
+def one_document(doc_id: int):
+    """Карточка документа: учет и то, что из него вышло, построчно.
+
+    В реестре у документа было только имя и счетчик «сотрудников 4». Проверить
+    по нему нечего: какие это сотрудники и откуда взялся оклад — не видно, а
+    сам файл не открыть. Для ГОЗ это и есть главный вопрос проверяющего, и
+    экономист должен уметь ответить на него, не выходя из сервиса.
+    """
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        emp = db.query(Employee).filter_by(document_id=d.id).order_by(Employee.id).all()
+        ctr = db.query(Contract).filter_by(document_id=d.id).order_by(Contract.id).all()
+        sub = (db.query(Substitution).filter_by(document_id=d.id)
+               .order_by(Substitution.id).all())
+        return {
+            "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
+            "by": d.parsed_by, "summary": d.summary, "size": d.size,
+            "uploaded": _dt(d.uploaded), "case_id": d.case_id,
+            "exists": os.path.exists(d.path),
+            "employees": [{"code": e.code, "fio": e.fio, "position": e.position,
+                           "rate": e.rate, "salary": e.salary,
+                           "from": e.date_from, "to": e.date_to} for e in emp],
+            "contracts": [{"code": c.code, "name": c.name, "number": c.number,
+                           "kind": c.kind, "goz": c.goz, "fund": c.fund,
+                           "kinds": c.kinds, "from": c.date_from,
+                           "to": c.date_to} for c in ctr],
+            "substitutions": [{"position": s.position, "replaced_by": s.replaced_by}
+                              for s in sub],
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/document/{doc_id}/file")
+def document_file(doc_id: int):
+    """Отдать исходный файл. Проверить извлеченное можно только по оригиналу."""
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        if not os.path.exists(d.path):
+            raise HTTPException(404, "файл не найден на диске")
+        return FileResponse(d.path, filename=d.name)
+    finally:
+        db.close()
+
+
 def _forget_document(db, doc):
     """Удалить документ вместе со всем, что из него извлечено.
 

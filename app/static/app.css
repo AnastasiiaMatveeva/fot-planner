@@ -511,3 +511,58 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .cdot.ready{background:var(--warn)}
 .cdot.ok{background:var(--ok)}
 .case .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ── карточка документа ────────────────────────────────────── */
+/* Панель справа, а не окно посередине: карточка — подробности строки, из
+   списка она не уносит. Так показывают запись в реестре в Carbon и Polaris:
+   таблица остается на месте под затемнением, закрыл — и ты там же. */
+.drawer{position:fixed;inset:0;z-index:60;display:flex;justify-content:flex-end}
+.drawer .scrim{position:absolute;inset:0;background:rgba(15,23,42,.26)}
+.drawer .panel{position:relative;display:flex;flex-direction:column;
+               width:min(580px,94vw);height:100%;background:var(--s0);
+               border-left:1px solid var(--line2);
+               box-shadow:-10px 0 32px rgba(15,23,42,.10)}
+.dhead{display:flex;align-items:flex-start;gap:12px;padding:18px 18px 14px;
+       border-bottom:1px solid var(--line2)}
+.dhead h3{flex:1;min-width:0;margin:0;font-size:15px;font-weight:600;color:var(--ink);
+          word-break:break-word;line-height:1.35}
+.dhead .x{flex:0 0 auto;width:28px;height:28px;border:0;background:none;cursor:pointer;
+          color:var(--ink3);font-size:20px;line-height:1;border-radius:var(--r3)}
+.dhead .x:hover{background:var(--s2);color:var(--ink)}
+.dbody{flex:1;min-height:0;overflow:auto;padding:16px 18px 20px}
+.dfoot{flex:0 0 auto;padding:12px 18px;border-top:1px solid var(--line2);
+       display:flex;justify-content:flex-end}
+.dfoot .del{padding:8px 16px;border:1px solid var(--line);background:var(--s0);
+            color:var(--bad);border-radius:var(--r3);font:600 13px var(--f);cursor:pointer}
+.dfoot .del:hover{border-color:var(--bad);background:var(--badbg)}
+
+/* Учетные сведения — парами, а не таблицей: их пять и они разной длины. */
+.meta{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;margin:0 0 16px;
+      font-size:12.5px}
+.meta dt{color:var(--ink3);white-space:nowrap}
+.meta dd{margin:0;color:var(--ink)}
+.dfile{display:inline-block;padding:7px 15px;border:1px solid var(--line);
+       border-radius:var(--r3);background:var(--s0);color:var(--acc2);
+       font:600 12.5px var(--f);text-decoration:none}
+.dfile:hover{border-color:var(--acc);background:var(--accbg)}
+.dbody .grp{margin-top:20px}
+.dbody .grp h4{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--ink3);
+               text-transform:uppercase;letter-spacing:.04em}
+.dbody table{border-collapse:collapse;width:100%;font-size:12.5px;background:var(--s0);
+             border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden}
+.dbody th{text-align:left;font-weight:600;color:var(--ink2);font-size:11.5px;
+          padding:7px 10px;background:var(--s2);border-bottom:1px solid var(--line);
+          white-space:nowrap}
+.dbody td{padding:6px 10px;border-bottom:1px solid var(--line2);vertical-align:top}
+.dbody tr:last-child td{border-bottom:0}
+.dbody th.n,.dbody td.n{text-align:right;font-variant-numeric:tabular-nums;
+                        white-space:nowrap}
+.dbody th.num,.dbody td.num{width:1%;text-align:right;color:var(--ink3);
+                            font-variant-numeric:tabular-nums}
+.dbody .none{color:var(--ink3);font-size:12.5px;padding:10px 0}
+
+/* Имя документа открывает карточку — значит, должно выглядеть нажимаемым. */
+.view .dname{cursor:pointer;color:var(--ink)}
+.view .dname:hover{color:var(--acc2);text-decoration:underline}
+.view .dname:focus-visible{outline:2px solid var(--acc);outline-offset:2px;
+                           border-radius:2px}
