@@ -410,22 +410,26 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 /* ── выделение строк и панель действий ─────────────────────── */
 /* Панель появляется только когда что-то отмечено: пустая полоса над
    таблицей занимала бы место и ничего не сообщала. */
-/* Панель действий занимает место ряда вкладок, а не добавляется над
-   таблицей: содержимое не съезжает, когда что-то отмечено. Тон спокойный —
-   это рабочая панель, а не предупреждение; цветом выделено только само
-   опасное действие. */
-.pickbar{display:flex;align-items:center;gap:12px;margin-bottom:16px;
-         padding:7px 8px 7px 12px;background:var(--s1);border:1px solid var(--line);
-         border-radius:999px;font-size:13px;color:var(--ink2)}
-.pickbar .n{display:grid;place-items:center;min-width:22px;height:22px;padding:0 7px;
-            border-radius:999px;background:var(--accbg);color:var(--acc2);
-            font:600 12px var(--f);font-variant-numeric:tabular-nums}
-.pickbar > span:nth-child(2){flex:1;min-width:0}
-.pickbar button{padding:6px 15px;border-radius:999px;font:600 13px var(--f);cursor:pointer}
-.pickbar #pickdel{border:1px solid var(--line);background:var(--s0);color:var(--bad)}
-.pickbar #pickdel:hover{border-color:var(--bad);background:var(--badbg)}
-.pickbar .x{border:0;background:none;color:var(--ink3);padding:6px 10px}
-.pickbar .x:hover{color:var(--ink)}
+/* Действия над отмеченными строками — в ряду шапки таблицы. Ряд остается
+   на месте и той же высоты (отсюда уменьшенные отступы: кнопка выше текста
+   заголовка), поэтому при выборе ничего не съезжает. Тон обычный, серый:
+   выделение несет сама строка, а не полоса. */
+.view thead.picking th{padding-top:6.5px;padding-bottom:6.5px}
+.view th.pickcell{padding-left:0}
+.view th.pickcell .pickrow{display:flex;align-items:center;gap:10px}
+.view th.pickcell .picked{flex:1;min-width:0;font-weight:600;color:var(--ink);
+                          font-size:12.5px;letter-spacing:0}
+.view th.pickcell button{padding:4px 12px;border-radius:var(--r3);
+                         font:600 12.5px var(--f);cursor:pointer;white-space:nowrap}
+.view th.pickcell #pickdel{border:1px solid var(--line);background:var(--s0);color:var(--bad)}
+.view th.pickcell #pickdel:hover{border-color:var(--bad);background:var(--badbg)}
+.view th.pickcell .x{border:1px solid transparent;background:none;color:var(--ink3)}
+.view th.pickcell .x:hover{color:var(--ink);background:var(--s0)}
+
+/* Отмеченная строка подсвечивается — иначе непонятно, к чему относится
+   счетчик в шапке. */
+.view tr.sel td{background:var(--accbg)}
+.view tr.sel:hover td{background:var(--accbg)}
 
 /* ── номер и выбор строк ───────────────────────────────────── */
 /* Флажки в первом столбце видны всегда — так в Carbon и PatternFly:

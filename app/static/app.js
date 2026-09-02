@@ -667,16 +667,21 @@ function table(head, rows, note, opts) {
   var num = !(opts && opts.plain);
   var h = note ? '<div class="vh">' + note + "</div>" : "";
   if (!rows.length) return h + '<div class="none">Пусто</div>';
-  h += '<table><thead><tr>' + (num ? '<th class="num">№</th>' : "") +
+  h += "<table><thead" + (opts && opts.headCls ? ' class="' + opts.headCls + '"' : "") +
+       "><tr>" + (num ? '<th class="num">№</th>' : "") +
        head.map(function (c) {
          // Заголовок бывает строкой, числовой колонкой {t} или готовой
          // разметкой {v} — в ней, например, флажок «выделить все».
          if (typeof c !== "object") return "<th>" + esc(c) + "</th>";
-         if (c.v != null) return '<th class="' + (c.cls || "") + '">' + c.v + "</th>";
+         if (c.v != null) return '<th class="' + (c.cls || "") + '"' +
+                                 (c.span ? ' colspan="' + c.span + '"' : "") + ">" +
+                                 c.v + "</th>";
          return '<th class="n">' + esc(c.t) + "</th>";
        }).join("") + "</tr></thead><tbody>";
   h += rows.map(function (r, i) {
-    return "<tr>" + (num ? '<td class="num">' + (i + 1) + "</td>" : "") +
+    var rc = opts && opts.rowCls ? opts.rowCls(i) : "";
+    return "<tr" + (rc ? ' class="' + rc + '"' : "") + ">" +
+      (num ? '<td class="num">' + (i + 1) + "</td>" : "") +
       r.map(function (c) {
         return (c && typeof c === "object")
           ? '<td class="' + (c.cls || "") + '">' + (c.v == null ? "—" : c.v) + "</td>"
@@ -845,15 +850,16 @@ function pickedIds() {
   return Object.keys(picked).filter(function (k) { return picked[k]; });
 }
 
-/* Панель действий подменяет ряд вкладок, а не добавляется над таблицей:
-   так содержимое не съезжает, когда что-то отмечено. Так устроено в Carbon
-   и PatternFly — панель занимает место обычной, отмена справа. */
-function pickBar() {
-  var ids = pickedIds();
-  if (!ids.length) return "";
-  return '<div class="pickbar"><span class="n">' + ids.length + "</span>" +
-         "<span>" + px(ids.length, "документ отмечен", "документа отмечено",
-                       "документов отмечено") + "</span>" +
+/* Действия над отмеченными строками занимают ряд шапки таблицы — тот самый,
+   где стоит флажок «выделить все». Отдельная полоса добавляла третью
+   горизонтальную полосу к вкладкам и шапке; во всех системах, где этот
+   прием описан (Carbon, Polaris, Material), панель именно подменяет
+   существующий ряд, а не появляется сверху. Высота ряда та же, поэтому
+   таблица не дергается. */
+function pickCell(n) {
+  return '<div class="pickrow"><span class="picked">' + n + " " +
+         px(n, "документ отмечен", "документа отмечено", "документов отмечено") +
+         "</span>" +
          '<button type="button" id="pickdel">Удалить</button>' +
          '<button type="button" class="x" id="pickclear">Отмена</button></div>';
 }
@@ -970,9 +976,13 @@ function renderRegistry() {
     // квадратиков в спокойном состоянии — лишний шум, а нумерация нужна,
     // чтобы сослаться на строку.
     var allOn = docs.length > 0 && docs.every(function (x) { return picked[x.id]; });
+    var nPick = pickedIds().length;
+    var pickBox = { v: '<input type="checkbox" class="pickall"' + (allOn ? " checked" : "") + ">",
+                    cls: "pick" };
     body = table(
-        [{ v: '<input type="checkbox" class="pickall"' + (allOn ? " checked" : "") + ">",
-           cls: "pick" },
+        nPick
+        ? [pickBox, { v: pickCell(nPick), cls: "pickcell", span: 6 }]
+        : [pickBox,
          { v: "№", cls: "num" },
          "документ", "вид", "что дал", "загружен", ""],
         docs.map(function (x, i) {
@@ -991,7 +1001,9 @@ function renderRegistry() {
                         esc(x.summary || x.state) + "</span>" },
             x.uploaded,
             { v: rowMenu("data-docmenu", x.id), cls: "act" }];
-        }), "", { plain: true });
+        }), "",
+        { plain: true, headCls: nPick ? "picking" : "",
+          rowCls: function (i) { return picked[docs[i].id] ? "sel" : ""; } });
   } else if (regTab === "ctr") {
     var c = d.contracts || [];
     body = table(["шифр", "наименование", "ГОЗ", { t: "фонд, ₽" },
@@ -1045,8 +1057,7 @@ function renderRegistry() {
              (n ? '<span class="c"> ' + n + "</span>" : "") + "</button>";
     }).join("") + "</div>";
 
-  var bar = pickBar();
-  $("regview").innerHTML = (bar || tabsRow) + body;
+  $("regview").innerHTML = tabsRow + body;
   // Промежуточное состояние: отмечена часть строк.
   var head = document.querySelector("#regview .pickall");
   if (head) {
