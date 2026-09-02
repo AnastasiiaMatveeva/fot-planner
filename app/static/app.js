@@ -81,24 +81,85 @@ function ask(title, detail, okText) {
   });
 }
 
+/* На строке списка кнопку удаления не ставят напрямую: там принято меню
+   «…», которое появляется при наведении и собирает действия над записью.
+   Кнопка-корзина остается для строк таблицы, где действие одно и колонка
+   под него отведена. */
+function rowMenu(attr, id) {
+  return '<button class="more" ' + attr + '="' + id + '" title="Действия" ' +
+         'aria-label="Действия">' +
+         '<svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor">' +
+         '<circle cx="8" cy="3.4" r="1.3"/><circle cx="8" cy="8" r="1.3"/>' +
+         '<circle cx="8" cy="12.6" r="1.3"/></svg></button>';
+}
+
+/* Всплывающее меню действий над записью. */
+function showMenu(anchor, items) {
+  var open = document.querySelector(".menu");
+  if (open) open.remove();
+  var m = document.createElement("div");
+  m.className = "menu";
+  m.innerHTML = items.map(function (it, i) {
+    return '<button type="button" class="mi' + (it.danger ? " danger" : "") +
+           '" data-i="' + i + '">' + esc(it.label) + "</button>";
+  }).join("");
+  document.body.appendChild(m);
+
+  var r = anchor.getBoundingClientRect();
+  m.style.top = Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8) + "px";
+  m.style.left = Math.min(r.left, innerWidth - m.offsetWidth - 8) + "px";
+
+  function close() {
+    m.remove();
+    document.removeEventListener("mousedown", onDoc, true);
+    document.removeEventListener("keydown", onKey, true);
+  }
+  function onDoc(e) { if (!m.contains(e.target)) close(); }
+  function onKey(e) { if (e.key === "Escape") close(); }
+  m.addEventListener("click", function (e) {
+    var b = e.target.closest(".mi");
+    if (!b) return;
+    close();
+    items[+b.getAttribute("data-i")].run();
+  });
+  setTimeout(function () {
+    document.addEventListener("mousedown", onDoc, true);
+    document.addEventListener("keydown", onKey, true);
+  }, 0);
+}
+
+function delButton(attr, id, title) {
+  return '<button class="del" ' + attr + '="' + id + '" title="' + esc(title) + '" ' +
+         'aria-label="' + esc(title) + '">' +
+         '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ' +
+         'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
+         '<path d="M2.8 4.3h10.4M6.4 4.3V3.1c0-.4.3-.7.7-.7h1.8c.4 0 .7.3.7.7v1.2"/>' +
+         '<path d="M4.2 4.3l.6 8.2c0 .6.5 1 1 1h4.4c.6 0 1-.4 1-1l.6-8.2"/>' +
+         '<path d="M6.7 6.8v4.2M9.3 6.8v4.2"/></svg></button>';
+}
+
 /* ── планы ─────────────────────────────────────────────────── */
 function loadCases() {
   return api("/api/cases").then(function (rows) {
     $("caselist").innerHTML = rows.length ? rows.map(function (c) {
       return '<div class="case' + (c.id === caseId ? " on" : "") + '" data-id="' + c.id + '">' +
-             '<button class="del" data-del="' + c.id +
-             '" title="Убрать план: ленту, работы агентов и расчеты">×</button>' +
+             rowMenu("data-menu", c.id) +
              esc(c.title) + "<small>" + esc(c.stage) + " · документов " + c.documents +
              "</small></div>";
     }).join("") : '<div class="empty" style="padding:0 16px">Планов пока нет</div>';
     Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
       el.addEventListener("click", function (e) {
-        if (e.target.closest(".del")) return;
+        if (e.target.closest(".more")) return;
         open(+el.getAttribute("data-id"));
       });
     });
-    Array.prototype.forEach.call(document.querySelectorAll(".case .del"), function (b) {
-      b.addEventListener("click", function () { removeCase(+b.getAttribute("data-del")); });
+    Array.prototype.forEach.call(document.querySelectorAll(".case .more"), function (b) {
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var id = +b.getAttribute("data-menu");
+        showMenu(b, [{ label: "Убрать план", danger: true,
+                       run: function () { removeCase(id); } }]);
+      });
     });
     return rows;
   });
@@ -270,8 +331,7 @@ var openDocs = {};
 function docCard(d) {
   var cls = d.state === "разобран" ? "ok" : (d.state === "ожидает" ? "wait" : "bad");
   return '<div class="doc ' + cls + '"><div class="nm">' + esc(d.name) +
-         '<button class="del" data-doc="' + d.id +
-         '" title="Убрать документ и все, что из него извлечено">×</button></div>' +
+         rowMenu("data-docmenu", d.id) + "</div>" +
          '<div class="mt">' + esc(d.kind || d.state) +
          (d.summary ? " · " + esc(d.summary) : "") +
          (d.by ? " · " + esc(d.by) : "") + "</div></div>";
@@ -771,8 +831,7 @@ function renderRegistry() {
                       : (bad ? '<span class="warn">' + esc(x.summary || x.state) + "</span>"
                              : esc(x.summary || "—")) },
             x.uploaded,
-            { v: '<button class="del" data-doc="' + x.id +
-                 '" title="Убрать документ и его данные">×</button>' }];
+            { v: delButton("data-doc", x.id, "Убрать документ"), cls: "act" }];
         }));
   } else if (regTab === "ctr") {
     var c = d.contracts || [];
@@ -902,17 +961,22 @@ $("docs").addEventListener("click", function (e) {
     render();
     return;
   }
-  var b = e.target.closest(".del");
+  var b = e.target.closest(".more");
   if (!b) return;
-  var card = b.closest(".doc"), name = card.querySelector(".nm").textContent.replace(/×$/, "");
-  ask("Убрать «" + name.trim() + "»?",
+  var card = b.closest(".doc"), name = card.querySelector(".nm").textContent;
+  showMenu(b, [{ label: "Убрать документ", danger: true, run: function () {
+    removeDoc(b.getAttribute("data-docmenu"), name, tick);
+  } }]);
+});
+
+function removeDoc(id, name, done) {
+  ask("Убрать «" + String(name).trim() + "»?",
       "Вместе с документом уйдут данные, извлеченные из него: сотрудники, " +
       "договоры и правила замещения.", "Убрать документ").then(function (yes) {
     if (!yes) return;
-    b.disabled = true;
-    api("/api/document/" + b.getAttribute("data-doc"), { method: "DELETE" }).then(tick);
+    api("/api/document/" + id, { method: "DELETE" }).then(done || tick);
   });
-});
+}
 
 $("agents").addEventListener("click", function (e) {
   var el = e.target.closest(".ag");

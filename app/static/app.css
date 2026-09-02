@@ -250,10 +250,7 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 /* Документы — реестр организации, отсюда же их можно убрать */
 .dnote{font-size:11.5px;color:var(--ink3);margin:0 6px 10px;line-height:1.45}
 .doc .nm{display:flex;align-items:flex-start;gap:6px;justify-content:space-between}
-.doc .del{flex:0 0 auto;width:18px;height:18px;line-height:1;border:0;
-          background:none;color:var(--ink3);font-size:15px;cursor:pointer;border-radius:var(--r3);
-          padding:0;opacity:0}
-.doc:hover .del{opacity:1}
+
 .doc .del:hover{border-color:var(--bad);color:var(--bad);background:var(--badbg)}
 .doc .del[disabled]{opacity:.4;cursor:default}
 
@@ -273,11 +270,7 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 
 /* Дело можно убрать: крестик появляется при наведении, чтобы не мозолил глаза */
 .case{position:relative;padding-right:26px}
-.case .del{position:absolute;top:7px;right:7px;width:17px;height:17px;padding:0;
-           line-height:1;border:1px solid transparent;background:none;color:var(--ink3);
-           font-size:14px;cursor:pointer;border-radius:var(--r2);opacity:0}
-.case:hover .del,.case.on .del{opacity:1}
-.case .del:hover{border-color:var(--bad);color:var(--bad);background:var(--badbg)}
+.case .more{position:absolute;top:7px;right:6px}
 
 /* Реестр организации — отдельный пункт над списком планов */
 .cases .reg{display:block;width:calc(100% - 12px);margin:0 6px 4px;padding:8px 10px;
@@ -387,3 +380,35 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
         margin-right:8px;vertical-align:1px;background:var(--ok)}
 .dstate.bad{background:var(--bad)}
 .view .warn{color:var(--bad)}
+
+/* ── удаление строки ───────────────────────────────────────── */
+/* Корзина вместо крестика: крестик означает «закрыть». Появляется при
+   наведении на строку, чтобы не мозолить глаза в спокойном состоянии. */
+.del{display:grid;place-items:center;width:24px;height:24px;padding:0;flex:0 0 auto;
+     border:0;border-radius:var(--r3);background:none;color:var(--ink3);cursor:pointer;
+     opacity:0;transition:opacity .12s}
+.del:hover{background:var(--badbg);color:var(--bad)}
+.del:focus-visible{opacity:1;outline:2px solid var(--acc);outline-offset:-2px}
+.case:hover .del,.doc:hover .del,.view tr:hover .del{opacity:1}
+.view td.act{width:1%;padding:4px 10px 4px 4px}
+.doc .nm{display:flex;align-items:flex-start;gap:6px;justify-content:space-between}
+
+/* ── меню действий над записью ─────────────────────────────── */
+/* На строке списка кнопку удаления не ставят прямо в заголовок: там принято
+   «…», раскрывающее действия. Крестик рядом с названием читался как
+   «закрыть», а не «удалить». */
+.more{display:grid;place-items:center;width:24px;height:24px;padding:0;flex:0 0 auto;
+      border:0;border-radius:var(--r3);background:none;color:var(--ink3);cursor:pointer;
+      opacity:0;transition:opacity .12s}
+.more:hover{background:var(--s2);color:var(--ink)}
+.more:focus-visible{opacity:1;outline:2px solid var(--acc);outline-offset:-2px}
+.case:hover .more,.case.on .more,.doc:hover .more{opacity:1}
+
+.menu{position:fixed;z-index:60;min-width:180px;padding:4px;background:var(--s0);
+      border:1px solid var(--line);border-radius:var(--r2);
+      box-shadow:0 8px 24px rgba(16,24,40,.12)}
+.menu .mi{display:block;width:100%;padding:8px 11px;border:0;border-radius:var(--r3);
+          background:none;color:var(--ink);font:13.5px var(--f);text-align:left;cursor:pointer}
+.menu .mi:hover{background:var(--s1)}
+.menu .mi.danger{color:var(--bad)}
+.menu .mi.danger:hover{background:var(--badbg)}
