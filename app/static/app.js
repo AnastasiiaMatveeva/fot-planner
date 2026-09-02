@@ -309,7 +309,7 @@ function renderDocs() {
     if (!list.length) return;
     var open = g.open || openDocs[g.key];
     html += '<div class="dgrp"><button type="button" class="dgh' + (open ? " on" : "") +
-            '" data-grp="' + g.key + '">' + esc(g.title) +
+            '" data-grp="' + g.key + '"><span class="t">' + esc(g.title) + "</span>" +
             '<span class="c">' + list.length + "</span></button>" +
             (open ? list.map(docCard).join("") : "") + "</div>";
   });
@@ -317,7 +317,8 @@ function renderDocs() {
   if (rest.length) {
     var open = openDocs["прочее"];
     html += '<div class="dgrp"><button type="button" class="dgh' + (open ? " on" : "") +
-            '" data-grp="прочее">Прочее<span class="c">' + rest.length + "</span></button>" +
+            '" data-grp="прочее"><span class="t">Прочее</span>' +
+            '<span class="c">' + rest.length + "</span></button>" +
             (open ? rest.map(docCard).join("") : "") + "</div>";
   }
   el.innerHTML = html;
