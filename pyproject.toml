@@ -21,6 +21,9 @@ dev = ["pytest>=7.0"]
 # разбор нормативных документов моделью в демонстрации (docs/ui/llm_extract.py);
 # без этого пакета демонстрация работает на разборе по заголовкам
 llm = ["anthropic>=1.0", "certifi>=2024.0"]
+# веб-приложение: лента дела, хранение прогонов и документов
+web = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "sqlalchemy>=2.0",
+       "python-multipart>=0.0.9"]
 
 [project.scripts]
 fot-planner = "fot_planner.cli:main"

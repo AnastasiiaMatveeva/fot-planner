@@ -1,0 +1,399 @@
+# -*- coding: utf-8 -*-
+"""Сервис планирования ФОТ: веб-приложение.
+
+Устройство. Экономист работает в ленте дела: загружает документы, читает, что
+с ними сделали агенты, отвечает на вопросы, запускает расчет. Всё состояние —
+в базе, поэтому уйти и вернуться можно в любой момент, а не «пока открыта
+вкладка». Долгие операции (разбор документа, расчет) идут фоном и отмечаются
+строкой в таблице работ, которую страница опрашивает.
+
+Запуск:
+    .venv\\Scripts\\python.exe -m uvicorn main:app --app-dir app --port 8770
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, ".."))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
+
+import agents            # noqa: E402
+import intake            # noqa: E402
+import llm               # noqa: E402
+import reference         # noqa: E402
+from db import (         # noqa: E402
+    Activity, Case, Document, Message, Question, Run,
+    RESULT_DIR, UPLOAD_DIR, init_db, now, session,
+)
+
+EXE = os.path.join(ROOT, ".venv", "Scripts", "fot-planner.exe")
+STATIC = os.path.join(HERE, "static")
+
+
+# ── ключи модели из .env ────────────────────────────────────────
+def _load_env():
+    """Настройки модели из .env — в корне проекта или рядом с приложением."""
+    for path in (os.path.join(ROOT, ".env"), os.path.join(ROOT, "env"),
+                 os.path.join(HERE, ".env"), os.path.join(ROOT, "docs", "ui", ".env")):
+        if not os.path.isfile(path):
+            continue
+        loaded = []
+        with open(path, encoding="utf-8-sig") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k and v and not os.environ.get(k):
+                    os.environ[k] = v
+                    loaded.append(k)
+        return os.path.relpath(path, ROOT), loaded
+    return None, []
+
+
+ENV_SOURCE, ENV_LOADED = _load_env()
+
+app = FastAPI(title="Планирование ФОТ")
+init_db()
+
+
+# ── сериализация для страницы ───────────────────────────────────
+def _dt(v):
+    return v.strftime("%d.%m.%Y %H:%M") if v else None
+
+
+def case_state(db, case):
+    docs = db.query(Document).filter_by(case_id=case.id).order_by(Document.id).all()
+    msgs = db.query(Message).filter_by(case_id=case.id).order_by(Message.id).all()
+    acts = (db.query(Activity).filter_by(case_id=case.id)
+            .order_by(Activity.id.desc()).limit(40).all())
+    qs = db.query(Question).filter_by(case_id=case.id).order_by(Question.id).all()
+    runs = db.query(Run).filter_by(case_id=case.id).order_by(Run.id.desc()).limit(5).all()
+    provider_name, provider_model, why = llm.provider()
+    return {
+        "case": {"id": case.id, "title": case.title, "year": case.year,
+                 "stage": case.stage, "updated": _dt(case.updated),
+                 "has_data": bool(case.passport)},
+        "documents": [{"id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
+                       "by": d.parsed_by, "summary": d.summary,
+                       "uploaded": _dt(d.uploaded), "size": d.size} for d in docs],
+        "messages": [{"id": m.id, "who": m.who, "agent": m.agent, "text": m.text,
+                      "payload": json.loads(m.payload) if m.payload else None,
+                      "created": _dt(m.created)} for m in msgs],
+        "activities": [{"id": a.id, "agent": a.agent, "title": a.title, "state": a.state,
+                        "detail": a.detail, "seconds": a.seconds,
+                        "started": _dt(a.started)} for a in reversed(acts)],
+        "questions": [{"id": q.id, "agent": q.agent, "text": q.text,
+                       "options": json.loads(q.options) if q.options else None,
+                       "answer": q.answer} for q in qs],
+        "runs": [{"id": r.id, "status": r.status, "seconds": r.seconds,
+                  "created": _dt(r.created),
+                  "summary": json.loads(r.summary) if r.summary else None} for r in runs],
+        "agents": agents.agent_list(),
+        "solver": agents.SOLVER,
+        "model": {"provider": provider_name, "name": provider_model,
+                  "label": llm.PROVIDER_LABEL.get(provider_name, provider_name),
+                  "why": why},
+    }
+
+
+# ── дела ────────────────────────────────────────────────────────
+@app.get("/api/cases")
+def list_cases():
+    db = session()
+    try:
+        rows = db.query(Case).order_by(Case.updated.desc()).all()
+        return [{"id": c.id, "title": c.title, "year": c.year, "stage": c.stage,
+                 "updated": _dt(c.updated),
+                 "documents": db.query(Document).filter_by(case_id=c.id).count()}
+                for c in rows]
+    finally:
+        db.close()
+
+
+@app.post("/api/cases")
+async def create_case(request: Request):
+    body = await request.json() if await request.body() else {}
+    db = session()
+    try:
+        year = int(body.get("year") or 2026)
+        case = Case(title=body.get("title") or "", year=year)
+        db.add(case)
+        db.commit()
+        if not case.title:
+            case.title = "Дело № %d · план ФОТ на %d год" % (case.id, year)
+            db.commit()
+        agents.say(db, case.id,
+                   "Дело открыто. Загрузите документы — расчетно-калькуляционные "
+                   "материалы, структуры цены, штатное расписание. Разберу и скажу, "
+                   "чего не хватает.", who="агент", agent="intake")
+        return {"id": case.id}
+    finally:
+        db.close()
+
+
+@app.get("/api/case/{case_id}")
+def get_case(case_id: int):
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "дело не найдено")
+        return case_state(db, case)
+    finally:
+        db.close()
+
+
+# ── документы ───────────────────────────────────────────────────
+def _process(case_id: int, doc_id: int):
+    """Фоновая обработка: агент разбирает документ."""
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        doc = db.get(Document, doc_id)
+        if case and doc:
+            intake.handle_document(db, case, doc)
+    finally:
+        db.close()
+
+
+@app.post("/api/case/{case_id}/upload")
+async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFile]):
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "дело не найдено")
+        added = []
+        for f in files:
+            data = await f.read()
+            safe = "%d_%d_%s" % (case_id, int(time.time() * 1000), os.path.basename(f.filename))
+            path = os.path.join(UPLOAD_DIR, safe)
+            with open(path, "wb") as out:
+                out.write(data)
+            doc = Document(case_id=case_id, name=f.filename, path=path, size=len(data))
+            db.add(doc)
+            db.commit()
+            added.append(doc.id)
+            agents.say(db, case_id, "Загружен документ «%s»." % f.filename, who="экономист")
+        case.stage = "сбор данных"
+        db.commit()
+        for doc_id in added:
+            background.add_task(_process, case_id, doc_id)
+        return {"ok": True, "documents": added}
+    finally:
+        db.close()
+
+
+# ── лента и вопросы ─────────────────────────────────────────────
+@app.post("/api/case/{case_id}/message")
+async def post_message(case_id: int, request: Request):
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "пустое сообщение")
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "дело не найдено")
+        agents.say(db, case_id, text, who="экономист")
+
+        pending = (db.query(Question).filter_by(case_id=case_id, answer=None)
+                   .order_by(Question.id).first())
+        if pending is not None:
+            pending.answer = text
+            pending.answered = now()
+            db.commit()
+            agents.say(db, case_id, "Принял: %s" % text, agent=pending.agent)
+            db.commit()
+            return {"ok": True, "answered": pending.id}
+
+        # Свободная реплика: правка данных тем же разбором, что и в демонстрации.
+        if case.passport:
+            passport = json.loads(case.passport)
+            with agents.working(db, case_id, "intake", "применяет правку") as w:
+                reply, changed, run = intake.extract.apply_chat(passport, text)
+                if changed:
+                    case.passport = json.dumps(passport, ensure_ascii=False)
+                w["detail"] = reply[:200]
+                db.commit()
+            agents.say(db, case_id, reply, agent="intake")
+            db.commit()
+            return {"ok": True, "solve": bool(run)}
+
+        agents.say(db, case_id,
+                   "Пока не с чем работать — загрузите документы, и я разберу их.",
+                   agent="intake")
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/case/{case_id}/answer/{qid}")
+async def answer_question(case_id: int, qid: int, request: Request):
+    body = await request.json()
+    answer = (body.get("answer") or "").strip()
+    db = session()
+    try:
+        q = db.get(Question, qid)
+        if q is None or q.case_id != case_id:
+            raise HTTPException(404, "вопрос не найден")
+        q.answer = answer
+        q.answered = now()
+        db.commit()
+        agents.say(db, case_id, answer, who="экономист")
+        agents.say(db, case_id, "Принял: %s" % answer, agent=q.agent)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+# ── справочник ──────────────────────────────────────────────────
+@app.get("/api/reference")
+def get_reference():
+    return {"ok": True, "rows": reference.read_rows()}
+
+
+@app.post("/api/reference")
+async def post_reference(request: Request):
+    body = await request.json()
+    applied = reference.apply(body.get("edits") or [])
+    case_id = body.get("case_id")
+    if case_id:
+        db = session()
+        try:
+            agents.say(db, int(case_id),
+                       "Записал в справочник %d %s." % (len(applied),
+                                                        intake._plural(len(applied), "значение", "значения", "значений")),
+                       agent="norms")
+        finally:
+            db.close()
+    return {"ok": True, "applied": applied}
+
+
+# ── расчет ──────────────────────────────────────────────────────
+def _solve(case_id: int, run_id: int, settings: dict | None):
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        run = db.get(Run, run_id)
+        with agents.working(db, case_id, "intake", "собирает входной файл для расчета") as w:
+            src = os.path.join(RESULT_DIR, "case%d_input.xlsx" % case_id)
+            if case.passport:
+                intake.extract.passport_to_input(json.loads(case.passport),
+                                                 reference.TEMPLATE, src)
+            else:
+                import shutil
+                shutil.copy(reference.TEMPLATE, src)
+            run.input_path = src
+            w["detail"] = "вход собран"
+            db.commit()
+
+        out = os.path.join(RESULT_DIR, "case%d_run%d.xlsx" % (case_id, run_id))
+        with agents.working(db, case_id, "solver", "ищет план") as w:
+            t0 = time.time()
+            p = subprocess.run([EXE, "solve", "-i", src, "-o", out],
+                               capture_output=True, text=True, timeout=1800, cwd=ROOT)
+            sec = round(time.time() - t0, 1)
+            w["detail"] = "%s c" % sec
+            db.commit()
+
+        run.seconds = sec
+        if p.returncode != 0:
+            run.status = "нет решения"
+            run.summary = json.dumps({"error": (p.stderr or p.stdout or "")[-800:]},
+                                     ensure_ascii=False)
+            db.commit()
+            agents.say(db, case_id,
+                       "Решения не нашлось. Разбор причин — за агентом невыполнимости.",
+                       agent="infeasible")
+            db.commit()
+            return
+
+        run.status = "OPTIMAL"
+        run.result_path = out
+        summary = {}
+        try:
+            import result2json
+            js = os.path.join(RESULT_DIR, "case%d_run%d.json" % (case_id, run_id))
+            result2json.convert(src, out, js)
+            with open(js, encoding="utf-8") as f:
+                data = json.load(f)
+            summary = {"plan_rows": len(data.get("plan") or []),
+                       "employees": len(data.get("employees") or []),
+                       "contracts": len(data.get("contracts") or [])}
+        except Exception as exc:  # noqa: BLE001
+            summary = {"note": "результат посчитан, разбор для карточки не удался: %s" % exc}
+        run.summary = json.dumps(summary, ensure_ascii=False)
+        case.stage = "посчитано"
+        db.commit()
+        agents.say(db, case_id,
+                   "План посчитан за %s с. Строк плана — %s." % (sec, summary.get("plan_rows", "?")),
+                   agent="solver", payload={"kind": "run", "run_id": run_id, **summary})
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        run = db.get(Run, run_id)
+        if run:
+            run.status = "ошибка"
+            run.summary = json.dumps({"error": str(exc)[:500]}, ensure_ascii=False)
+            db.commit()
+        agents.say(db, case_id, "Расчет не выполнен: %s" % exc, agent="solver")
+        db.commit()
+    finally:
+        db.close()
+
+
+@app.post("/api/case/{case_id}/solve")
+async def solve(case_id: int, background: BackgroundTasks, request: Request):
+    body = await request.json() if await request.body() else {}
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "дело не найдено")
+        run = Run(case_id=case_id,
+                  settings=json.dumps(body.get("settings") or {}, ensure_ascii=False))
+        db.add(run)
+        db.commit()
+        agents.say(db, case_id, "Запускаю расчет.", who="экономист")
+        background.add_task(_solve, case_id, run.id, body.get("settings"))
+        return {"ok": True, "run_id": run.id}
+    finally:
+        db.close()
+
+
+@app.get("/api/case/{case_id}/result/{run_id}")
+def download_result(case_id: int, run_id: int):
+    db = session()
+    try:
+        run = db.get(Run, run_id)
+        if run is None or run.case_id != case_id or not run.result_path:
+            raise HTTPException(404, "результат не найден")
+        return FileResponse(run.result_path, filename="план_ФОТ_%d.xlsx" % run_id)
+    finally:
+        db.close()
+
+
+@app.get("/api/health")
+def health():
+    name, model, why = llm.provider()
+    return {"ok": True, "solver": os.path.exists(EXE),
+            "model": {"provider": name, "name": model, "why": why},
+            "env": {"source": ENV_SOURCE, "keys": ENV_LOADED}}
+
+
+app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
