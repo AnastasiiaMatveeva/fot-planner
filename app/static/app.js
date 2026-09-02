@@ -756,6 +756,68 @@ function renderView() {
 }
 
 
+
+/* ── выделение строк реестра ──────────────────────────────────
+ * При двух десятках договоров документы убирают пачкой — прошлогодние
+ * разом, — а не по одному через меню строки. Поэтому в реестре флажки
+ * и панель действий, которая появляется, только когда что-то отмечено.
+ */
+var picked = {};
+
+function pickedIds() {
+  return Object.keys(picked).filter(function (k) { return picked[k]; });
+}
+
+/* Панель выбора — плавающая полоса внизу, а не блок над таблицей: так
+   она не отодвигает содержимое и не спорит с ним за внимание. */
+function pickBar() {
+  var ids = pickedIds();
+  if (!ids.length) return "";
+  return '<div class="pickbar"><span class="n">' + ids.length + "</span>" +
+         "<span>" + px(ids.length, "документ отмечен", "документа отмечено",
+                       "документов отмечено") + "</span>" +
+         '<button type="button" id="pickdel">Убрать</button>' +
+         '<button type="button" class="x" id="pickclear" aria-label="Снять отметки">' +
+         '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ' +
+         'stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>' +
+         "</button></div>";
+}
+
+/* Панель отметок живет отдельно от таблицы: так выбор строк не заставляет
+   перерисовывать список. */
+function refreshPickBar() {
+  var bar = document.querySelector("body > .pickbar");
+  var html = pickBar();
+  if (!html) {
+    if (bar) bar.remove();
+    return;
+  }
+  if (bar) bar.outerHTML = html;
+  else document.body.insertAdjacentHTML("beforeend", html);
+}
+
+function removePicked() {
+  var ids = pickedIds();
+  if (!ids.length) return;
+  var names = ids.map(function (id) {
+    var d = (regData.documents || []).filter(function (x) { return String(x.id) === id; })[0];
+    return d ? d.name : id;
+  });
+  ask("Убрать " + ids.length + " " + px(ids.length, "документ", "документа", "документов") + "?",
+      names.slice(0, 4).join(", ") + (names.length > 4 ? " и еще " + (names.length - 4) : "") +
+      ". Вместе с ними уйдут данные, извлеченные из этих документов.",
+      "Убрать").then(function (yes) {
+    if (!yes) return;
+    Promise.all(ids.map(function (id) {
+      return api("/api/document/" + id, { method: "DELETE" }).catch(function () {});
+    })).then(function () {
+      picked = {};
+      loadRegistry();
+      tick();
+    });
+  });
+}
+
 /* ── реестр организации ───────────────────────────────────────
  * Документы, договоры, штатное расписание и нормативы служат всем планам
  * сразу: договор заключается на несколько лет, штатка меняется приказами,
@@ -783,6 +845,7 @@ function openRegistry() {
   $("regview").hidden = false;
   document.querySelector(".tabs").hidden = true;
   document.querySelector(".phead").hidden = true;
+  document.querySelector(".composer").hidden = true;
   $("openreg").classList.add("on");
   Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
     el.classList.remove("on");
@@ -793,9 +856,12 @@ function openRegistry() {
 function leaveRegistry() {
   if (!inRegistry) return;
   inRegistry = false;
+  picked = {};
+  refreshPickBar();
   $("regview").hidden = true;
   document.querySelector(".tabs").hidden = false;
   document.querySelector(".phead").hidden = false;
+  document.querySelector(".composer").hidden = false;
   $("openreg").classList.remove("on");
 }
 
@@ -818,13 +884,19 @@ function renderRegistry() {
     // Точку состояния в таблице не ставим: цветной кружок в начале строки
     // читается как управляющий элемент. Состояние и так видно в графе
     // «что дал» — там либо результат, либо причина отказа.
-    body = table(["документ", "вид", "что дал", "загружен", ""],
+    var allOn = docs.length > 0 && docs.every(function (x) { return picked[x.id]; });
+    body = table(
+        [{ v: '<input type="checkbox" class="pickall"' + (allOn ? " checked" : "") + ">",
+           cls: "pick" },
+         "документ", "вид", "что дал", "загружен", ""],
         docs.map(function (x) {
           var made = Object.keys(x.produced || {})
             .filter(function (k) { return x.produced[k]; })
             .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
           var bad = x.state !== "разобран";
           return [
+            { v: '<input type="checkbox" class="pick" data-pick="' + x.id + '"' +
+                 (picked[x.id] ? " checked" : "") + ">", cls: "pick" },
             x.name,
             x.kind,
             { v: made ? esc(made)
@@ -832,7 +904,7 @@ function renderRegistry() {
                         esc(x.summary || x.state) + "</span>" },
             x.uploaded,
             { v: rowMenu("data-docmenu", x.id), cls: "act" }];
-        }));
+        }), "", { plain: true });
   } else if (regTab === "ctr") {
     var c = d.contracts || [];
     body = table(["шифр", "наименование", "ГОЗ", { t: "фонд, ₽" },
@@ -907,6 +979,7 @@ function tick() {
         $("feed").hidden = true; $("view").hidden = true; $("regview").hidden = false;
         document.querySelector(".tabs").hidden = true;
         document.querySelector(".phead").hidden = true;
+        document.querySelector(".composer").hidden = true;
       } else if (view !== "feed") {
         $("feed").hidden = true; $("view").hidden = false;
       }
@@ -936,9 +1009,49 @@ $("openagents").addEventListener("click", function () {
 $("openreg").addEventListener("click", openRegistry);
 if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
 
+document.addEventListener("click", function (e) {
+  if (e.target.closest("#pickdel")) { removePicked(); return; }
+  if (e.target.closest("#pickclear")) {
+    picked = {};
+    Array.prototype.forEach.call(document.querySelectorAll("#regview input[type=checkbox]"),
+      function (b) { b.checked = false; });
+    refreshPickBar();
+  }
+});
+
+$("regview").addEventListener("change", function (e) {
+  // Перерисовывать таблицу на каждый щелчок нельзя: сбивается фокус и
+  // теряются отметки при быстром выборе. Обновляем только панель и подсветку.
+  var all = e.target.closest(".pickall");
+  if (all) {
+    Array.prototype.forEach.call(document.querySelectorAll("#regview [data-pick]"),
+      function (box) {
+        box.checked = all.checked;
+        picked[box.getAttribute("data-pick")] = all.checked;
+      });
+    refreshPickBar();
+    return;
+  }
+  var one = e.target.closest("[data-pick]");
+  if (one) {
+    picked[one.getAttribute("data-pick")] = one.checked;
+    var head = document.querySelector("#regview .pickall");
+    if (head) {
+      head.checked = !document.querySelector("#regview [data-pick]:not(:checked)");
+    }
+    refreshPickBar();
+  }
+});
+
 $("regview").addEventListener("click", function (e) {
   var t = e.target.closest("[data-rtab]");
-  if (t) { regTab = t.getAttribute("data-rtab"); renderRegistry(); return; }
+  if (t) {
+    regTab = t.getAttribute("data-rtab");
+    if (regTab !== "docs") picked = {};
+    renderRegistry();
+    return;
+  }
+
   var b = e.target.closest(".more");
   if (!b) return;
   var row = b.closest("tr");

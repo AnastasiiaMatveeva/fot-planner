@@ -108,6 +108,8 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 .ask .opts button:hover{border-color:var(--acc);color:var(--acc)}
 
 /* ── строка ввода ──────────────────────────────────────────── */
+/* display:flex перебивает [hidden] — та же ловушка, что у ленты и вкладок */
+.composer[hidden]{display:none}
 .composer{flex:0 0 auto;display:flex;gap:10px;align-items:center;padding:12px 22px;
           background:var(--s0);border-top:1px solid var(--line2)}
 .composer .attach{width:34px;height:34px;display:grid;place-items:center;cursor:pointer;
@@ -410,3 +412,29 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .menu .mi.danger:hover{background:var(--badbg)}
 
 .view tr:hover .more{opacity:1}
+
+/* ── выделение строк и панель действий ─────────────────────── */
+/* Панель появляется только когда что-то отмечено: пустая полоса над
+   таблицей занимала бы место и ничего не сообщала. */
+/* Плавающая полоса внизу: появляется только при выборе, не отодвигает
+   таблицу и уходит вместе с отметками. */
+.pickbar{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:55;
+         display:flex;align-items:center;gap:10px;padding:8px 10px 8px 14px;
+         background:var(--ink);color:#fff;border-radius:999px;
+         box-shadow:0 8px 24px rgba(16,24,40,.24);font-size:13px;white-space:nowrap}
+.pickbar .n{display:grid;place-items:center;min-width:20px;height:20px;padding:0 6px;
+            border-radius:999px;background:rgba(255,255,255,.16);
+            font:600 12px var(--f);font-variant-numeric:tabular-nums}
+.pickbar #pickdel{padding:6px 14px;border:0;border-radius:999px;background:var(--bad);
+                  color:#fff;font:600 12.5px var(--f);cursor:pointer}
+.pickbar #pickdel:hover{filter:brightness(1.08)}
+.pickbar .x{display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;
+            border-radius:50%;background:none;color:rgba(255,255,255,.7);cursor:pointer}
+.pickbar .x:hover{background:rgba(255,255,255,.14);color:#fff}
+
+.view th.pick,.view td.pick{width:1%;padding-left:13px;padding-right:4px}
+.view input[type=checkbox]{width:15px;height:15px;margin:0;accent-color:var(--acc);
+                           cursor:pointer;vertical-align:-2px}
+/* Подсветка отмеченной строки. :has поддерживают все нынешние браузеры;
+   если правило не сработает, выбор все равно виден по флажку. */
+.view tbody tr:has(input[type=checkbox]:checked) td{background:var(--accbg)}
