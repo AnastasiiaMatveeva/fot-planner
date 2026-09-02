@@ -210,3 +210,11 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .ar{display:flex;gap:8px;font-size:11.5px;padding:2px 0;align-items:baseline}
 .ar .ak{flex:0 0 40%;color:var(--ink3)}
 .ar .av{flex:1;min-width:0;color:var(--ink);white-space:pre-wrap;word-break:break-word}
+
+/* Вкладки нормативной базы отделены: это общее для всех дел, а не данные дела */
+.tabs .tsep{flex:0 0 1px;align-self:center;height:16px;background:var(--line);margin:0 8px}
+.tabs .tab.norm{color:var(--ink3)}
+.tabs .tab.norm::before{content:"";display:inline-block;width:5px;height:5px;border-radius:50%;
+                        background:var(--agent);margin-right:6px;vertical-align:middle;opacity:.55}
+.tabs .tab.norm.on{color:var(--agent);border-bottom-color:var(--agent)}
+.tabs .tab.norm.on::before{opacity:1}

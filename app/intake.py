@@ -121,14 +121,16 @@ def run_substitutions(db, case, doc):
     with working(db, case.id, "intake", "читает правила замещения «%s»" % doc.name) as w:
         wb = openpyxl.load_workbook(doc.path, data_only=True)
         ws = wb.worksheets[0]
-        db.query(Substitution).filter_by(case_id=case.id).delete()
+        # Правила общие для организации: новая редакция заменяет прежнюю
+        # целиком, а не добавляется к делу.
+        db.query(Substitution).delete()
         pairs = 0
         for r in range(2, ws.max_row + 1):
             src = ws.cell(r, 1).value
             dst = ws.cell(r, 2).value
             if not src:
                 continue
-            db.add(Substitution(case_id=case.id, position=str(src).strip(),
+            db.add(Substitution(position=str(src).strip(),
                                 replaced_by=str(dst).strip() if dst else "",
                                 source=doc.name))
             pairs += 1
@@ -138,16 +140,18 @@ def run_substitutions(db, case, doc):
         doc.summary = "правил %d" % pairs
         w["detail"] = doc.summary
         w["artifact"] = {"файл": doc.name, "правил замещения": pairs,
+                         "куда записано": "нормативная база организации",
                          "применяется в расчете": False,
                          "почему": "правила направленные, модель работает "
                                    "симметричными группами взаимозаменяемости"}
         db.commit()
 
     say(db, case.id,
-        "Прочитал «%s»: %d %s замещения должностей. Правила направленные — "
-        "кого кем можно заменить, не наоборот. Модель расчета пока работает "
-        "симметричными группами взаимозаменяемости, поэтому эти правила "
-        "сохранены и доступны для просмотра, но в расчет не подставляются."
+        "Прочитал «%s»: %d %s замещения должностей. Записал в нормативную базу "
+        "организации — правила общие для всех дел, перезагружать их в каждое "
+        "не нужно. Правила направленные: кого кем можно заменить, не наоборот. "
+        "Модель расчета пока работает симметричными группами "
+        "взаимозаменяемости, поэтому в расчет они не подставляются."
         % (doc.name, pairs, _plural(pairs, "правило", "правила", "правил")),
         agent="intake")
     db.commit()
@@ -258,7 +262,8 @@ def run_norms(db, case, doc):
         return
 
     say(db, case.id,
-        "В «%s» нашел %d %s со справочником. Показываю, что изменится; "
+        "В «%s» нашел %d %s со справочником организации. Он общий для всех дел, "
+        "поэтому изменения затронут и другие планы. Показываю, что изменится; "
         "запишу только после вашего подтверждения."
         % (doc.name, len(changes), _plural(len(changes), "расхождение", "расхождения", "расхождений")),
         agent="norms",

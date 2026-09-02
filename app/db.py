@@ -127,16 +127,20 @@ class Contract(Base):
 class Substitution(Base):
     """Правило замещения должности: кого кем можно заменить.
 
-    Направленное, а не симметричное: главного инженера проекта можно заместить
-    инженером, обратное неверно. Модель расчета пока оперирует симметричными
-    группами взаимозаменяемости, поэтому правила хранятся и показываются, но в
-    решатель не подставляются.
+    Часть нормативной базы организации, а не дела: правила задаются один раз
+    и действуют для всех планов, пока не выйдет новая редакция. Поэтому
+    ``case_id`` пуст — строка общая.
+
+    Правило направленное, а не симметричное: главного инженера проекта можно
+    заместить инженером, обратное неверно. Модель расчета пока оперирует
+    симметричными группами взаимозаменяемости, поэтому правила хранятся и
+    показываются, но в решатель не подставляются.
     """
 
     __tablename__ = "substitutions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
+    case_id: Mapped[int | None] = mapped_column(ForeignKey("cases.id"), default=None)
     position: Mapped[str] = mapped_column(String(200))
     replaced_by: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str | None] = mapped_column(String(300), default=None)

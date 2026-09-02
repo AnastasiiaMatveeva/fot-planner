@@ -90,8 +90,7 @@ def case_state(db, case):
                  "counts": {
                      "employees": db.query(Employee).filter_by(case_id=case.id).count(),
                      "contracts": db.query(Contract).filter_by(case_id=case.id).count(),
-                     "substitutions": db.query(Substitution)
-                                        .filter_by(case_id=case.id).count()}},
+                     "substitutions": db.query(Substitution).count()}},
         "documents": [{"id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
                        "by": d.parsed_by, "summary": d.summary,
                        "uploaded": _dt(d.uploaded), "size": d.size} for d in docs],
@@ -144,9 +143,13 @@ async def create_case(request: Request):
             case.title = "Дело № %d · план ФОТ на %d год" % (case.id, year)
             db.commit()
         agents.say(db, case.id,
-                   "Дело открыто. Загрузите документы — расчетно-калькуляционные "
-                   "материалы, структуры цены, штатное расписание. Разберу и скажу, "
-                   "чего не хватает.", who="агент", agent="intake")
+                   "Дело открыто. Загрузите документы по договорам: план работ, "
+                   "договоры с фондами и поступлениями, сотрудников с окладами "
+                   "и ставками. Разберу и скажу, чего не хватает. "
+                   "Приказы, положение об оплате труда и правила замещения "
+                   "загружать не нужно — они уже в нормативной базе организации "
+                   "и общие для всех дел. Их достаточно обновлять, когда выходит "
+                   "новая редакция.", who="агент", agent="intake")
         return {"id": case.id}
     finally:
         db.close()
@@ -438,10 +441,10 @@ def case_data(case_id: int):
             "contracts": [{"code": c.code, "name": c.name, "number": c.number,
                            "kind": c.kind, "goz": c.goz, "fund": c.fund,
                            "kinds": c.kinds, "source": c.source} for c in ctrs],
+            # Нормативная база общая: правила и справочник не привязаны к делу.
             "substitutions": [{"position": s.position, "replaced_by": s.replaced_by,
                                "source": s.source} for s in
-                              db.query(Substitution).filter_by(case_id=case_id)
-                              .order_by(Substitution.id).all()],
+                              db.query(Substitution).order_by(Substitution.id).all()],
             "reference": reference.read_rows(),
         }
     finally:
