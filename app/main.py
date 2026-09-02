@@ -700,7 +700,7 @@ FORMATS = {
 
 def _cannot_reprocess(doc, owner):
     """Причина, по которой переразбор невозможен, либо None."""
-    if doc.state == "не прочитан":
+    if doc.state in ("не прочитан", "текст нечитаемый"):
         return ("«%s» не читается: %s Указание вида это не изменит."
                 % (doc.name, doc.summary or "файл не удалось привести к тексту."))
     if owner is None:

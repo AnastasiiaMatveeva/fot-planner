@@ -1024,6 +1024,7 @@ var STATUS = {
   "ждет подтверждения": { text: "Требует подтверждения", cls: "ask" },
   "не распознан": { text: "Данные не извлечены", cls: "warn" },
   "не прочитан": { text: "Файл не прочитан", cls: "bad" },
+  "текст нечитаемый": { text: "Текст нечитаемый", cls: "bad" },
   "ожидает": { text: "В обработке", cls: "wait" },
 };
 
@@ -1161,8 +1162,9 @@ function openDocument(id) {
       '<header class="dhead"><h3>' + esc(d.name) + "</h3>" +
         '<button type="button" class="x" aria-label="Закрыть">×</button></header>' +
       '<div class="dbody">' +
-        meta([["Вид", d.kind], ["Состояние", d.state], ["Чем разобран", d.by],
-              ["Размер", bytes(d.size)], ["Загружен", d.uploaded]]) +
+        meta([["Вид", d.kind], ["Статус", docStatus(d.state).text],
+              ["Разбор", d.by], ["Размер", bytes(d.size)],
+              ["Загружен", d.uploaded]]) +
         (d.exists
           ? '<a class="dfile" href="/api/document/' + d.id +
             '/file" target="_blank" rel="noopener">Открыть файл</a>'
