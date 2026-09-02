@@ -276,6 +276,7 @@ function newCase() {
 
 function open(id) {
   leaveRegistry();
+  leaveAgents();
   caseId = id;
   lastSig = "";
   vdata = null; vresult = null; vrun = null;
@@ -1282,6 +1283,127 @@ function openDocument(id) {
   });
 }
 
+/* ── страница агентов ─────────────────────────────────────────
+ * Схему из семи коробок со стрелками рисовать незачем: это картинка замысла,
+ * а не состояния, и половина коробок в этой сборке не существует. Страница
+ * отвечает на вопросы, которые у экономиста есть на самом деле:
+ *
+ *   что от меня ждут — вопросы агентов и документы, ждущие подтверждения,
+ *                      собранные по всем планам в одно место;
+ *   что уже сделано и на чем основано — журнал работ с артефактами: для ГОЗ
+ *                      это ответ на «откуда эта цифра»;
+ *   что не работает — агенты, которых в сборке нет, названы прямо, чтобы
+ *                      экономист не ждал от них результата.
+ */
+var inAgents = false, agentData = null, openWork = {};
+
+function openAgents() {
+  inAgents = true;
+  leaveRegistry();
+  setView("feed");
+  $("feed").hidden = true;
+  $("view").hidden = true;
+  $("regview").hidden = true;
+  $("agentview").hidden = false;
+  document.querySelector(".tabs").hidden = true;
+  document.querySelector(".phead").hidden = true;
+  document.querySelector(".composer").hidden = true;
+  $("openagents").classList.add("on");
+  $("openreg").classList.remove("on");
+  Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
+    el.classList.remove("on");
+  });
+  $("agentview").innerHTML = '<div class="none">Загружаю…</div>';
+  api("/api/agents").then(function (d) {
+    agentData = d;
+    renderAgents();
+  }).catch(function (e) {
+    $("agentview").innerHTML = '<div class="none">' +
+      esc(e.message || "не загрузилось") + "</div>";
+  });
+}
+
+function leaveAgents() {
+  if (!inAgents) return;
+  inAgents = false;
+  $("agentview").hidden = true;
+  document.querySelector(".tabs").hidden = false;
+  document.querySelector(".phead").hidden = false;
+  document.querySelector(".composer").hidden = false;
+  $("openagents").classList.remove("on");
+}
+
+function renderAgents() {
+  var d = agentData;
+  var wait = d["ждет"] || [];
+
+  var head = '<div class="vh">Работа агентов по всем планам. Здесь видно, что ' +
+    "ждет вашего ответа, что уже сделано и на чем это основано.</div>";
+
+  // Блок «требует вас» идет первым и только если есть что: пустой блок с
+  // надписью «ничего не ждет» — та же реклама, что и схема со стрелками.
+  var need = "";
+  if (wait.length) {
+    need = '<div class="grp need"><h4>Требует вас<span class="c">' +
+      wait.length + "</span></h4>" +
+      wait.map(function (w) {
+        return '<div class="wrow" ' +
+          (w["case_id"] ? 'data-case="' + w["case_id"] + '"' : "") +
+          (w["document_id"] ? 'data-doc2="' + w["document_id"] + '"' : "") +
+          '><div class="wt">' + esc(w["текст"]) + "</div>" +
+          '<div class="wm">' +
+          esc(w["агент"] || w["документ"] || "") +
+          (w["план"] ? " · " + esc(w["план"]) : "") +
+          (w["строк"] ? " · " + w["строк"] + " " +
+           px(w["строк"], "строка", "строки", "строк") : "") +
+          "</div></div>";
+      }).join("") + "</div>";
+  }
+
+  var work = d["работы"] || [];
+  var journal = '<div class="grp"><h4>Что сделано</h4>' +
+    (work.length
+      ? work.map(function (w) {
+          var open = openWork[w.id];
+          return '<div class="arow' + (open ? " open" : "") + '" data-work="' +
+            w.id + '">' +
+            '<div class="ah"><span class="an">' + (w["номер"] || "—") + "</span>" +
+            '<span class="at">' + esc(w["что"]) + "</span>" +
+            '<span class="ad">' + esc(w["агент"]) +
+            (w["план"] ? " · " + esc(w["план"]) : "") +
+            (w["секунд"] ? " · " + w["секунд"] + " с" : "") + "</span>" +
+            (w["артефакт"].length
+              ? '<span class="acount">' + w["артефакт"].length + "</span>" : "") +
+            "</div>" +
+            (w["подробность"]
+              ? '<div class="adet">' + esc(w["подробность"]) + "</div>" : "") +
+            (open && w["артефакт"].length
+              ? meta(w["артефакт"].map(function (kv) {
+                  var v = kv[1];
+                  return [kv[0], Array.isArray(v) ? v.join(", ")
+                               : (typeof v === "boolean" ? (v ? "да" : "нет") : v)];
+                }))
+              : "") +
+            "</div>";
+        }).join("")
+      : '<div class="none">Агенты еще не работали</div>') + "</div>";
+
+  // Нереализованных называем прямо: иначе экономист ждет результата от того,
+  // чего в сборке нет.
+  var off = (d["агенты"] || []).filter(function (a) { return !a["работает"]; });
+  var missing = off.length
+    ? '<div class="grp"><h4>Не работает в этой сборке</h4>' +
+      off.map(function (a) {
+        return '<div class="arow off"><div class="ah">' +
+          '<span class="an">' + a["номер"] + "</span>" +
+          '<span class="at">' + esc(a["имя"]) + "</span>" +
+          '<span class="ad">' + esc(a["делает"]) + "</span></div></div>";
+      }).join("") + "</div>"
+    : "";
+
+  $("agentview").innerHTML = head + need + journal + missing;
+}
+
 /* ── реестр организации ───────────────────────────────────────
  * Документы, договоры, штатное расписание и нормативы служат всем планам
  * сразу: договор заключается на несколько лет, штатка меняется приказами,
@@ -1302,6 +1424,7 @@ var REG_TABS = [
 ];
 
 function openRegistry() {
+  leaveAgents();
   inRegistry = true;
   setView("feed");
   $("feed").hidden = true;
@@ -1493,15 +1616,7 @@ $("toggleside").addEventListener("click", function () {
   this.setAttribute("aria-label", this.title);
 });
 
-$("openagents").addEventListener("click", function () {
-  // Агенты — контекст плана, а не отдельный экран: открываем колонку и
-  // подсвечиваем ее, а не уводим пользователя со страницы.
-  var shell = document.querySelector(".shell");
-  shell.classList.remove("noside");
-  $("toggleside").classList.remove("off");
-  var el = document.querySelector(".side section");
-  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-});
+$("openagents").addEventListener("click", openAgents);
 
 $("openreg").addEventListener("click", openRegistry);
 if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
@@ -1546,6 +1661,25 @@ $("regview").addEventListener("change", function (e) {
     var back = document.querySelector('#regview [data-pick="' + id + '"]');
     if (back && document.activeElement === document.body) back.focus();
   }
+});
+
+$("agentview").addEventListener("click", function (e) {
+  var row = e.target.closest("[data-work]");
+  if (row) {
+    var id = +row.getAttribute("data-work");
+    openWork[id] = !openWork[id];
+    renderAgents();
+    return;
+  }
+  // Из «требует вас» уводим прямо к делу: к плану с вопросом или к карточке
+  // документа с предложенными строками.
+  var w = e.target.closest("[data-doc2]");
+  if (w) {
+    openDocument(+w.getAttribute("data-doc2"));
+    return;
+  }
+  w = e.target.closest("[data-case]");
+  if (w) open(+w.getAttribute("data-case"));
 });
 
 $("regview").addEventListener("keydown", function (e) {

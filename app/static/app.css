@@ -636,3 +636,41 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
               white-space:pre-wrap;word-break:break-word;
               max-height:420px;overflow:auto}
 .dbody .more{margin-top:6px;font-size:11.5px;color:var(--ink3)}
+
+/* ── страница агентов ──────────────────────────────────────── */
+/* Не схема со стрелками: она рисует замысел, а не состояние, и половина
+   коробок в этой сборке не существует. Здесь журнал работ — что от вас
+   ждут, что сделано и на чем основано, чего в сборке нет. */
+#agentview .grp{margin-bottom:24px}
+#agentview .grp h4{display:flex;align-items:center;gap:8px;margin:0 0 10px;
+                   font-size:12px;font-weight:600;color:var(--ink3);
+                   text-transform:uppercase;letter-spacing:.04em}
+#agentview .grp h4 .c{display:grid;place-items:center;min-width:20px;height:20px;
+                      padding:0 6px;border-radius:999px;background:var(--accbg);
+                      color:var(--acc2);font:600 11.5px var(--f);
+                      letter-spacing:0;text-transform:none}
+
+/* Требует вас — единственный блок, ради которого страницу открывают в
+   рабочий день. Поэтому он первый и его не рисуем пустым. */
+.need .wrow{padding:11px 13px;border:1px solid var(--line2);border-radius:var(--r2);
+            background:var(--s0);margin-bottom:8px;cursor:pointer}
+.need .wrow:hover{border-color:var(--acc);background:var(--accbg)}
+.need .wt{font-size:13px;color:var(--ink);line-height:1.45}
+.need .wm{margin-top:4px;font-size:11.5px;color:var(--ink3)}
+
+.arow{border:1px solid var(--line2);border-radius:var(--r2);background:var(--s0);
+      margin-bottom:6px;padding:9px 12px;cursor:pointer}
+.arow:hover{border-color:var(--line)}
+.arow.open{border-color:var(--line)}
+.arow.off{cursor:default;background:var(--s1);opacity:.75}
+.arow .ah{display:flex;align-items:baseline;gap:9px}
+.arow .an{flex:0 0 auto;min-width:18px;color:var(--ink3);font-size:11.5px;
+          font-variant-numeric:tabular-nums}
+.arow .at{flex:1;min-width:0;font-size:13px;color:var(--ink)}
+.arow .ad{flex:0 0 auto;font-size:11.5px;color:var(--ink3);white-space:nowrap;
+          overflow:hidden;text-overflow:ellipsis;max-width:45%}
+.arow .acount{flex:0 0 auto;min-width:18px;height:18px;display:grid;
+              place-items:center;border-radius:999px;background:var(--s2);
+              color:var(--ink3);font:600 11px var(--f)}
+.arow .adet{margin-top:4px;font-size:12px;color:var(--ink2);line-height:1.45}
+.arow .meta{margin:10px 0 2px}

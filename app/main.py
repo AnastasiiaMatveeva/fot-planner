@@ -315,6 +315,65 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
         db.close()
 
 
+@app.get("/api/agents")
+def agents_page(limit: int = 60):
+    """Все, что делали агенты, по всем планам — одной страницей.
+
+    Схему из семи коробок со стрелками рисовать незачем: это картинка замысла,
+    а не состояния, и половина коробок в этой сборке не существует. Страница
+    отвечает на вопросы, которые у экономиста есть на самом деле: что от меня
+    ждут, что уже сделано и на чем основано, что не работает вовсе.
+    """
+    db = session()
+    try:
+        titles = {c.id: c.title for c in db.query(Case).all()}
+
+        waiting = []
+        for q in (db.query(Question).filter_by(answer=None)
+                  .order_by(Question.id.desc()).all()):
+            waiting.append({"вид": "вопрос", "план": titles.get(q.case_id),
+                            "case_id": q.case_id,
+                            "агент": agents.AGENTS.get(q.agent, {}).get("name", q.agent),
+                            "текст": q.text,
+                            "варианты": json.loads(q.options) if q.options else None})
+        for d in (db.query(Document).filter_by(state="ждет подтверждения")
+                  .order_by(Document.id.desc()).all()):
+            left = (db.query(Proposal)
+                    .filter_by(document_id=d.id, state="предложено").count())
+            waiting.append({"вид": "подтверждение", "документ": d.name,
+                            "document_id": d.id, "строк": left,
+                            "текст": "Агент прочитал документ без шаблона и "
+                                     "предлагает строки — их нет в расчете, "
+                                     "пока вы их не приняли."})
+
+        work = []
+        for a in (db.query(Activity).order_by(Activity.id.desc()).limit(limit).all()):
+            info = agents.AGENTS.get(a.agent) or {}
+            work.append({
+                "id": a.id, "агент": info.get("name", a.agent),
+                "номер": info.get("n"), "что": a.title, "состояние": a.state,
+                "подробность": a.detail, "секунд": a.seconds,
+                "план": titles.get(a.case_id), "case_id": a.case_id,
+                "когда": _dt(a.started) if getattr(a, "started", None) else None,
+                "артефакт": [[k, v] for k, v in
+                             (json.loads(a.artifact) if a.artifact else {}).items()
+                             if v not in (None, "", [], {})],
+            })
+
+        counts = {}
+        for a in db.query(Activity).all():
+            counts[a.agent] = counts.get(a.agent, 0) + 1
+        roster = []
+        for one in agents.agent_list():
+            roster.append({"номер": one["n"], "имя": one["name"],
+                           "делает": one["does"], "работает": one["real"],
+                           "работ": counts.get(one["key"], 0)})
+        return {"ждет": waiting, "работы": work, "агенты": roster,
+                "решатель": agents.SOLVER}
+    finally:
+        db.close()
+
+
 @app.get("/api/documents")
 def all_documents():
     """Все загруженные документы организации и что из каждого извлечено."""
