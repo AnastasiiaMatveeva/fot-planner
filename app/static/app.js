@@ -815,9 +815,9 @@ function renderRegistry() {
   var body = "";
 
   if (regTab === "docs") {
-    // Состояние показываем точкой у названия, как в колонке контекста:
-    // отдельная колонка дублировала вид, а «чем разобрано» повторяло одно
-    // и то же в каждой строке — это видно в артефакте агента.
+    // Точку состояния в таблице не ставим: цветной кружок в начале строки
+    // читается как управляющий элемент. Состояние и так видно в графе
+    // «что дал» — там либо результат, либо причина отказа.
     body = table(["документ", "вид", "что дал", "загружен", ""],
         docs.map(function (x) {
           var made = Object.keys(x.produced || {})
@@ -825,13 +825,13 @@ function renderRegistry() {
             .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
           var bad = x.state !== "разобран";
           return [
-            { v: '<span class="dstate ' + (bad ? "bad" : "ok") + '"></span>' + esc(x.name) },
+            x.name,
             x.kind,
             { v: made ? esc(made)
-                      : (bad ? '<span class="warn">' + esc(x.summary || x.state) + "</span>"
-                             : esc(x.summary || "—")) },
+                      : '<span class="' + (bad ? "warn" : "") + '">' +
+                        esc(x.summary || x.state) + "</span>" },
             x.uploaded,
-            { v: delButton("data-doc", x.id, "Убрать документ"), cls: "act" }];
+            { v: rowMenu("data-docmenu", x.id), cls: "act" }];
         }));
   } else if (regTab === "ctr") {
     var c = d.contracts || [];
@@ -939,18 +939,15 @@ if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
 $("regview").addEventListener("click", function (e) {
   var t = e.target.closest("[data-rtab]");
   if (t) { regTab = t.getAttribute("data-rtab"); renderRegistry(); return; }
-  var b = e.target.closest(".del");
+  var b = e.target.closest(".more");
   if (!b) return;
   var row = b.closest("tr");
   var name = row ? row.children[1].textContent : "документ";
-  ask("Убрать «" + name + "»?",
-      "Вместе с документом уйдут данные, извлеченные из него: сотрудники, " +
-      "договоры и правила замещения.", "Убрать документ").then(function (yes) {
-    if (!yes) return;
-    b.disabled = true;
-    api("/api/document/" + b.getAttribute("data-doc"), { method: "DELETE" })
-      .then(loadRegistry).then(tick);
-  });
+  showMenu(b, [{ label: "Убрать документ", danger: true, run: function () {
+    removeDoc(b.getAttribute("data-docmenu"), name, function () {
+      loadRegistry(); tick();
+    });
+  } }]);
 });
 
 $("docs").addEventListener("click", function (e) {

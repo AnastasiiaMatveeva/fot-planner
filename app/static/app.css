@@ -375,10 +375,6 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .shell.noside{grid-template-columns:230px minmax(0,1fr)}
 .shell.noside .side{display:none}
 
-/* Состояние документа — точкой при названии, как в колонке контекста */
-.dstate{display:inline-block;width:6px;height:6px;border-radius:50%;
-        margin-right:8px;vertical-align:1px;background:var(--ok)}
-.dstate.bad{background:var(--bad)}
 .view .warn{color:var(--bad)}
 
 /* ── удаление строки ───────────────────────────────────────── */
@@ -389,7 +385,7 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
      opacity:0;transition:opacity .12s}
 .del:hover{background:var(--badbg);color:var(--bad)}
 .del:focus-visible{opacity:1;outline:2px solid var(--acc);outline-offset:-2px}
-.case:hover .del,.doc:hover .del,.view tr:hover .del{opacity:1}
+.case:hover .del,.doc:hover .del,.view tr:hover .more{opacity:1}
 .view td.act{width:1%;padding:4px 10px 4px 4px}
 .doc .nm{display:flex;align-items:flex-start;gap:6px;justify-content:space-between}
 
@@ -412,3 +408,5 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .menu .mi:hover{background:var(--s1)}
 .menu .mi.danger{color:var(--bad)}
 .menu .mi.danger:hover{background:var(--badbg)}
+
+.view tr:hover .more{opacity:1}
