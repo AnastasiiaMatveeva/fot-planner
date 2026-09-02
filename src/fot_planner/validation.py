@@ -26,8 +26,54 @@ _DEADLINE_LABELS = {
 }
 
 
+def _defaults_used_conflicts(ctx: PlanningContext) -> list[ConflictRecord]:
+    """Величины, взятые не из файла, а из встроенного справочника.
+
+    Без встроенных умолчаний пустой шаблон не считается, поэтому убирать их
+    нельзя. Но подстановка не должна быть молчаливой: в файле пусто, в расчете
+    значение есть, и по самому файлу этого не увидеть. Для ГОЗ вопрос «откуда
+    эта цифра» — первый, и ответ должен быть в отчете, а не в исходниках.
+
+    Собираем по должности, а не по величине: тридцать три строки «оклад по
+    умолчанию» — это шум, из которого ничего не вычитаешь. Код кончается на
+    «_WARNING»: отчет по этому суффиксу отличает предупреждение от ошибки, а
+    расчет такая подстановка не срывает.
+    """
+    if not ctx.defaults_used:
+        return []
+    by_position: dict[str, list[str]] = {}
+    for position, title, _value in ctx.defaults_used:
+        by_position.setdefault(position, [])
+        if title not in by_position[position]:
+            by_position[position].append(title)
+    out: list[ConflictRecord] = []
+    for position, titles in sorted(by_position.items()):
+        if not position:
+            out.append(
+                ConflictRecord(
+                    code="DEFAULT_REFERENCE_USED_WARNING",
+                    message=(
+                        "Листа «лимиты_по_должностям» во входном файле нет — "
+                        "справочник должностей взят встроенный."
+                    ),
+                )
+            )
+            continue
+        out.append(
+            ConflictRecord(
+                code="DEFAULT_VALUE_USED_WARNING",
+                message=(
+                    f"Должность «{position}»: во входном файле не задано — "
+                    f"{', '.join(titles)}. Значение взято из встроенного "
+                    f"справочника; проверьте, что оно действующее."
+                ),
+            )
+        )
+    return out
+
+
 def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
-    conflicts: list[ConflictRecord] = []
+    conflicts: list[ConflictRecord] = _defaults_used_conflicts(ctx)
     emp_ids = {e.id for e in ctx.employees}
     contract_ids = {c.id for c in ctx.contracts}
 

@@ -83,14 +83,21 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             year = int(settings_df.iloc[0]["year"])
 
     position_limits_df = _load_position_limits_sheet(xl)
+    defaults_used: list[tuple[str, str, object]] = []
     if position_limits_df is not None:
-        position_reference_rows = _position_reference_from_limits_sheet(position_limits_df)
+        position_reference_rows = _position_reference_from_limits_sheet(
+            position_limits_df, defaults_used
+        )
         position_salary_limit_defaults = _position_salary_limits_from_limits_sheet(
-            position_limits_df
+            position_limits_df, defaults_used
         )
     else:
+        # Листа нет вовсе — весь справочник встроенный. Это не подстановка
+        # отдельных величин, а работа на умолчаниях целиком, и сказать об этом
+        # надо одной фразой, а не тридцатью тремя.
         position_reference_rows = list(default_position_reference())
         position_salary_limit_defaults = default_position_salary_limits()
+        defaults_used.append(("", "весь справочник должностей", len(position_reference_rows)))
     position_synonyms = default_position_synonyms()
     position_index = build_position_index(position_reference_rows, position_synonyms)
     position_reference = [
@@ -224,6 +231,7 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         salary_stability=salary_stability,
         labor_plans=labor_plans,
         substitution_rules=substitution_rules,
+        defaults_used=defaults_used,
         secret_allowances=secret_allowances,
         baseline_plan=baseline_plan,
         allow_deficit=allow_deficit,
@@ -270,37 +278,53 @@ def _reference_group_from_fields(
     return fallback or "без окладной группы"
 
 
-def _position_reference_from_limits_sheet(df: pd.DataFrame) -> list[PositionReferenceRow]:
+def _position_reference_from_limits_sheet(
+    df: pd.DataFrame, defaults_used: list | None = None
+) -> list[PositionReferenceRow]:
     defaults = {
         normalize_position(row.position): row
         for row in default_position_reference()
     }
+    log = defaults_used if defaults_used is not None else []
     rows: list[PositionReferenceRow] = []
     for _, r in df.iterrows():
         position = _clean_optional_text(r.get("position"))
         if not position:
             continue
         default = defaults.get(normalize_position(position))
-        salary_page = (
-            _clean_optional_text(r.get("salary_page"))
-            if "salary_page" in r.index
-            else (default.salary_page if default else None)
-        )
-        salary_group_number = (
-            _optional_int(r.get("salary_group_number"))
-            if "salary_group_number" in r.index
-            else (default.salary_group_number if default else None)
-        )
-        level = (
-            _optional_int(r.get("position_level"))
-            if "position_level" in r.index
-            else (default.level if default else None)
-        )
-        reference_salary_for_rate = (
-            _optional_float(r.get("reference_salary_for_rate"))
-            if "reference_salary_for_rate" in r.index
-            else (default.reference_salary_for_rate if default else None)
-        )
+
+        def taken(column, sheet_value, default_value, title):
+            """Значение и отметка, если оно пришло из встроенного списка."""
+            if column in r.index:
+                return sheet_value
+            if default_value is not None:
+                log.append((position, title, default_value))
+            return default_value
+
+        salary_page = taken(
+            "salary_page", _clean_optional_text(r.get("salary_page")),
+            default.salary_page if default else None, "страница")
+        salary_group_number = taken(
+            "salary_group_number", _optional_int(r.get("salary_group_number")),
+            default.salary_group_number if default else None, "номер группы")
+        level = taken(
+            "position_level", _optional_int(r.get("position_level")),
+            default.level if default else None, "номер уровня")
+        reference_salary_for_rate = taken(
+            "reference_salary_for_rate",
+            _optional_float(r.get("reference_salary_for_rate")),
+            default.reference_salary_for_rate if default else None, "оклад")
+
+        # Отдельный случай: колонки в листе есть, но все три пусты. Тогда
+        # окладная группа берется из встроенного списка внутри
+        # _reference_group_from_fields — и это самая незаметная подстановка.
+        if (not _clean_optional_text(r.get("equivalence_group"))
+                and salary_page is None and salary_group_number is None
+                and level is None
+                and default is not None and default.equivalence_group
+                and not default.equivalence_group.startswith("должность: ")):
+            log.append((position, "окладная группа", default.equivalence_group))
+
         group = _reference_group_from_fields(
             explicit_group=_clean_optional_text(r.get("equivalence_group")),
             salary_page=salary_page,
@@ -323,18 +347,26 @@ def _position_reference_from_limits_sheet(df: pd.DataFrame) -> list[PositionRefe
 
 
 def _position_salary_limits_from_limits_sheet(
-    df: pd.DataFrame,
+    df: pd.DataFrame, defaults_used: list | None = None
 ) -> list[PositionSalaryLimit]:
     defaults = {
         normalize_position(row.position): row
         for row in default_position_salary_limits()
     }
+    log = defaults_used if defaults_used is not None else []
     rows: list[PositionSalaryLimit] = []
     for _, r in df.iterrows():
         position = _clean_optional_text(r.get("position"))
         if not position:
             continue
         default = defaults.get(normalize_position(position))
+        for column, title in (("personnel_category", "категория персонала"),
+                              ("order_2556_limit", "П2556"),
+                              ("p4_limit", "П4"), ("bep_limit", "БЭП")):
+            if column not in r.index:
+                value = getattr(default, column, None) if default else None
+                if value not in (None, ""):
+                    log.append((position, title, value))
         rows.append(
             PositionSalaryLimit(
                 position=position,

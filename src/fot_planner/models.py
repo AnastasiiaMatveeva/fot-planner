@@ -264,6 +264,11 @@ class PlanningContext:
     # отчетам, чтобы объяснить, почему сотрудник закрывает чужую строку
     # трудоемкости.
     substitution_rules: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Величины, взятые не из входного файла, а из встроенного справочника:
+    # (должность, что именно, значение). Без встроенных умолчаний пустой
+    # шаблон не считается, но подстановка не должна быть молчаливой — в файле
+    # пусто, а в расчете значение есть, и по файлу этого не увидеть.
+    defaults_used: list[tuple[str, str, object]] = field(default_factory=list)
     secret_allowances: list[SecretAllowance] = field(default_factory=list)
     baseline_plan: list[AllocationRecord] | None = None
     # Диагностический режим: разрешить недоплату с большим штрафом (см. allow_deficit)
