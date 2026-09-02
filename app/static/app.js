@@ -172,9 +172,6 @@ function renderAgents() {
     '<span class="n">—</span><span class="b"><span class="t">' + esc(s.name) + "</span><br>" +
     '<span class="s">' + esc(ssub) + "</span></span></div>";
 
-  $("agentlegend").innerHTML = state.agents.map(function (a) {
-    return '<div class="a' + (a.real ? "" : " off") + '"><b>' + a.n + "</b>" + esc(a.name) + "</div>";
-  }).join("");
 }
 
 function renderDocs() {
