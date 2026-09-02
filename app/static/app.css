@@ -432,10 +432,29 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .view tr.sel:hover td{background:var(--accbg)}
 
 /* ── номер и выбор строк ───────────────────────────────────── */
-/* Флажки в первом столбце видны всегда — так в Carbon и PatternFly:
-   спрятанные до наведения элементы выбора не столько убирают шум, сколько
-   прячут саму возможность. Нумерация идет отдельным столбцом. */
-.view td.pick,.view th.pick{width:1%;padding:8px 4px 8px 14px;white-space:nowrap}
+/* Номер и флажок занимают одну клетку и одно место в ней: в покое виден
+   номер, при наведении на строку он сменяется флажком (так в Notion и
+   Airtable). Постоянно видимые флажки — правило Carbon — уместны там, где
+   выбор строк и есть работа; здесь реестр прежде всего читают, а колонка
+   пустых квадратиков вдоль всей таблицы забирает внимание раньше самих
+   данных. Как только что-то отмечено, флажки показываются у всех строк:
+   выбор идет пачкой, и целиться наведением в каждую строку не нужно. */
+.view td.pick,.view th.pick{width:1%;padding:0;white-space:nowrap}
+.view .pk{display:grid;min-width:18px;place-items:center;cursor:pointer;
+          padding:8px 4px 8px 14px}
+.view thead.picking th.pick .pk{padding-top:6.5px;padding-bottom:6.5px}
+.view .pk > *{grid-area:1/1;transition:opacity .1s}
+.view .pk input{margin:0;opacity:0}
+.view .pk .rn{color:var(--ink3);font-size:12px;font-variant-numeric:tabular-nums;
+              pointer-events:none}
+.view tbody tr:hover .pk input,.view thead:hover .pk input,
+.view .pk input:checked,.view .pk input:indeterminate,
+.view .pk input:focus-visible,.view thead.picking .pk input,
+.view thead.picking ~ tbody .pk input{opacity:1}
+.view tbody tr:hover .pk .rn,.view thead:hover .pk .rn,
+.view .pk input:checked ~ .rn,.view .pk input:indeterminate ~ .rn,
+.view .pk input:focus-visible ~ .rn,.view thead.picking .pk .rn,
+.view thead.picking ~ tbody .pk .rn{opacity:0}
 .view td.num,.view th.num{width:1%;text-align:right;padding-left:4px;padding-right:12px;
                           color:var(--ink3);font-variant-numeric:tabular-nums;
                           white-space:nowrap}

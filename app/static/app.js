@@ -856,6 +856,17 @@ function pickedIds() {
    прием описан (Carbon, Polaris, Material), панель именно подменяет
    существующий ряд, а не появляется сверху. Высота ряда та же, поэтому
    таблица не дергается. */
+/* Номер строки и флажок делят одну ячейку и одно место в ней: в покое виден
+   номер, при наведении на строку он сменяется флажком. Два служебных столбца
+   подряд — колонка пустых квадратиков и колонка номеров — занимают вдвое
+   больше места, чем нужно, и первое, что видит глаз слева, оказывается рядом
+   пустых рамок. Так устроены таблицы Notion и Airtable. Флажок остается в
+   разметке всегда, а не появляется по наведению, — иначе до него не добраться
+   с клавиатуры; при фокусе он тоже показывается. */
+function pk(input, label) {
+  return '<label class="pk">' + input + '<span class="rn">' + esc(label) + "</span></label>";
+}
+
 function pickCell(n) {
   return '<div class="pickrow"><span class="picked">' + n + " " +
          px(n, "документ отмечен", "документа отмечено", "документов отмечено") +
@@ -977,23 +988,21 @@ function renderRegistry() {
     // чтобы сослаться на строку.
     var allOn = docs.length > 0 && docs.every(function (x) { return picked[x.id]; });
     var nPick = pickedIds().length;
-    var pickBox = { v: '<input type="checkbox" class="pickall"' + (allOn ? " checked" : "") + ">",
-                    cls: "pick" };
+    var pickBox = { v: pk('<input type="checkbox" class="pickall"' +
+                          (allOn ? " checked" : "") + ">", "№"), cls: "pick" };
     body = table(
         nPick
-        ? [pickBox, { v: pickCell(nPick), cls: "pickcell", span: 6 }]
-        : [pickBox,
-         { v: "№", cls: "num" },
-         "документ", "вид", "что дал", "загружен", ""],
+        ? [pickBox, { v: pickCell(nPick), cls: "pickcell", span: 5 }]
+        : [pickBox, "документ", "вид", "что дал", "загружен", ""],
         docs.map(function (x, i) {
           var made = Object.keys(x.produced || {})
             .filter(function (k) { return x.produced[k]; })
             .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
           var bad = x.state !== "разобран";
           return [
-            { v: '<input type="checkbox" data-pick="' + x.id + '"' +
-                 (picked[x.id] ? " checked" : "") + ">", cls: "pick" },
-            { v: String(i + 1), cls: "num" },
+            { v: pk('<input type="checkbox" data-pick="' + x.id + '"' +
+                    (picked[x.id] ? " checked" : "") + ">", String(i + 1)),
+              cls: "pick" },
             x.name,
             x.kind,
             { v: made ? esc(made)
