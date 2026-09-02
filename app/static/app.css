@@ -159,6 +159,9 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 /* ── вкладки просмотра ─────────────────────────────────────── */
 .tabs{flex:0 0 auto;display:flex;gap:2px;padding:0 22px;background:var(--s0);
       border-bottom:1px solid var(--line2);overflow-x:auto}
+/* display:flex перебивает встроенное [hidden] — гасим явно.
+   Та же ловушка была у ленты и полосы вопроса. */
+.tabs[hidden]{display:none}
 .tabs .tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
            margin-bottom:-1px;padding:8px 13px;font:600 13px var(--f);color:var(--ink3);
            cursor:pointer;white-space:nowrap}
@@ -239,3 +242,31 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .dgh.on::before{content:"▾"}
 .dgh .c{font-family:var(--m);font-weight:400;color:var(--ink3);font-size:11.5px}
 .dgrp .doc{margin-top:5px}
+
+/* Дело можно убрать: крестик появляется при наведении, чтобы не мозолил глаза */
+.case{position:relative;padding-right:26px}
+.case .del{position:absolute;top:7px;right:7px;width:17px;height:17px;padding:0;
+           line-height:1;border:1px solid transparent;background:none;color:var(--ink3);
+           font-size:14px;cursor:pointer;border-radius:2px;opacity:0}
+.case:hover .del,.case.on .del{opacity:1}
+.case .del:hover{border-color:var(--bad);color:var(--bad);background:var(--badbg)}
+
+/* Реестр организации — отдельный пункт над списком планов */
+.cases .reg{display:block;width:calc(100% - 12px);margin:0 6px 4px;padding:8px 10px;
+            border:1px solid var(--line2);background:var(--s0);text-align:left;
+            font:600 13px var(--f);color:var(--ink2);cursor:pointer;border-radius:2px}
+.cases .reg:hover{border-color:var(--acc);color:var(--acc);background:var(--accbg)}
+.cases .reg.on{border-color:var(--acc);background:var(--accbg);color:var(--acc2)}
+.cases .reg small{display:block;font-weight:400;font-size:11.5px;color:var(--ink3);margin-top:1px}
+#regview .rsec{margin-bottom:22px}
+#regview .rsec > h3{margin:0 0 9px;font-size:12px;font-weight:700;letter-spacing:.6px;
+                    text-transform:uppercase;color:var(--ink3)}
+#regview .rtabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:14px}
+#regview .rtabs button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
+                       margin-bottom:-1px;padding:7px 13px;font:600 13px var(--f);
+                       color:var(--ink3);cursor:pointer;white-space:nowrap}
+#regview .rtabs button.on{color:var(--acc);border-bottom-color:var(--acc)}
+button.ghost{width:100%;margin-top:9px;padding:7px 12px;border:1px solid var(--line);
+             background:var(--s0);color:var(--ink2);font:13px var(--f);cursor:pointer;
+             border-radius:2px}
+button.ghost:hover{border-color:var(--acc);color:var(--acc);background:var(--accbg)}

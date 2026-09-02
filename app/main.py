@@ -157,6 +157,40 @@ async def create_case(request: Request):
         db.close()
 
 
+@app.delete("/api/case/{case_id}")
+def delete_case(case_id: int):
+    """Убрать дело: ленту, работы агентов, вопросы и прогоны расчета.
+
+    Документы, договоры, штатка и нормативы остаются: они принадлежат
+    организации, а не плану, и нужны остальным делам. Отвязываем их от дела
+    до удаления, иначе каскад унес бы весь реестр вслед за одним планом.
+    """
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "дело не найдено")
+
+        for model in (Document, Employee, Contract, Substitution):
+            db.query(model).filter_by(case_id=case_id).update({"case_id": None})
+        db.commit()
+
+        for run in db.query(Run).filter_by(case_id=case_id).all():
+            for path in (run.input_path, run.result_path):
+                try:
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+
+        title = case.title
+        db.delete(case)          # лента, работы, вопросы и прогоны уходят каскадом
+        db.commit()
+        return {"ok": True, "title": title}
+    finally:
+        db.close()
+
+
 @app.get("/api/case/{case_id}")
 def get_case(case_id: int):
     db = session()

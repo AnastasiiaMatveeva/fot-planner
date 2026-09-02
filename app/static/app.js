@@ -42,13 +42,37 @@ function loadCases() {
   return api("/api/cases").then(function (rows) {
     $("caselist").innerHTML = rows.length ? rows.map(function (c) {
       return '<div class="case' + (c.id === caseId ? " on" : "") + '" data-id="' + c.id + '">' +
+             '<button class="del" data-del="' + c.id +
+             '" title="Убрать дело: ленту, работы агентов и расчеты">×</button>' +
              esc(c.title) + "<small>" + esc(c.stage) + " · документов " + c.documents +
              "</small></div>";
     }).join("") : '<div class="empty" style="padding:0 16px">Дел пока нет</div>';
     Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
-      el.addEventListener("click", function () { open(+el.getAttribute("data-id")); });
+      el.addEventListener("click", function (e) {
+        if (e.target.closest(".del")) return;
+        open(+el.getAttribute("data-id"));
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".case .del"), function (b) {
+      b.addEventListener("click", function () { removeCase(+b.getAttribute("data-del")); });
     });
     return rows;
+  });
+}
+
+function removeCase(id) {
+  var el = document.querySelector('.case[data-id="' + id + '"]');
+  var name = el ? el.querySelector("small").previousSibling.textContent.trim() : "дело";
+  if (!confirm("Убрать «" + name + "»?\n\n" +
+               "Лента, работы агентов и расчеты этого дела будут удалены. " +
+               "Документы, договоры, штатка и нормативы останутся — " +
+               "они общие для организации.")) return;
+  api("/api/case/" + id, { method: "DELETE" }).then(function () {
+    if (caseId === id) { caseId = null; state = null; }
+    return loadCases();
+  }).then(function (rows) {
+    if (!caseId && rows.length) open(rows[0].id);
+    else if (!rows.length) newCase();
   });
 }
 
@@ -60,6 +84,7 @@ function newCase() {
 }
 
 function open(id) {
+  leaveRegistry();
   caseId = id;
   lastSig = "";
   vdata = null; vresult = null; vrun = null;
@@ -607,6 +632,135 @@ function renderView() {
   }
 }
 
+
+/* ── реестр организации ───────────────────────────────────────
+ * Документы, договоры, штатное расписание и нормативы служат всем планам
+ * сразу: договор заключается на несколько лет, штатка меняется приказами,
+ * нормативы — раз в год. Держать их внутри плана значит загружать два
+ * десятка документов каждый январь заново, поэтому у них свой раздел.
+ *
+ * План на год остается тем, чем и должен быть: лента работы, расчет и его
+ * результат.
+ */
+var inRegistry = false, regTab = "docs", regData = null;
+
+var REG_TABS = [
+  { key: "docs", title: "Документы" },
+  { key: "ctr", title: "Договоры" },
+  { key: "emp", title: "Штатное расписание" },
+  { key: "ref", title: "Справочник должностей" },
+  { key: "sub", title: "Правила замещения" },
+];
+
+function openRegistry() {
+  inRegistry = true;
+  setView("feed");
+  $("feed").hidden = true;
+  $("view").hidden = true;
+  $("regview").hidden = false;
+  document.querySelector(".tabs").hidden = true;
+  $("openreg").classList.add("on");
+  Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
+    el.classList.remove("on");
+  });
+  loadRegistry();
+}
+
+function leaveRegistry() {
+  if (!inRegistry) return;
+  inRegistry = false;
+  $("regview").hidden = true;
+  document.querySelector(".tabs").hidden = false;
+  $("openreg").classList.remove("on");
+}
+
+function loadRegistry() {
+  $("regview").innerHTML = '<div class="none">Загружаю…</div>';
+  Promise.all([api("/api/documents"), api("/api/case/" + (caseId || 0) + "/data")
+                 .catch(function () { return {}; })])
+    .then(function (r) { regData = { documents: r[0], data: r[1] }; renderRegistry(); })
+    .catch(function (e) {
+      $("regview").innerHTML = '<div class="none">' + esc(e.message || "не загрузилось") + "</div>";
+    });
+}
+
+function renderRegistry() {
+  if (!regData) return;
+  var d = regData.data || {}, docs = regData.documents || [];
+  var body = "";
+
+  if (regTab === "docs") {
+    body = '<div class="vh">Загруженные документы организации. Каждый служит всем ' +
+      "планам своего срока: договор на три года — трем планам, приказ — пока не " +
+      "выйдет новая редакция. Удаление убирает и данные, извлеченные из документа.</div>" +
+      table(["документ", "вид", "состояние", "чем разобрано", "что извлек", "загружен", ""],
+        docs.map(function (x) {
+          var made = Object.keys(x.produced || {})
+            .filter(function (k) { return x.produced[k]; })
+            .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
+          return [x.name, x.kind, x.state, x.by, made || x.summary, x.uploaded,
+                  { v: '<button class="del" data-doc="' + x.id +
+                       '" title="Убрать документ и его данные">×</button>' }];
+        }));
+  } else if (regTab === "ctr") {
+    var c = d.contracts || [];
+    body = table(["шифр", "наименование", "номер", "вид", "ГОЗ", { t: "фонд, ₽" },
+                  "с", "по", "разрешенные выплаты", "источник"],
+      c.map(function (x) {
+        return [x.code, x.name, x.number, x.kind,
+                { v: x.goz ? '<span class="tag goz">' + esc(x.goz) + "</span>" : null },
+                { v: x.fund == null ? null : mo(x.fund), cls: "n" },
+                x.from, x.to, x.kinds, x.source];
+      }),
+      "Реестр договоров: <b>" + c.length + "</b>. План на год берет отсюда " +
+      "действующие в этом году — заново загружать их не нужно.");
+  } else if (regTab === "emp") {
+    var e = d.employees || [];
+    body = table(["табельный", "ФИО", "должность", { t: "ставка" }, { t: "оклад, ₽" },
+                  "с", "по", "источник"],
+      e.map(function (x) {
+        return [x.code, x.fio, x.position,
+                { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
+                { v: x.salary == null ? null : mo(x.salary), cls: "n" },
+                x.from, x.to, x.source];
+      }),
+      "Штатное расписание организации: <b>" + e.length + "</b> " +
+      px(e.length, "сотрудник", "сотрудника", "сотрудников") +
+      ". Меняется приказами о приеме, переводе и увольнении, а не с каждым планом.");
+  } else if (regTab === "ref") {
+    var r = d.reference || [];
+    body = table(["должность", "категория", { t: "оклад за 1,0 ставки, ₽" },
+                  { t: "П2556, ₽" }, { t: "П4, ₽" }, "примечание"],
+      r.map(function (x) {
+        return [x.pos, x.cat,
+                { v: x.sal == null ? null : mo(x.sal), cls: "n" },
+                { v: x.p2556 == null ? null : mo(x.p2556), cls: "n" },
+                { v: x.p4 == null ? null : mo(x.p4), cls: "n" }, x.note];
+      }),
+      "Оклады и предельные размеры выплат: <b>" + r.length + "</b> " +
+      px(r.length, "позиция", "позиции", "позиций") +
+      ". Обновляются, когда выходит новая редакция приказа или положения об " +
+      "оплате труда. Прочерк — отдельной строки для должности в источнике нет.");
+  } else if (regTab === "sub") {
+    var s = d.substitutions || [];
+    body = table(["должность", "может быть замещена"],
+      s.map(function (x) { return [x.position, x.replaced_by]; }),
+      "Правил замещения: <b>" + s.length + "</b>. Правила направленные — кого кем " +
+      "можно заменить, не наоборот. В расчет пока не подставляются: модель " +
+      "работает симметричными группами взаимозаменяемости.");
+  }
+
+  $("regview").innerHTML =
+    '<div class="rtabs">' + REG_TABS.map(function (t) {
+      var n = { docs: docs.length, ctr: (d.contracts || []).length,
+                emp: (d.employees || []).length, ref: (d.reference || []).length,
+                sub: (d.substitutions || []).length }[t.key];
+      return '<button type="button" data-rtab="' + t.key + '"' +
+             (regTab === t.key ? ' class="on"' : "") + ">" + esc(t.title) +
+             (n ? '<span class="c"> ' + n + "</span>" : "") + "</button>";
+    }).join("") + "</div>" + body;
+}
+
 /* ── опрос ────────────────────────────────────────────────── */
 function tick() {
   if (!caseId) return Promise.resolve();
@@ -619,11 +773,37 @@ function tick() {
                               s.activities.map(function (a) { return [a.id, a.state]; }),
                               s.questions.map(function (q) { return [q.id, !!q.answer]; }),
                               s.runs.map(function (r) { return [r.id, r.status]; })]);
-    if (sig !== lastSig) { lastSig = sig; render(); }
+    if (sig !== lastSig) {
+      lastSig = sig;
+      render();
+      // Перерисовка ленты не должна выбрасывать из открытого раздела.
+      if (inRegistry) {
+        $("feed").hidden = true; $("view").hidden = true; $("regview").hidden = false;
+        document.querySelector(".tabs").hidden = true;
+      } else if (view !== "feed") {
+        $("feed").hidden = true; $("view").hidden = false;
+      }
+    }
   }).catch(function () {});
 }
 
 /* ── события ──────────────────────────────────────────────── */
+$("openreg").addEventListener("click", openRegistry);
+if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
+
+$("regview").addEventListener("click", function (e) {
+  var t = e.target.closest("[data-rtab]");
+  if (t) { regTab = t.getAttribute("data-rtab"); renderRegistry(); return; }
+  var b = e.target.closest(".del");
+  if (!b) return;
+  var row = b.closest("tr");
+  var name = row ? row.children[1].textContent : "документ";
+  if (!confirm("Убрать «" + name + "» и все данные, извлеченные из него?")) return;
+  b.disabled = true;
+  api("/api/document/" + b.getAttribute("data-doc"), { method: "DELETE" })
+    .then(loadRegistry).then(tick);
+});
+
 $("docs").addEventListener("click", function (e) {
   var g = e.target.closest(".dgh");
   if (g) {

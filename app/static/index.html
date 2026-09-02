@@ -19,7 +19,12 @@
 
   <!-- дела: точка возврата -->
   <aside class="cases">
-    <div class="ctitle">Дела<button id="newcase" title="Новое дело">+</button></div>
+    <!-- Реестр организации отделен от планов: документы, договоры, штатка и
+         нормативы служат всем делам сразу, а дело — это план на год. -->
+    <div class="ctitle">Организация</div>
+    <button type="button" class="reg" id="openreg">Реестр документов и данных</button>
+
+    <div class="ctitle">Планы<button id="newcase" title="Новый план">+</button></div>
     <div id="caselist" class="clist"></div>
   </aside>
 
@@ -31,18 +36,14 @@
          посмотреть данные, которые агенты собрали, и результат расчета. -->
     <nav class="tabs" id="tabs">
       <button type="button" class="tab on" data-view="feed">Лента</button>
-      <button type="button" class="tab" data-view="emp">Сотрудники</button>
-      <button type="button" class="tab" data-view="ctr">Договоры</button>
       <button type="button" class="tab" data-view="plan">План выплат</button>
       <button type="button" class="tab" data-view="cash">Освоение</button>
       <button type="button" class="tab" data-view="lim">Ограничения</button>
-      <span class="tsep" title="Общее для всех дел, а не для этого"></span>
-      <button type="button" class="tab norm" data-view="ref">Справочник</button>
-      <button type="button" class="tab norm" data-view="sub">Замещение</button>
     </nav>
 
     <div class="feed" id="feed"></div>
     <div class="view" id="view" hidden></div>
+    <div class="view" id="regview" hidden></div>
 
     <div class="ask" id="ask" hidden></div>
 
@@ -67,6 +68,7 @@
     <section>
       <h3>Документы</h3>
       <div id="docs" class="docs"></div>
+      <button type="button" class="ghost" id="toreg">Весь реестр организации</button>
     </section>
 
     <section>
