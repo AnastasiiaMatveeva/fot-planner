@@ -111,7 +111,7 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         )
         for row in position_reference_rows
     ]
-    substitution_rules = _load_substitutions(xl)
+    substitution_rules = _load_substitutions(xl, position_index)
     employees = _load_employees(
         _canonicalize_columns(pd.read_excel(xl, SHEET_EMPLOYEES), SHEET_EMPLOYEES),
         position_index,
@@ -429,7 +429,9 @@ def _split_substitutes(value: object) -> list[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
-def _load_substitutions(xl: pd.ExcelFile) -> dict[str, frozenset[str]]:
+def _load_substitutions(
+    xl: pd.ExcelFile, position_index: dict | None = None
+) -> dict[str, frozenset[str]]:
     """Правила замещения: должность сотрудника → на какие должности его можно
     поставить дополнительно.
 
@@ -447,6 +449,21 @@ def _load_substitutions(xl: pd.ExcelFile) -> dict[str, frozenset[str]]:
     выгрузке отдела кадров. Лист необязательный: без него остаются прежние
     правила — точное совпадение должности и окладная группа.
     """
+    def canonical(name: str) -> str:
+        """Название должности так, как оно записано в справочнике.
+
+        Должности сотрудников и так проходят через словарь синонимов —
+        «Вед. инженер» становится «ведущий инженер». Правила замещения шли
+        мимо него, и то же самое название в правиле не совпадало ни с чем:
+        правило молча не работало. Приводим одинаково.
+        """
+        key = normalize_position(name)
+        if position_index:
+            row = position_index.get(key)
+            if row is not None:
+                return normalize_position(row.position)
+        return key
+
     if SHEET_SUBSTITUTIONS not in xl.sheet_names:
         return {}
     df = _canonicalize_columns(
@@ -454,11 +471,11 @@ def _load_substitutions(xl: pd.ExcelFile) -> dict[str, frozenset[str]]:
     )
     rules: dict[str, set[str]] = {}
     for _, r in df.iterrows():
-        position = normalize_position(_clean_optional_text(r.get("position")) or "")
+        position = canonical(_clean_optional_text(r.get("position")) or "")
         if not position:
             continue
         for name in _split_substitutes(r.get("substitutes")):
-            key = normalize_position(name)
+            key = canonical(name)
             # Должность, замещающая сама себя, ничего не добавляет: точное
             # совпадение и так разрешено.
             if key and key != position:

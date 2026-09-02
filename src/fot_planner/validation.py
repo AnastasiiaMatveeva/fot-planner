@@ -72,8 +72,36 @@ def _defaults_used_conflicts(ctx: PlanningContext) -> list[ConflictRecord]:
     return out
 
 
+def _labor_rows_by_group_only(ctx: PlanningContext) -> list[ConflictRecord]:
+    """Строки трудоёмкости, заданные одной окладной группой без должности.
+
+    Окладная группа больше не решает, кто кого заменяет: группировка из
+    положения об оплате труда устарела, взаимозаменяемость задают правила
+    замещения. Значит такую строку теперь не закроет никто, и молчать об этом
+    нельзя — раньше она работала.
+    """
+    out: list[ConflictRecord] = []
+    for lp in ctx.labor_plans:
+        if lp.position or not lp.equivalence_group:
+            continue
+        out.append(
+            ConflictRecord(
+                code="LABOR_ROW_GROUP_ONLY_WARNING",
+                message=(
+                    f"Строка трудоёмкости задана окладной группой "
+                    f"«{lp.equivalence_group}» без должности. Окладная группа "
+                    f"в подборе сотрудников больше не участвует — укажите "
+                    f"должность или заведите правило замещения."
+                ),
+                contract_id=lp.contract_id,
+            )
+        )
+    return out
+
+
 def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
     conflicts: list[ConflictRecord] = _defaults_used_conflicts(ctx)
+    conflicts += _labor_rows_by_group_only(ctx)
     emp_ids = {e.id for e in ctx.employees}
     contract_ids = {c.id for c in ctx.contracts}
 
