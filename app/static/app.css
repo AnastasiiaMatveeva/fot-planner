@@ -1,15 +1,18 @@
 /* Палитра и типографика те же, что на схеме устройства сервиса: интерфейс и
    описание должны выглядеть одним продуктом. */
 :root{
-  --paper:#E9EEF4; --s0:#FFFFFF; --s1:#F4F7FA; --s2:#EBF0F5;
-  --ink:#152638; --ink2:#3D5165; --ink3:#5C6C7C;
-  --line:#D4DCE4; --line2:#E4E9EF;
-  --acc:#175FA9; --acc2:#0F4C8C; --accbg:#EAF2FA;
-  --ok:#207A4E; --okbg:#EDF5F0; --warn:#9A6A00; --warnbg:#FBF4E4;
-  --bad:#B3392B; --badbg:#F9ECEA;
-  --agent:#6D5BA8; --agentbg:#F0EDF7;
+  /* Белый фон и воздух вместо серо-голубой заливки и рамок: плотная сетка с
+     острыми углами читается как скриншот старой системы, а не как продукт. */
+  --paper:#FFFFFF; --s0:#FFFFFF; --s1:#F7F9FB; --s2:#EFF3F7;
+  --ink:#101828; --ink2:#475467; --ink3:#8A94A6;
+  --line:#E4E9F0; --line2:#EFF2F6;
+  --acc:#0EA5E9; --acc2:#0284C7; --accbg:#E8F6FE;
+  --ok:#12A150; --okbg:#EAF7F0; --warn:#B45309; --warnbg:#FEF6E7;
+  --bad:#DC2626; --badbg:#FEF0F0;
+  --agent:#7C5CFF; --agentbg:#F1EEFF;
+  --r:10px; --r2:8px; --r3:6px;
   --f:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
-  --m:Consolas,"Cascadia Mono",ui-monospace,monospace;
+  --m:"Cascadia Mono",Consolas,ui-monospace,monospace;
   color-scheme:light;
 }
 *{box-sizing:border-box}
@@ -18,14 +21,13 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
      display:flex;flex-direction:column}
 
 /* ── шапка ─────────────────────────────────────────────────── */
-.brandbar{display:flex;align-items:center;gap:14px;height:56px;flex:0 0 auto;
-          padding:0 clamp(10px,2.2vw,26px);background:#fff;
-          border-bottom:1px solid var(--line2);box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.brandbar{display:flex;align-items:center;gap:12px;height:60px;flex:0 0 auto;
+          padding:0 clamp(12px,2.2vw,24px);background:#fff;
+          border-bottom:1px solid var(--line2)}
 .brandbar .logo{height:20px;width:auto;flex:0 0 auto;display:block}
-.brandbar .bname{display:inline-flex;align-items:center;align-self:stretch;
-                 padding:0 18px;margin-left:6px;background:var(--acc);color:#fff;
-                 font-size:13.5px;font-weight:600;letter-spacing:.4px;
-                 text-transform:uppercase;white-space:nowrap}
+.brandbar .bname{display:inline-flex;align-items:center;padding:5px 13px;margin-left:8px;
+                 background:var(--accbg);color:var(--acc2);border-radius:999px;
+                 font-size:12.5px;font-weight:600;white-space:nowrap}
 .brandbar .spacer{flex:1}
 .brandbar .model{font-size:12.5px;color:var(--ink3);white-space:nowrap}
 
@@ -37,15 +39,14 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 
 /* ── дела ──────────────────────────────────────────────────── */
 .ctitle{display:flex;align-items:center;justify-content:space-between;
-        padding:14px 16px 8px;font-size:11.5px;font-weight:700;letter-spacing:.8px;
-        text-transform:uppercase;color:var(--ink3)}
-.ctitle button{width:24px;height:24px;border:1px solid var(--line);background:var(--s0);
-               color:var(--acc);font-size:16px;line-height:1;cursor:pointer;border-radius:2px}
+        padding:16px 14px 7px;font-size:12px;font-weight:600;color:var(--ink3)}
+.ctitle button{width:26px;height:26px;border:1px solid var(--line);background:var(--s0);
+               color:var(--acc);font-size:17px;line-height:1;cursor:pointer;border-radius:999px}
 .ctitle button:hover{border-color:var(--acc);background:var(--accbg)}
 .clist{display:flex;flex-direction:column}
-.case{padding:9px 16px;border-left:3px solid transparent;cursor:pointer;font-size:13px}
+.case{margin:0 6px 3px;padding:9px 11px;border-radius:var(--r2);cursor:pointer;font-size:13px}
 .case:hover{background:var(--s1)}
-.case.on{background:var(--accbg);border-left-color:var(--acc);font-weight:600;color:var(--acc2)}
+.case.on{background:var(--accbg);font-weight:600;color:var(--acc2)}
 .case small{display:block;color:var(--ink3);font-weight:400;font-size:11.5px}
 
 /* ── лента ─────────────────────────────────────────────────── */
@@ -63,21 +64,22 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 .msg{max-width:min(760px,92%);display:flex;flex-direction:column;gap:5px}
 .msg .head{font-size:11.5px;color:var(--ink3);display:flex;gap:8px;align-items:baseline}
 .msg .head b{font-weight:600;color:var(--agent)}
-.msg .bubble{background:var(--s0);border:1px solid var(--line2);padding:11px 14px;
-             border-radius:2px;white-space:pre-wrap}
+.msg .bubble{background:var(--s0);border:1px solid var(--line2);padding:12px 15px;
+             border-radius:var(--r);white-space:pre-wrap;
+             box-shadow:0 1px 2px rgba(16,24,40,.04)}
 .msg.me{align-self:flex-end;align-items:flex-end}
 .msg.me .bubble{background:var(--accbg);border-color:#CFE0F1}
 .msg.me .head b{color:var(--acc2)}
 .msg.sys .bubble{background:transparent;border:0;color:var(--ink3);padding:0;font-size:12.5px}
 
 /* вложения в реплике агента */
-.card{margin-top:8px;border:1px solid var(--line2);background:var(--s0)}
+.card{margin-top:9px;border:1px solid var(--line2);background:var(--s0);
+      border-radius:var(--r2);overflow:hidden}
 .card .ch{padding:7px 12px;border-bottom:1px solid var(--line2);font-size:12px;
           color:var(--ink3);background:var(--s1)}
 .card table{border-collapse:collapse;width:100%;font-size:12.5px}
-.card th{text-align:left;font-weight:600;color:var(--ink3);padding:6px 12px;
-         border-bottom:1px solid var(--line2);font-size:11.5px;text-transform:uppercase;
-         letter-spacing:.3px}
+.card th{text-align:left;font-weight:600;color:var(--ink3);padding:7px 13px;
+         border-bottom:1px solid var(--line2);font-size:12px}
 .card td{padding:5px 12px;border-bottom:1px solid var(--line2)}
 .card tr:last-child td{border-bottom:0}
 .card td.n{text-align:right;font-family:var(--m)}
@@ -94,28 +96,27 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 .ask .q b{color:var(--warn)}
 .ask .opts{display:flex;gap:8px;flex-wrap:wrap}
 .ask .opts button{font-size:13px;padding:6px 13px;border:1px solid var(--line);
-                  background:var(--s0);color:var(--ink);cursor:pointer;border-radius:2px}
+                  background:var(--s0);color:var(--ink);cursor:pointer;border-radius:var(--r2)}
 .ask .opts button:hover{border-color:var(--acc);color:var(--acc)}
 
 /* ── строка ввода ──────────────────────────────────────────── */
 .composer{flex:0 0 auto;display:flex;gap:10px;align-items:center;padding:12px 22px;
           background:var(--s0);border-top:1px solid var(--line2)}
 .composer .attach{width:34px;height:34px;display:grid;place-items:center;cursor:pointer;
-                  border:1px dashed var(--line);color:var(--ink3);font-size:19px;border-radius:2px}
+                  border:1px dashed var(--line);color:var(--ink3);font-size:19px;border-radius:var(--r2)}
 .composer .attach:hover{border-color:var(--acc);color:var(--acc);background:var(--accbg)}
 .composer input[type=text]{flex:1;font:14px var(--f);padding:9px 12px;border:1px solid var(--line);
-                           background:var(--s0);color:var(--ink);border-radius:2px}
+                           background:var(--s0);color:var(--ink);border-radius:var(--r2)}
 .composer input[type=text]:focus{outline:0;border-color:var(--acc)}
 .composer button{font:600 14px var(--f);padding:9px 18px;border:1px solid var(--acc);
-                 background:var(--acc);color:#fff;cursor:pointer;border-radius:2px}
+                 background:var(--acc);color:#fff;cursor:pointer;border-radius:var(--r2)}
 .composer button:disabled{border-color:var(--line);background:var(--s2);color:var(--ink3);cursor:default}
 
 /* ── правая колонка ────────────────────────────────────────── */
 .side section{padding:14px 16px;border-bottom:1px solid var(--line2)}
-.side h3{margin:0 0 10px;font-size:11.5px;font-weight:700;letter-spacing:.8px;
-         text-transform:uppercase;color:var(--ink3)}
+.side h3{margin:0 0 11px;font-size:12.5px;font-weight:600;color:var(--ink2)}
 .agents{display:flex;flex-direction:column;gap:1px;background:var(--line2);
-        border:1px solid var(--line2)}
+        border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden}
 .ag{background:var(--s0);padding:8px 11px;display:flex;gap:9px;align-items:flex-start;font-size:12.5px}
 .ag .n{font:600 11px var(--m);color:var(--ink3);flex:0 0 16px;padding-top:2px}
 .ag .b{flex:1;min-width:0}
@@ -148,7 +149,7 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 .run a{color:var(--acc);text-decoration:none}
 .run a:hover{text-decoration:underline}
 button.primary{width:100%;font:600 13.5px var(--f);padding:9px 14px;border:1px solid var(--acc);
-               background:var(--acc);color:#fff;cursor:pointer;border-radius:2px}
+               background:var(--acc);color:#fff;cursor:pointer;border-radius:var(--r2)}
 button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(--ink3);cursor:default}
 
 @media (max-width:1100px){
@@ -157,16 +158,16 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 }
 
 /* ── вкладки просмотра ─────────────────────────────────────── */
-.tabs{flex:0 0 auto;display:flex;gap:2px;padding:0 22px;background:var(--s0);
+.tabs{flex:0 0 auto;display:flex;gap:4px;padding:9px 22px;background:var(--s0);
       border-bottom:1px solid var(--line2);overflow-x:auto}
 /* display:flex перебивает встроенное [hidden] — гасим явно.
    Та же ловушка была у ленты и полосы вопроса. */
 .tabs[hidden]{display:none}
-.tabs .tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
-           margin-bottom:-1px;padding:8px 13px;font:600 13px var(--f);color:var(--ink3);
+.tabs .tab{appearance:none;background:none;border:1px solid transparent;padding:6px 13px;
+           border-radius:999px;font:600 13px var(--f);color:var(--ink3);
            cursor:pointer;white-space:nowrap}
-.tabs .tab:hover{color:var(--ink)}
-.tabs .tab.on{color:var(--acc);border-bottom-color:var(--acc)}
+.tabs .tab:hover{color:var(--ink);background:var(--s1)}
+.tabs .tab.on{color:var(--acc2);background:var(--accbg)}
 .tabs .tab .c{font-weight:400;color:var(--ink3);margin-left:5px;font-family:var(--m);font-size:11.5px}
 
 .view{flex:1;overflow:auto;padding:18px 22px;background:var(--s1)}
@@ -174,18 +175,19 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .view .vh{font-size:13px;color:var(--ink2);margin-bottom:12px}
 .view .vh b{color:var(--ink)}
 .view table{border-collapse:collapse;width:100%;background:var(--s0);
-            border:1px solid var(--line2);font-size:12.5px}
+            border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden;
+            font-size:13px}
 .view th{position:sticky;top:0;text-align:left;font-weight:600;color:var(--ink3);
-         padding:7px 11px;background:var(--s1);border-bottom:1px solid var(--line);
-         font-size:11.5px;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+         padding:9px 13px;background:var(--s1);border-bottom:1px solid var(--line);
+         font-size:12px;white-space:nowrap}
 .view th.n,.view td.n{text-align:right;font-family:var(--m)}
-.view td{padding:5px 11px;border-bottom:1px solid var(--line2);vertical-align:top}
+.view td{padding:8px 13px;border-bottom:1px solid var(--line2);vertical-align:top}
 .view tr:last-child td{border-bottom:0}
 .view tr:hover td{background:var(--s1)}
 .view .none{color:var(--ink3);padding:26px 0;text-align:center}
 .view .grp{margin-bottom:20px}
 .view .grp h4{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--ink)}
-.view .tag{display:inline-block;padding:1px 7px;border-radius:2px;font-size:11.5px;
+.view .tag{display:inline-block;padding:1px 7px;border-radius:var(--r2);font-size:11.5px;
            background:var(--s2);color:var(--ink2)}
 .view .tag.goz{background:var(--warnbg);color:var(--warn)}
 .view .scroller{max-height:100%;overflow:auto}
@@ -226,7 +228,7 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .dnote{font-size:11.5px;color:var(--ink3);margin-bottom:9px;line-height:1.45}
 .doc .nm{display:flex;align-items:flex-start;gap:6px;justify-content:space-between}
 .doc .del{flex:0 0 auto;width:18px;height:18px;line-height:1;border:1px solid transparent;
-          background:none;color:var(--ink3);font-size:15px;cursor:pointer;border-radius:2px;
+          background:none;color:var(--ink3);font-size:15px;cursor:pointer;border-radius:var(--r2);
           padding:0}
 .doc .del:hover{border-color:var(--bad);color:var(--bad);background:var(--badbg)}
 .doc .del[disabled]{opacity:.4;cursor:default}
@@ -247,26 +249,60 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .case{position:relative;padding-right:26px}
 .case .del{position:absolute;top:7px;right:7px;width:17px;height:17px;padding:0;
            line-height:1;border:1px solid transparent;background:none;color:var(--ink3);
-           font-size:14px;cursor:pointer;border-radius:2px;opacity:0}
+           font-size:14px;cursor:pointer;border-radius:var(--r2);opacity:0}
 .case:hover .del,.case.on .del{opacity:1}
 .case .del:hover{border-color:var(--bad);color:var(--bad);background:var(--badbg)}
 
 /* Реестр организации — отдельный пункт над списком планов */
 .cases .reg{display:block;width:calc(100% - 12px);margin:0 6px 4px;padding:8px 10px;
             border:1px solid var(--line2);background:var(--s0);text-align:left;
-            font:600 13px var(--f);color:var(--ink2);cursor:pointer;border-radius:2px}
+            font:600 13px var(--f);color:var(--ink2);cursor:pointer;border-radius:var(--r2)}
 .cases .reg:hover{border-color:var(--acc);color:var(--acc);background:var(--accbg)}
 .cases .reg.on{border-color:var(--acc);background:var(--accbg);color:var(--acc2)}
 .cases .reg small{display:block;font-weight:400;font-size:11.5px;color:var(--ink3);margin-top:1px}
 #regview .rsec{margin-bottom:22px}
-#regview .rsec > h3{margin:0 0 9px;font-size:12px;font-weight:700;letter-spacing:.6px;
-                    text-transform:uppercase;color:var(--ink3)}
-#regview .rtabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:14px}
-#regview .rtabs button{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
-                       margin-bottom:-1px;padding:7px 13px;font:600 13px var(--f);
-                       color:var(--ink3);cursor:pointer;white-space:nowrap}
-#regview .rtabs button.on{color:var(--acc);border-bottom-color:var(--acc)}
+#regview .rsec > h3{margin:0 0 9px;font-size:13px;font-weight:600;color:var(--ink2)}
+#regview .rtabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
+#regview .rtabs button{appearance:none;border:1px solid var(--line);background:var(--s0);
+                       padding:7px 14px;border-radius:999px;font:600 13px var(--f);
+                       color:var(--ink2);cursor:pointer;white-space:nowrap}
+#regview .rtabs button:hover{border-color:var(--acc);color:var(--acc)}
+#regview .rtabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+#regview .rtabs button.on .c{color:rgba(255,255,255,.8)}
 button.ghost{width:100%;margin-top:9px;padding:7px 12px;border:1px solid var(--line);
              background:var(--s0);color:var(--ink2);font:13px var(--f);cursor:pointer;
-             border-radius:2px}
+             border-radius:var(--r2)}
 button.ghost:hover{border-color:var(--acc);color:var(--acc);background:var(--accbg)}
+
+/* ── воздух и главное действие ─────────────────────────────── */
+/* Плотная сетка — вторая причина, по которой интерфейс читается макетом:
+   строки лепятся друг к другу, и глазу не за что зацепиться. */
+body{font-size:14.5px}
+.cases{padding-bottom:14px}
+.clist{gap:1px}
+.case{padding:11px 12px}
+.case small{margin-top:2px}
+.feed{padding:24px 26px;gap:18px}
+.stage{padding:13px 26px;gap:14px}
+.composer{padding:14px 26px;gap:12px}
+.composer input[type=text]{padding:11px 14px;border-radius:999px}
+.composer button{border-radius:999px;padding:10px 20px}
+.composer .attach{border-radius:999px;width:36px;height:36px}
+.side section{padding:16px 16px 18px}
+.ag{padding:10px 12px}
+.doc{padding:10px 11px;border-radius:var(--r3)}
+.view{padding:22px 26px}
+.tabs{padding:10px 26px}
+
+/* Главное действие видно и названо, а не спрятано плюсиком в заголовке. */
+.cases .cta{margin:10px 12px 0;padding:11px 14px;width:calc(100% - 24px);
+            border:0;border-radius:999px;background:var(--acc);color:#fff;
+            font:600 13.5px var(--f);cursor:pointer}
+.cases .cta:hover{background:var(--acc2)}
+.cases .reg{margin:0 12px 6px;width:calc(100% - 24px);padding:10px 12px;
+            border-radius:var(--r2)}
+
+/* Список планов прокручивается, главное действие остается на виду внизу. */
+.cases{overflow:hidden}
+.clist{flex:1;min-height:0;overflow:auto}
+.cases .cta{flex:0 0 auto;margin-bottom:12px}
