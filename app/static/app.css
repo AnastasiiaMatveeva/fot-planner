@@ -411,19 +411,21 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 /* Панель появляется только когда что-то отмечено: пустая полоса над
    таблицей занимала бы место и ничего не сообщала. */
 /* Панель действий занимает место ряда вкладок, а не добавляется над
-   таблицей: содержимое не съезжает, когда что-то отмечено. */
-.pickbar{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:8px 8px 8px 16px;
-         background:var(--acc);color:#fff;border-radius:999px;font-size:13px}
+   таблицей: содержимое не съезжает, когда что-то отмечено. Тон спокойный —
+   это рабочая панель, а не предупреждение; цветом выделено только само
+   опасное действие. */
+.pickbar{display:flex;align-items:center;gap:12px;margin-bottom:16px;
+         padding:7px 8px 7px 12px;background:var(--s1);border:1px solid var(--line);
+         border-radius:999px;font-size:13px;color:var(--ink2)}
 .pickbar .n{display:grid;place-items:center;min-width:22px;height:22px;padding:0 7px;
-            border-radius:999px;background:rgba(255,255,255,.2);
+            border-radius:999px;background:var(--accbg);color:var(--acc2);
             font:600 12px var(--f);font-variant-numeric:tabular-nums}
 .pickbar > span:nth-child(2){flex:1;min-width:0}
-.pickbar button{padding:7px 15px;border:0;border-radius:999px;font:600 13px var(--f);
-                cursor:pointer}
-.pickbar #pickdel{background:#fff;color:var(--bad)}
-.pickbar #pickdel:hover{background:var(--badbg)}
-.pickbar .x{background:rgba(255,255,255,.16);color:#fff}
-.pickbar .x:hover{background:rgba(255,255,255,.26)}
+.pickbar button{padding:6px 15px;border-radius:999px;font:600 13px var(--f);cursor:pointer}
+.pickbar #pickdel{border:1px solid var(--line);background:var(--s0);color:var(--bad)}
+.pickbar #pickdel:hover{border-color:var(--bad);background:var(--badbg)}
+.pickbar .x{border:0;background:none;color:var(--ink3);padding:6px 10px}
+.pickbar .x:hover{color:var(--ink)}
 
 /* ── номер и выбор строк ───────────────────────────────────── */
 /* Флажки в первом столбце видны всегда — так в Carbon и PatternFly:
