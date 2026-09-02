@@ -142,15 +142,18 @@ async def create_case(request: Request):
         db.add(case)
         db.commit()
         if not case.title:
-            case.title = "Дело № %d · план ФОТ на %d год" % (case.id, year)
+            # Несколько планов на один год отличаем номером, а не всегда.
+            same = db.query(Case).filter(Case.year == year, Case.id != case.id).count()
+            case.title = ("План ФОТ на %d год" % year if not same
+                          else "План ФОТ на %d год · вариант %d" % (year, same + 1))
             db.commit()
         agents.say(db, case.id,
-                   "Дело открыто. Загрузите документы по договорам: план работ, "
+                   "План открыт. Загрузите документы по договорам: план работ, "
                    "договоры с фондами и поступлениями, сотрудников с окладами "
                    "и ставками. Разберу и скажу, чего не хватает. "
                    "Приказы, положение об оплате труда и правила замещения "
                    "загружать не нужно — они уже в нормативной базе организации "
-                   "и общие для всех дел. Их достаточно обновлять, когда выходит "
+                   "и общие для всех планов. Их достаточно обновлять, когда выходит "
                    "новая редакция.", who="агент", agent="intake")
         return {"id": case.id}
     finally:
@@ -159,17 +162,17 @@ async def create_case(request: Request):
 
 @app.delete("/api/case/{case_id}")
 def delete_case(case_id: int):
-    """Убрать дело: ленту, работы агентов, вопросы и прогоны расчета.
+    """Убрать план: ленту, работы агентов, вопросы и прогоны расчета.
 
     Документы, договоры, штатка и нормативы остаются: они принадлежат
-    организации, а не плану, и нужны остальным делам. Отвязываем их от дела
-    до удаления, иначе каскад унес бы весь реестр вслед за одним планом.
+    организации и нужны остальным планам. Отвязываем их до удаления, иначе
+    каскад унес бы весь реестр вслед за одним планом.
     """
     db = session()
     try:
         case = db.get(Case, case_id)
         if case is None:
-            raise HTTPException(404, "дело не найдено")
+            raise HTTPException(404, "план не найден")
 
         for model in (Document, Employee, Contract, Substitution):
             db.query(model).filter_by(case_id=case_id).update({"case_id": None})
@@ -197,7 +200,7 @@ def get_case(case_id: int):
     try:
         case = db.get(Case, case_id)
         if case is None:
-            raise HTTPException(404, "дело не найдено")
+            raise HTTPException(404, "план не найден")
         return case_state(db, case)
     finally:
         db.close()
@@ -255,7 +258,7 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
     try:
         case = db.get(Case, case_id)
         if case is None:
-            raise HTTPException(404, "дело не найдено")
+            raise HTTPException(404, "план не найден")
         added = []
         for f in files:
             data = await f.read()
@@ -363,7 +366,7 @@ async def post_message(case_id: int, background: BackgroundTasks, request: Reque
     try:
         case = db.get(Case, case_id)
         if case is None:
-            raise HTTPException(404, "дело не найдено")
+            raise HTTPException(404, "план не найден")
         agents.say(db, case_id, text, who="экономист")
 
         # Реплика идет в модель вместе с состоянием дела: экономист чаще
@@ -697,7 +700,7 @@ async def solve(case_id: int, background: BackgroundTasks, request: Request):
     try:
         case = db.get(Case, case_id)
         if case is None:
-            raise HTTPException(404, "дело не найдено")
+            raise HTTPException(404, "план не найден")
         run = Run(case_id=case_id,
                   settings=json.dumps(body.get("settings") or {}, ensure_ascii=False))
         db.add(run)

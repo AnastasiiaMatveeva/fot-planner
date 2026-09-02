@@ -1,4 +1,4 @@
-/* Лента дела: опрос состояния и отрисовка.
+/* Лента плана: опрос состояния и отрисовка.
  *
  * Состояние целиком лежит на сервере, страница его только показывает. Поэтому
  * можно закрыть вкладку посреди разбора документа и вернуться через день —
@@ -42,16 +42,16 @@ function px(n, a, b, c) {
   return c;
 }
 
-/* ── дела ─────────────────────────────────────────────────── */
+/* ── планы ─────────────────────────────────────────────────── */
 function loadCases() {
   return api("/api/cases").then(function (rows) {
     $("caselist").innerHTML = rows.length ? rows.map(function (c) {
       return '<div class="case' + (c.id === caseId ? " on" : "") + '" data-id="' + c.id + '">' +
              '<button class="del" data-del="' + c.id +
-             '" title="Убрать дело: ленту, работы агентов и расчеты">×</button>' +
+             '" title="Убрать план: ленту, работы агентов и расчеты">×</button>' +
              esc(c.title) + "<small>" + esc(c.stage) + " · документов " + c.documents +
              "</small></div>";
-    }).join("") : '<div class="empty" style="padding:0 16px">Дел пока нет</div>';
+    }).join("") : '<div class="empty" style="padding:0 16px">Планов пока нет</div>';
     Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
       el.addEventListener("click", function (e) {
         if (e.target.closest(".del")) return;
@@ -67,9 +67,9 @@ function loadCases() {
 
 function removeCase(id) {
   var el = document.querySelector('.case[data-id="' + id + '"]');
-  var name = el ? el.querySelector("small").previousSibling.textContent.trim() : "дело";
+  var name = el ? el.querySelector("small").previousSibling.textContent.trim() : "план";
   if (!confirm("Убрать «" + name + "»?\n\n" +
-               "Лента, работы агентов и расчеты этого дела будут удалены. " +
+               "Лента, работы агентов и расчеты этого плана будут удалены. " +
                "Документы, договоры, штатка и нормативы останутся — " +
                "они общие для организации.")) return;
   api("/api/case/" + id, { method: "DELETE" }).then(function () {
@@ -538,7 +538,7 @@ function renderView() {
                 { v: x.p4 == null ? null : mo(x.p4), cls: "n" },
                 x.note];
       }),
-      "<b>Нормативная база организации</b>, общая для всех дел. " +
+      "<b>Нормативная база организации</b>, общая для всех планов. " +
       "Справочник должностей: <b>" + r.length + "</b> " +
       px(r.length, "позиция", "позиции", "позиций") +
       ". Прочерк — отдельной строки для должности в источнике нет. " +
@@ -551,7 +551,7 @@ function renderView() {
     el.innerHTML = table(
       ["должность", "может быть замещена"],
       s.map(function (x) { return [x.position, x.replaced_by]; }),
-      "<b>Нормативная база организации</b>, общая для всех дел. " +
+      "<b>Нормативная база организации</b>, общая для всех планов. " +
       "Правил замещения: <b>" + s.length + "</b>. Правила направленные — " +
       "кого кем можно заменить, не наоборот. В расчет пока не подставляются: " +
       "модель работает симметричными группами взаимозаменяемости.");
