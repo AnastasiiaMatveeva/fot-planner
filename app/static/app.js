@@ -163,8 +163,7 @@ function loadCases() {
                iconBtn("edit", "data-rename", c.id, "Переименовать", ICON_EDIT) +
                iconBtn("del", "data-del", c.id, "Удалить план", ICON_TRASH) +
              "</span>" +
-             '<span class="ttl">' + esc(c.title) + "</span>" +
-             "<small>" + esc(c.stage) + " · документов " + c.documents + "</small></div>";
+             '<span class="ttl">' + esc(c.title) + "</span></div>";
     }).join("") : '<div class="empty" style="padding:0 16px">Планов пока нет</div>';
     Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
       el.addEventListener("click", function (e) {
