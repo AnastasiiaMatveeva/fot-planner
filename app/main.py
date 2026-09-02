@@ -230,6 +230,11 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
             path = os.path.join(UPLOAD_DIR, safe)
             with open(path, "wb") as out:
                 out.write(data)
+            # Повторная загрузка того же файла — это исправленная редакция,
+            # а не второй документ. Прежнюю запись и все извлеченное из нее
+            # убираем, иначе реестр зарастает дублями.
+            for old_doc in db.query(Document).filter_by(name=name).all():
+                _forget_document(db, old_doc)
             doc = Document(case_id=case_id, name=name, path=path, size=len(data))
             db.add(doc)
             db.commit()
@@ -266,6 +271,28 @@ def all_documents():
         db.close()
 
 
+def _forget_document(db, doc):
+    """Убрать документ вместе со всем, что из него извлечено.
+
+    Данные помнят документ-источник, поэтому сирот не остается: ушел документ —
+    ушли его сотрудники, договоры и правила замещения.
+    """
+    gone = {
+        "сотрудников": db.query(Employee).filter_by(document_id=doc.id).delete(),
+        "договоров": db.query(Contract).filter_by(document_id=doc.id).delete(),
+        "правил замещения": db.query(Substitution).filter_by(document_id=doc.id).delete(),
+    }
+    path = doc.path
+    db.delete(doc)
+    db.commit()
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+    return gone
+
+
 @app.delete("/api/document/{doc_id}")
 def delete_document(doc_id: int):
     """Убрать документ вместе со всем, что из него извлечено.
@@ -279,24 +306,13 @@ def delete_document(doc_id: int):
         doc = db.get(Document, doc_id)
         if doc is None:
             raise HTTPException(404, "документ не найден")
-        gone = {
-            "сотрудников": db.query(Employee).filter_by(document_id=doc_id).delete(),
-            "договоров": db.query(Contract).filter_by(document_id=doc_id).delete(),
-            "правил замещения": db.query(Substitution).filter_by(document_id=doc_id).delete(),
-        }
-        name, case_id, path = doc.name, doc.case_id, doc.path
-        db.delete(doc)
-        db.commit()
+        name, case_id = doc.name, doc.case_id
+        gone = _forget_document(db, doc)
         if case_id:
             lost = ", ".join("%s %d" % (k, v) for k, v in gone.items() if v)
             agents.say(db, case_id,
                        "Удален документ «%s»%s." % (name, ", с ним " + lost if lost else ""),
                        who="экономист")
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except OSError:
-            pass
         return {"ok": True, "removed": gone}
     finally:
         db.close()

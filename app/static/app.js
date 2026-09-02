@@ -191,23 +191,62 @@ function renderAgents() {
 
 }
 
+var openDocs = {};
+
+function docCard(d) {
+  var cls = d.state === "разобран" ? "ok" : (d.state === "ожидает" ? "wait" : "bad");
+  return '<div class="doc ' + cls + '"><div class="nm">' + esc(d.name) +
+         '<button class="del" data-doc="' + d.id +
+         '" title="Убрать документ и все, что из него извлечено">×</button></div>' +
+         '<div class="mt">' + esc(d.kind || d.state) +
+         (d.summary ? " · " + esc(d.summary) : "") +
+         (d.by ? " · " + esc(d.by) : "") + "</div></div>";
+}
+
 function renderDocs() {
   var el = $("docs");
   if (!state.documents.length) {
     el.innerHTML = '<div class="empty">Документов пока нет. Приложите файлы кнопкой «+» внизу ленты.</div>';
     return;
   }
-  el.innerHTML = '<div class="dnote">Общие для организации: договор служит ' +
-    "всем планам своего срока, перезагружать его в каждый не нужно.</div>" +
-    state.documents.map(function (d) {
-      var cls = d.state === "разобран" ? "ok" : (d.state === "ожидает" ? "wait" : "bad");
-      return '<div class="doc ' + cls + '"><div class="nm">' + esc(d.name) +
-             '<button class="del" data-doc="' + d.id +
-             '" title="Убрать документ и все, что из него извлечено">×</button></div>' +
-             '<div class="mt">' + esc(d.kind || d.state) +
-             (d.summary ? " · " + esc(d.summary) : "") +
-             (d.by ? " · " + esc(d.by) : "") + "</div></div>";
-    }).join("");
+  // Документы разложены по видам: в общей куче двадцать договоров вперемешку
+  // с приказами не читаются. Разобранные группы свернуты — они в порядке,
+  // а требующие внимания раскрыты.
+  var groups = [
+    { key: "договоры", title: "По договорам",
+      is: function (d) { return d.kind === "документ по договору" ||
+                                d.kind === "штатное расписание"; } },
+    { key: "нормативы", title: "Нормативная база",
+      is: function (d) { return d.kind === "нормативный документ" ||
+                                d.kind === "правила замещения должностей"; } },
+    { key: "внимание", title: "Требуют внимания", open: true,
+      is: function (d) { return d.state !== "разобран"; } },
+  ];
+  var taken = {};
+  var html = '<div class="dnote">Общие для организации: договор служит всем ' +
+             "планам своего срока, перезагружать его в каждый не нужно.</div>";
+  groups.forEach(function (g) {
+    var list = state.documents.filter(function (d) {
+      if (taken[d.id]) return false;
+      var hit = g.key === "внимание" ? g.is(d) : (d.state === "разобран" && g.is(d));
+      if (hit) taken[d.id] = 1;
+      return hit;
+    });
+    if (!list.length) return;
+    var open = g.open || openDocs[g.key];
+    html += '<div class="dgrp"><button type="button" class="dgh' + (open ? " on" : "") +
+            '" data-grp="' + g.key + '">' + esc(g.title) +
+            '<span class="c">' + list.length + "</span></button>" +
+            (open ? list.map(docCard).join("") : "") + "</div>";
+  });
+  var rest = state.documents.filter(function (d) { return !taken[d.id]; });
+  if (rest.length) {
+    var open = openDocs["прочее"];
+    html += '<div class="dgrp"><button type="button" class="dgh' + (open ? " on" : "") +
+            '" data-grp="прочее">Прочее<span class="c">' + rest.length + "</span></button>" +
+            (open ? rest.map(docCard).join("") : "") + "</div>";
+  }
+  el.innerHTML = html;
 }
 
 function renderRuns() {
@@ -586,6 +625,13 @@ function tick() {
 
 /* ── события ──────────────────────────────────────────────── */
 $("docs").addEventListener("click", function (e) {
+  var g = e.target.closest(".dgh");
+  if (g) {
+    var k = g.getAttribute("data-grp");
+    openDocs[k] = !openDocs[k];
+    render();
+    return;
+  }
   var b = e.target.closest(".del");
   if (!b) return;
   var card = b.closest(".doc"), name = card.querySelector(".nm").textContent.replace(/×$/, "");
