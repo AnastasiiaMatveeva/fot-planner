@@ -755,35 +755,47 @@ function renderRegistry() {
   var body = "";
 
   if (regTab === "docs") {
-    body = table(["документ", "вид", "состояние", "чем разобрано", "что извлек", "загружен", ""],
+    // Состояние показываем точкой у названия, как в колонке контекста:
+    // отдельная колонка дублировала вид, а «чем разобрано» повторяло одно
+    // и то же в каждой строке — это видно в артефакте агента.
+    body = table(["документ", "вид", "что дал", "загружен", ""],
         docs.map(function (x) {
           var made = Object.keys(x.produced || {})
             .filter(function (k) { return x.produced[k]; })
             .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
-          return [x.name, x.kind, x.state, x.by, made || x.summary, x.uploaded,
-                  { v: '<button class="del" data-doc="' + x.id +
-                       '" title="Убрать документ и его данные">×</button>' }];
+          var bad = x.state !== "разобран";
+          return [
+            { v: '<span class="dstate ' + (bad ? "bad" : "ok") + '"></span>' + esc(x.name) },
+            x.kind,
+            { v: made ? esc(made)
+                      : (bad ? '<span class="warn">' + esc(x.summary || x.state) + "</span>"
+                             : esc(x.summary || "—")) },
+            x.uploaded,
+            { v: '<button class="del" data-doc="' + x.id +
+                 '" title="Убрать документ и его данные">×</button>' }];
         }));
   } else if (regTab === "ctr") {
     var c = d.contracts || [];
-    body = table(["шифр", "наименование", "номер", "вид", "ГОЗ", { t: "фонд, ₽" },
-                  "с", "по", "разрешенные выплаты", "источник"],
+    body = table(["шифр", "наименование", "ГОЗ", { t: "фонд, ₽" },
+                  "срок", "разрешенные выплаты"],
       c.map(function (x) {
-        return [x.code, x.name, x.number, x.kind,
+        var term = [x.from, x.to].filter(Boolean).join(" — ");
+        return [x.code, x.name,
                 { v: x.goz ? '<span class="tag goz">' + esc(x.goz) + "</span>" : null },
                 { v: x.fund == null ? null : mo(x.fund), cls: "n" },
-                x.from, x.to, x.kinds, x.source];
+                term, x.kinds];
       }),
       "");
   } else if (regTab === "emp") {
     var e = d.employees || [];
     body = table(["табельный", "ФИО", "должность", { t: "ставка" }, { t: "оклад, ₽" },
-                  "с", "по", "источник"],
+                  "срок"],
       e.map(function (x) {
+        var term = [x.from, x.to].filter(Boolean).join(" — ");
         return [x.code, x.fio, x.position,
                 { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
                 { v: x.salary == null ? null : mo(x.salary), cls: "n" },
-                x.from, x.to, x.source];
+                term];
       }),
       "");
   } else if (regTab === "ref") {
