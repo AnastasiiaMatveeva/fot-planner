@@ -216,11 +216,13 @@ def run_norms(db, case, doc):
 
     with working(db, case.id, "norms", "сверяет «%s» со справочником" % doc.name) as w:
         res = llm.parse(doc.path, doc.name)
-        by = "модель " + res["model"] if res.get("ok") else "разбор по заголовкам"
-        rows = res.get("rows") if res.get("ok") else None
-        if rows is None:
-            rows = reference.rows_by_anchors(doc.path)
-            by = "разбор по заголовкам"
+        if res.get("ok"):
+            rows, by = res["rows"], "модель " + res["model"]
+        elif docread.kind_of(doc.path) in (".xlsx", ".xlsm", ".xls"):
+            # Запасной разбор читает ячейки книги — PDF и .doc ему не по зубам.
+            rows, by = reference.rows_by_anchors(doc.path), "разбор по заголовкам"
+        else:
+            raise ValueError(res.get("error") or "документ не разобран")
         changes, unknown, seen = reference.compare(rows)
         doc.state = "разобран"
         doc.parsed_by = by

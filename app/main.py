@@ -28,6 +28,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
 
 import agents            # noqa: E402
+import chat              # noqa: E402
 import intake            # noqa: E402
 import llm               # noqa: E402
 import reference         # noqa: E402
@@ -238,7 +239,7 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
 
 # ── лента и вопросы ─────────────────────────────────────────────
 @app.post("/api/case/{case_id}/message")
-async def post_message(case_id: int, request: Request):
+async def post_message(case_id: int, background: BackgroundTasks, request: Request):
     body = await request.json()
     text = (body.get("text") or "").strip()
     if not text:
@@ -250,34 +251,146 @@ async def post_message(case_id: int, request: Request):
             raise HTTPException(404, "дело не найдено")
         agents.say(db, case_id, text, who="экономист")
 
-        pending = (db.query(Question).filter_by(case_id=case_id, answer=None)
-                   .order_by(Question.id).first())
-        if pending is not None:
-            pending.answer = text
-            pending.answered = now()
+        # Реплика идет в модель вместе с состоянием дела: экономист чаще
+        # спрашивает, чем отвечает, и квитанция «Принял» — не ответ.
+        with agents.working(db, case_id, "intake", "разбирает реплику") as w:
+            res = chat.reply(db, case, text)
+            w["detail"] = (res.get("reply") or res.get("error") or "")[:200]
             db.commit()
-            agents.say(db, case_id, "Принял: %s" % text, agent=pending.agent)
-            db.commit()
-            return {"ok": True, "answered": pending.id}
 
-        # Свободная реплика: правка данных тем же разбором, что и в демонстрации.
-        if case.passport:
-            passport = json.loads(case.passport)
-            with agents.working(db, case_id, "intake", "применяет правку") as w:
-                reply, changed, run = intake.extract.apply_chat(passport, text)
+        if not res.get("ok"):
+            # Без модели остается прежнее поведение: правка данных разбором.
+            if case.passport:
+                passport = json.loads(case.passport)
+                answer, changed, run = intake.extract.apply_chat(passport, text)
                 if changed:
                     case.passport = json.dumps(passport, ensure_ascii=False)
-                w["detail"] = reply[:200]
+                agents.say(db, case_id, answer, agent="intake")
                 db.commit()
-            agents.say(db, case_id, reply, agent="intake")
+                return {"ok": True, "solve": bool(run)}
+            agents.say(db, case_id,
+                       "Не могу ответить: %s. Загрузите документы — их разбор "
+                       "работает и без модели." % res.get("error"), agent="intake")
             db.commit()
-            return {"ok": True, "solve": bool(run)}
+            return {"ok": True}
 
-        agents.say(db, case_id,
-                   "Пока не с чем работать — загрузите документы, и я разберу их.",
-                   agent="intake")
+        agents.say(db, case_id, res["reply"], agent="intake")
         db.commit()
-        return {"ok": True}
+
+        action = res.get("action")
+        if action == "ответить на вопрос агента":
+            pending = (db.query(Question).filter_by(case_id=case_id, answer=None)
+                       .order_by(Question.id).first())
+            if pending is not None:
+                pending.answer = res.get("answer") or text
+                pending.answered = now()
+                db.commit()
+
+        # Действие модель предлагает, а выполняет сервис — и только если оно
+        # выполнимо. Иначе «не поняла» запускает расчет на пустом деле, а PDF
+        # уходит в разборщик книг Excel.
+        if action == "переразобрать документ" and res.get("document"):
+            doc = _find_document(db, case_id, res["document"])
+            if doc is None:
+                agents.say(db, case_id,
+                           "Не нашел документ «%s» в этом деле." % res["document"],
+                           agent="intake")
+                db.commit()
+                return {"ok": True, "action": "ничего"}
+            kind = res.get("as_kind")
+            owner = intake.OWNER.get(kind) if kind else None
+            refused = _cannot_reprocess(doc, owner)
+            if refused:
+                agents.say(db, case_id, refused, agent="intake")
+                db.commit()
+                return {"ok": True, "action": "ничего"}
+            background.add_task(_reprocess, case_id, doc.id, owner, kind)
+            return {"ok": True, "action": "переразбор", "document": doc.name}
+
+        if action == "запустить расчет":
+            if not case.passport:
+                agents.say(db, case_id,
+                           "Считать пока не на чем: в деле нет ни сотрудников, "
+                           "ни договоров. Загрузите документ со штатным расписанием "
+                           "и фондами договоров.", agent="intake")
+                db.commit()
+                return {"ok": True, "action": "ничего"}
+            run = Run(case_id=case_id, settings="{}")
+            db.add(run)
+            db.commit()
+            background.add_task(_solve, case_id, run.id, None)
+            return {"ok": True, "action": "расчет", "run_id": run.id}
+
+        return {"ok": True, "action": action}
+    finally:
+        db.close()
+
+
+#: Какие форматы умеет разбирать каждый обработчик. Разбор документов по
+#: договору и правил замещения читает ячейки книги, поэтому PDF и .doc туда
+#: отдавать бессмысленно — лучше сказать честно, чем уронить разбор.
+FORMATS = {
+    "intake": (".xlsx", ".xlsm", ".xls"),
+    "substitutions": (".xlsx", ".xlsm", ".xls"),
+    "norms": (".xlsx", ".xlsm", ".xls", ".pdf", ".doc", ".docx"),
+}
+
+
+def _cannot_reprocess(doc, owner):
+    """Причина, по которой переразбор невозможен, либо None."""
+    if owner is None:
+        return None
+    ext = os.path.splitext(doc.path)[1].lower()
+    allowed = FORMATS.get(owner, ())
+    if ext in allowed:
+        return None
+    return ("«%s» — файл %s, а такой вид документа читается только из %s. "
+            "Приложите его в этом формате или введите величины вручную."
+            % (doc.name, ext or "без расширения", ", ".join(allowed)))
+
+
+def _find_document(db, case_id, name):
+    """Документ по имени из ответа модели — она могла назвать его неточно."""
+    docs = db.query(Document).filter_by(case_id=case_id).all()
+    name = (name or "").strip().lower()
+    for d in docs:
+        if d.name.lower() == name:
+            return d
+    for d in docs:
+        if name and (name in d.name.lower() or d.name.lower() in name):
+            return d
+    return None
+
+
+def _reprocess(case_id: int, doc_id: int, owner: str | None, kind: str | None):
+    """Переразобрать документ, зная от экономиста, что это за вид."""
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        doc = db.get(Document, doc_id)
+        if not case or not doc:
+            return
+        if owner is None:
+            intake.handle_document(db, case, doc)
+            return
+        doc.kind = kind
+        doc.parsed_by = "вид указан экономистом"
+        db.commit()
+        try:
+            if owner == "norms":
+                intake.run_norms(db, case, doc)
+            elif owner == "substitutions":
+                intake.run_substitutions(db, case, doc)
+            else:
+                intake.run_intake(db, case, doc)
+        except Exception as exc:  # noqa: BLE001
+            doc.state = "не распознан"
+            doc.summary = str(exc)[:300]
+            db.commit()
+            agents.say(db, case_id,
+                       "Не смог разобрать «%s» как «%s». %s" % (doc.name, kind, exc),
+                       agent=owner)
+            db.commit()
     finally:
         db.close()
 
