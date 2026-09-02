@@ -30,7 +30,16 @@
 
   <!-- лента плана -->
   <main class="chat">
-    <div class="stage" id="stage"></div>
+    <!-- Заголовок объекта: название, состояние и главное действие
+         принадлежат плану, а не ленте. Лента — только один из его видов,
+         поэтому вкладки идут ниже заголовка. -->
+    <header class="phead">
+      <div class="row">
+        <h1 id="ptitle"></h1>
+        <button id="solve" class="primary" type="button">Рассчитать план</button>
+      </div>
+      <div class="meta" id="pmeta"></div>
+    </header>
 
     <!-- Лента — основной режим; остальные вкладки нужны, чтобы открыть и
          посмотреть данные, которые агенты собрали, и результат расчета. -->
@@ -47,13 +56,6 @@
 
     <div class="ask" id="ask" hidden></div>
 
-    <!-- Расчет — главное действие плана, поэтому кнопка стоит над строкой
-         ввода: там взгляд и так находится, прокрутки не требует и ничего
-         не выдавливает из строки. -->
-    <div class="act">
-      <span class="hint" id="solvehint"></span>
-      <button id="solve" class="primary" type="button">Рассчитать план</button>
-    </div>
 
     <form class="composer" id="composer">
       <label class="attach" title="Загрузить документы">

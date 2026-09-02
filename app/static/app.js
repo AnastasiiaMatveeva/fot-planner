@@ -360,25 +360,31 @@ function renderAsk() {
 function renderStage() {
   var c = state.case;
   var working = state.activities.filter(function (a) { return a.state === "идет"; });
+
+  $("ptitle").textContent = c.title;
+
+  // В строке под названием — состояние плана и то, чем сейчас занят сервис.
   var pill = working.length
     ? '<span class="pill work">агент работает: ' + esc(working[0].title) + "</span>"
-    : '<span class="pill' + (c.stage === "посчитано" ? " ok" : "") + '">' + esc(c.stage) + "</span>";
-  $("stage").innerHTML = "<b>" + esc(c.title) + "</b>" + pill +
-    '<span class="empty">обновлено ' + esc(c.updated) + "</span>";
-  // Рядом с кнопкой видно, чего она ждет, — а не только в подсказке.
-  $("solvehint").textContent = !c.has_data
-    ? "Для расчета нужны документы по договорам"
-    : (working.length ? "Идет работа агента" : "");
+    : '<span class="pill' + (c.stage === "посчитано" ? " ok" : "") + '">' +
+      esc(c.stage) + "</span>";
+  var why = !c.has_data ? "для расчета нужны документы по договорам" : "";
+  $("pmeta").innerHTML = pill +
+    "<span>обновлено " + esc(c.updated) + "</span>" +
+    (why ? "<span>· " + esc(why) + "</span>" : "");
+
   $("solve").disabled = !c.has_data || working.length > 0;
 }
 
+/* Секции не должны гасить друг друга: сбой в одной — не повод оставить
+   весь экран пустым. */
 function safely(name, fn) {
   try { fn(); } catch (e) { console.error("не отрисовалось: " + name, e); }
 }
 
 function renderTabs() {
   var c = (state.case && state.case.counts) || {};
-  var n = { emp: c.employees, ctr: c.contracts, sub: c.substitutions };
+  var n = {};
   Array.prototype.forEach.call(document.querySelectorAll(".tabs .tab"), function (b) {
     var k = b.getAttribute("data-view");
     var base = (b.getAttribute("data-label")
@@ -390,14 +396,12 @@ function renderTabs() {
 function render() {
   if (!state) return;
   safely("вкладки", renderTabs);
-  safely("шапка дела", renderStage);
+  safely("заголовок плана", renderStage);
   if (view === "feed") safely("лента", renderFeed);
   safely("агенты", renderAgents);
   safely("документы", renderDocs);
   safely("расчеты", renderRuns);
   safely("вопрос", renderAsk);
-  // Чем разобран документ, видно в его карточке и в артефакте агента —
-  // в шапке эта строка только шумела.
   wire();
 }
 
@@ -710,7 +714,7 @@ function openRegistry() {
   $("view").hidden = true;
   $("regview").hidden = false;
   document.querySelector(".tabs").hidden = true;
-  document.querySelector(".act").hidden = true;
+  document.querySelector(".phead").hidden = true;
   $("openreg").classList.add("on");
   Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
     el.classList.remove("on");
@@ -723,7 +727,7 @@ function leaveRegistry() {
   inRegistry = false;
   $("regview").hidden = true;
   document.querySelector(".tabs").hidden = false;
-  document.querySelector(".act").hidden = false;
+  document.querySelector(".phead").hidden = false;
   $("openreg").classList.remove("on");
 }
 
@@ -833,7 +837,7 @@ function tick() {
       if (inRegistry) {
         $("feed").hidden = true; $("view").hidden = true; $("regview").hidden = false;
         document.querySelector(".tabs").hidden = true;
-        document.querySelector(".act").hidden = true;
+        document.querySelector(".phead").hidden = true;
       } else if (view !== "feed") {
         $("feed").hidden = true; $("view").hidden = false;
       }
