@@ -318,3 +318,17 @@ body{font-size:14.5px}
 body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .stage b,.view .grp h4,.msg .head b{letter-spacing:-.01em}
 .view td.n,.view th.n,.card td.n,.ar .av,.run,.doc .mt{font-variant-numeric:tabular-nums}
+
+/* ── окно подтверждения ────────────────────────────────────── */
+.modal{position:fixed;inset:0;z-index:50;display:grid;place-items:center;
+       background:rgba(16,24,40,.32);padding:20px}
+.modal .box{background:var(--s0);border-radius:var(--r);max-width:420px;width:100%;
+            padding:20px 22px;box-shadow:0 12px 32px rgba(16,24,40,.18)}
+.modal h4{margin:0 0 8px;font-size:16px;font-weight:600;color:var(--ink)}
+.modal p{margin:0 0 18px;font-size:13.5px;line-height:1.5;color:var(--ink2)}
+.modal .btns{display:flex;gap:9px;justify-content:flex-end}
+.modal .btns button{padding:9px 17px;border-radius:999px;font:600 13.5px var(--f);cursor:pointer}
+.modal .btns .no{border:1px solid var(--line);background:var(--s0);color:var(--ink2)}
+.modal .btns .no:hover{border-color:var(--ink3);color:var(--ink)}
+.modal .btns .yes{border:1px solid var(--bad);background:var(--bad);color:#fff}
+.modal .btns .yes:hover{filter:brightness(.94)}

@@ -42,6 +42,45 @@ function px(n, a, b, c) {
   return c;
 }
 
+
+/* ── подтверждение действия ───────────────────────────────────
+ * Системный confirm() здесь не годится: встроенные браузеры и часть
+ * корпоративных политик молча отклоняют такие диалоги, и удаление просто
+ * не происходит — пользователь жмет крестик, а ничего не меняется.
+ * Свое окно работает везде одинаково и говорит, что именно будет удалено.
+ */
+function ask(title, detail, okText) {
+  return new Promise(function (resolve) {
+    var back = document.createElement("div");
+    back.className = "modal";
+    back.innerHTML =
+      '<div class="box" role="dialog" aria-modal="true">' +
+        "<h4>" + esc(title) + "</h4>" +
+        (detail ? "<p>" + esc(detail) + "</p>" : "") +
+        '<div class="btns">' +
+          '<button type="button" class="no">Отмена</button>' +
+          '<button type="button" class="yes">' + esc(okText || "Убрать") + "</button>" +
+        "</div>" +
+      "</div>";
+    document.body.appendChild(back);
+
+    function close(answer) {
+      document.removeEventListener("keydown", onKey);
+      back.remove();
+      resolve(answer);
+    }
+    function onKey(e) {
+      if (e.key === "Escape") close(false);
+      if (e.key === "Enter") close(true);
+    }
+    back.querySelector(".no").onclick = function () { close(false); };
+    back.querySelector(".yes").onclick = function () { close(true); };
+    back.onclick = function (e) { if (e.target === back) close(false); };
+    document.addEventListener("keydown", onKey);
+    back.querySelector(".yes").focus();
+  });
+}
+
 /* ── планы ─────────────────────────────────────────────────── */
 function loadCases() {
   return api("/api/cases").then(function (rows) {
@@ -68,10 +107,15 @@ function loadCases() {
 function removeCase(id) {
   var el = document.querySelector('.case[data-id="' + id + '"]');
   var name = el ? el.querySelector("small").previousSibling.textContent.trim() : "план";
-  if (!confirm("Убрать «" + name + "»?\n\n" +
-               "Лента, работы агентов и расчеты этого плана будут удалены. " +
-               "Документы, договоры, штатка и нормативы останутся — " +
-               "они общие для организации.")) return;
+  ask("Убрать «" + name + "»?",
+      "Лента, работы агентов и расчеты этого плана будут удалены. Документы, " +
+      "договоры, штатное расписание и нормативы останутся — они общие для " +
+      "организации.", "Убрать план").then(function (yes) {
+    if (yes) doRemoveCase(id);
+  });
+}
+
+function doRemoveCase(id) {
   api("/api/case/" + id, { method: "DELETE" }).then(function () {
     if (caseId === id) { caseId = null; state = null; }
     return loadCases();
@@ -803,10 +847,14 @@ $("regview").addEventListener("click", function (e) {
   if (!b) return;
   var row = b.closest("tr");
   var name = row ? row.children[1].textContent : "документ";
-  if (!confirm("Убрать «" + name + "» и все данные, извлеченные из него?")) return;
-  b.disabled = true;
-  api("/api/document/" + b.getAttribute("data-doc"), { method: "DELETE" })
-    .then(loadRegistry).then(tick);
+  ask("Убрать «" + name + "»?",
+      "Вместе с документом уйдут данные, извлеченные из него: сотрудники, " +
+      "договоры и правила замещения.", "Убрать документ").then(function (yes) {
+    if (!yes) return;
+    b.disabled = true;
+    api("/api/document/" + b.getAttribute("data-doc"), { method: "DELETE" })
+      .then(loadRegistry).then(tick);
+  });
 });
 
 $("docs").addEventListener("click", function (e) {
@@ -820,9 +868,13 @@ $("docs").addEventListener("click", function (e) {
   var b = e.target.closest(".del");
   if (!b) return;
   var card = b.closest(".doc"), name = card.querySelector(".nm").textContent.replace(/×$/, "");
-  if (!confirm("Убрать «" + name.trim() + "» и все данные, извлеченные из него?")) return;
-  b.disabled = true;
-  api("/api/document/" + b.getAttribute("data-doc"), { method: "DELETE" }).then(tick);
+  ask("Убрать «" + name.trim() + "»?",
+      "Вместе с документом уйдут данные, извлеченные из него: сотрудники, " +
+      "договоры и правила замещения.", "Убрать документ").then(function (yes) {
+    if (!yes) return;
+    b.disabled = true;
+    api("/api/document/" + b.getAttribute("data-doc"), { method: "DELETE" }).then(tick);
+  });
 });
 
 $("agents").addEventListener("click", function (e) {
