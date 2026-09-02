@@ -62,6 +62,8 @@ function newCase() {
 function open(id) {
   caseId = id;
   lastSig = "";
+  vdata = null; vresult = null; vrun = null;
+  setView("feed");
   loadCases();
   tick();
 }
@@ -239,10 +241,22 @@ function safely(name, fn) {
   try { fn(); } catch (e) { console.error("не отрисовалось: " + name, e); }
 }
 
+function renderTabs() {
+  var c = (state.case && state.case.counts) || {};
+  var n = { emp: c.employees, ctr: c.contracts };
+  Array.prototype.forEach.call(document.querySelectorAll(".tabs .tab"), function (b) {
+    var k = b.getAttribute("data-view");
+    var base = (b.getAttribute("data-label")
+             || (b.setAttribute("data-label", b.textContent), b.textContent));
+    b.innerHTML = esc(base) + (n[k] ? '<span class="c">' + n[k] + "</span>" : "");
+  });
+}
+
 function render() {
   if (!state) return;
+  safely("вкладки", renderTabs);
   safely("шапка дела", renderStage);
-  safely("лента", renderFeed);
+  if (view === "feed") safely("лента", renderFeed);
   safely("агенты", renderAgents);
   safely("документы", renderDocs);
   safely("расчеты", renderRuns);
@@ -293,6 +307,196 @@ function solve() {
   }).then(tick);
 }
 
+
+/* ── просмотр данных ──────────────────────────────────────────
+ * Лента — основной режим работы, но собранное должно открываться и читаться:
+ * штатное расписание, договоры, справочник, план, освоение, ограничения.
+ * Входные данные приходят из базы, результат — из файла, который сохранил
+ * решатель: для ГОЗ важно показывать ровно то, на чем построен план.
+ */
+var view = "feed", vdata = null, vresult = null, vrun = null;
+
+var MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
+              "июл", "авг", "сен", "окт", "ноя", "дек"];
+var KINDS = { oklad: "оклад", okl: "оклад", prk: "приказ",
+              k120: "120", k122: "122", k124: "124", k152: "152" };
+function monthName(m) { return MONTHS[m] || MONTHS[m - 1] || m; }
+
+function setView(v) {
+  view = v;
+  Array.prototype.forEach.call(document.querySelectorAll(".tabs .tab"), function (b) {
+    b.classList.toggle("on", b.getAttribute("data-view") === v);
+  });
+  $("feed").hidden = v !== "feed";
+  $("view").hidden = v === "feed";
+  if (v === "feed") return;
+  $("view").innerHTML = '<div class="none">Загружаю…</div>';
+  var need = (v === "emp" || v === "ctr" || v === "ref")
+    ? api("/api/case/" + caseId + "/data").then(function (d) { vdata = d; })
+    : loadResult();
+  need.then(renderView).catch(function (e) {
+    $("view").innerHTML = '<div class="none">' + esc(e.message || "не загрузилось") + "</div>";
+  });
+}
+
+function loadResult() {
+  var ok = (state.runs || []).filter(function (r) { return r.status === "OPTIMAL"; })[0];
+  if (!ok) { vresult = null; vrun = null; return Promise.resolve(); }
+  if (vrun === ok.id) return Promise.resolve();
+  return api("/api/case/" + caseId + "/run/" + ok.id + "/result").then(function (d) {
+    vresult = d; vrun = ok.id;
+  });
+}
+
+function table(head, rows, note) {
+  var h = note ? '<div class="vh">' + note + "</div>" : "";
+  if (!rows.length) return h + '<div class="none">Пусто</div>';
+  h += '<table><thead><tr>' +
+       head.map(function (c) {
+         return (typeof c === "object" ? '<th class="n">' + esc(c.t) : "<th>" + esc(c)) + "</th>";
+       }).join("") + "</tr></thead><tbody>";
+  h += rows.map(function (r) {
+    return "<tr>" + r.map(function (c) {
+      return (c && typeof c === "object")
+        ? '<td class="' + (c.cls || "") + '">' + (c.v == null ? "—" : c.v) + "</td>"
+        : "<td>" + (c == null || c === "" ? "—" : esc(c)) + "</td>";
+    }).join("") + "</tr>";
+  }).join("");
+  return h + "</tbody></table>";
+}
+
+function renderView() {
+  var el = $("view");
+
+  if (view === "emp") {
+    var e = (vdata && vdata.employees) || [];
+    el.innerHTML = table(
+      ["табельный", "ФИО", "должность", { t: "ставка" }, { t: "оклад, ₽" },
+       "с", "по", "источник"],
+      e.map(function (x) {
+        return [x.code, x.fio, x.position,
+                { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
+                { v: x.salary == null ? null : mo(x.salary), cls: "n" },
+                x.from, x.to, x.source];
+      }),
+      "Штатное расписание дела: <b>" + e.length + "</b> " +
+      px(e.length, "сотрудник", "сотрудника", "сотрудников") +
+      ". Собрано агентом из загруженных документов.");
+    return;
+  }
+
+  if (view === "ctr") {
+    var c = (vdata && vdata.contracts) || [];
+    el.innerHTML = table(
+      ["шифр", "наименование", "номер", "вид", "ГОЗ", { t: "фонд, ₽" },
+       "разрешенные выплаты", "источник"],
+      c.map(function (x) {
+        return [x.code, x.name, x.number, x.kind,
+                { v: x.goz ? '<span class="tag goz">' + esc(x.goz) + "</span>" : null },
+                { v: x.fund == null ? null : mo(x.fund), cls: "n" },
+                x.kinds, x.source];
+      }),
+      "Договоры дела: <b>" + c.length + "</b>.");
+    return;
+  }
+
+  if (view === "ref") {
+    var r = (vdata && vdata.reference) || [];
+    el.innerHTML = table(
+      ["должность", "категория", { t: "оклад за 1,0 ставки, ₽" }, { t: "П2556, ₽" },
+       { t: "П4, ₽" }, "примечание"],
+      r.map(function (x) {
+        return [x.pos, x.cat,
+                { v: x.sal == null ? null : mo(x.sal), cls: "n" },
+                { v: x.p2556 == null ? null : mo(x.p2556), cls: "n" },
+                { v: x.p4 == null ? null : mo(x.p4), cls: "n" },
+                x.note];
+      }),
+      "Справочник должностей: <b>" + r.length + "</b> " +
+      px(r.length, "позиция", "позиции", "позиций") +
+      ". Прочерк — отдельной строки для должности в источнике нет.");
+    return;
+  }
+
+  if (!vresult) {
+    el.innerHTML = '<div class="none">Расчет еще не выполнялся — смотреть нечего.</div>';
+    return;
+  }
+
+  if (view === "plan") {
+    var byEmp = {}, names = {};
+    vresult.plan.forEach(function (p) { (byEmp[p.emp] = byEmp[p.emp] || []).push(p); });
+    vresult.employees.forEach(function (x) { names[x.code] = x.fio || x.code; });
+    var total = vresult.plan.reduce(function (a, p) { return a + p.sum; }, 0);
+    el.innerHTML = '<div class="vh">План выплат, прогон № ' + vrun + ": <b>" +
+      vresult.plan.length + "</b> " +
+      px(vresult.plan.length, "строка", "строки", "строк") +
+      ", всего <b>" + mo(total) + " ₽</b>.</div>" +
+      Object.keys(byEmp).map(function (code) {
+        var rows = byEmp[code].slice().sort(function (a, b) { return a.m - b.m; });
+        var sum = rows.reduce(function (a, p) { return a + p.sum; }, 0);
+        return '<div class="grp"><h4>' + esc(names[code] || code) + " · " + mo(sum) + " ₽</h4>" +
+               table(["месяц", "договор", "вид", { t: "сумма, ₽" }],
+                 rows.map(function (p) {
+                   return [monthName(p.m), p.ctr, KINDS[p.kind] || p.kind,
+                           { v: mo(p.sum), cls: "n" }];
+                 })) + "</div>";
+      }).join("");
+    return;
+  }
+
+  if (view === "cash") {
+    var codes = Object.keys(vresult.cash || {});
+    el.innerHTML = '<div class="vh">Освоение по договорам: поступления, выплаты ' +
+      "и остаток кассы по месяцам. Остаток не может уходить в минус и переносится " +
+      "только вперед.</div>" +
+      codes.map(function (code) {
+        var c = vresult.cash[code] || {};
+        var keys = Object.keys(c);                 // «Поступление», «Выплаты», «Остаток»
+        var len = keys.length ? (c[keys[0]] || []).length : 0;
+        var rows = [];
+        for (var i = 0; i < len; i++) {
+          var row = [monthName(i)];
+          keys.forEach(function (k) { row.push({ v: mo((c[k] || [])[i] || 0), cls: "n" }); });
+          rows.push(row);
+        }
+        return '<div class="grp"><h4>' + esc(code) + "</h4>" +
+               table(["месяц"].concat(keys.map(function (k) { return { t: k + ", ₽" }; })),
+                     rows) + "</div>";
+      }).join("");
+    return;
+  }
+
+  if (view === "lim") {
+    var lim = vresult.limits || [], warn = vresult.warnings || [], sum = vresult.summary || [];
+    el.innerHTML =
+      '<div class="grp"><h4>Итоги расчета</h4>' +
+      table(["показатель", "значение"],
+        sum.map(function (s) {
+          if (!Array.isArray(s)) return [String(s), ""];
+          var v = s.slice(1).filter(function (x) { return x != null && x !== ""; });
+          // Крупные суммы читаются только с разделителями разрядов.
+          return [String(s[0]), v.map(function (x) {
+            return (typeof x === "number" && Math.abs(x) >= 10000) ? mo(x) : String(x);
+          }).join(" · ")];
+        })) + "</div>" +
+      '<div class="grp"><h4>Связывающие ограничения</h4>' +
+      (lim.length
+        ? table(["ограничение", "где", "значение"],
+            lim.map(function (l) {
+              return Array.isArray(l) ? l.map(String) : [String(l), "", ""];
+            }))
+        : '<div class="none">Решатель не отметил ни одного ограничения связывающим.</div>') +
+      "</div>" +
+      '<div class="grp"><h4>Предупреждения</h4>' +
+      (warn.length
+        ? table(["сообщение"], warn.map(function (w) {
+            return [Array.isArray(w) ? w.join(" · ") : String(w)];
+          }))
+        : '<div class="none">Предупреждений нет.</div>') + "</div>";
+  }
+}
+
 /* ── опрос ────────────────────────────────────────────────── */
 function tick() {
   if (!caseId) return Promise.resolve();
@@ -310,6 +514,11 @@ function tick() {
 }
 
 /* ── события ──────────────────────────────────────────────── */
+$("tabs").addEventListener("click", function (e) {
+  var b = e.target.closest(".tab");
+  if (b) setView(b.getAttribute("data-view"));
+});
+
 $("newcase").addEventListener("click", newCase);
 
 $("files").addEventListener("change", function () {

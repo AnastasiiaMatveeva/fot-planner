@@ -66,6 +66,8 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 .stage .pill.work{background:var(--agentbg);color:var(--agent)}
 
 .feed{flex:1;overflow:auto;padding:20px 22px;display:flex;flex-direction:column;gap:14px}
+/* display:flex перебивает встроенное [hidden] — гасим явно */
+.feed[hidden]{display:none}
 .msg{max-width:min(760px,92%);display:flex;flex-direction:column;gap:5px}
 .msg .head{font-size:11.5px;color:var(--ink3);display:flex;gap:8px;align-items:baseline}
 .msg .head b{font-weight:600;color:var(--agent)}
@@ -161,3 +163,34 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
   .shell{grid-template-columns:1fr}
   .cases,.side{display:none}
 }
+
+/* ── вкладки просмотра ─────────────────────────────────────── */
+.tabs{flex:0 0 auto;display:flex;gap:2px;padding:0 22px;background:var(--s0);
+      border-bottom:1px solid var(--line2);overflow-x:auto}
+.tabs .tab{appearance:none;background:none;border:0;border-bottom:2px solid transparent;
+           margin-bottom:-1px;padding:8px 13px;font:600 13px var(--f);color:var(--ink3);
+           cursor:pointer;white-space:nowrap}
+.tabs .tab:hover{color:var(--ink)}
+.tabs .tab.on{color:var(--acc);border-bottom-color:var(--acc)}
+.tabs .tab .c{font-weight:400;color:var(--ink3);margin-left:5px;font-family:var(--m);font-size:11.5px}
+
+.view{flex:1;overflow:auto;padding:18px 22px;background:var(--s1)}
+.view[hidden]{display:none}
+.view .vh{font-size:13px;color:var(--ink2);margin-bottom:12px}
+.view .vh b{color:var(--ink)}
+.view table{border-collapse:collapse;width:100%;background:var(--s0);
+            border:1px solid var(--line2);font-size:12.5px}
+.view th{position:sticky;top:0;text-align:left;font-weight:600;color:var(--ink3);
+         padding:7px 11px;background:var(--s1);border-bottom:1px solid var(--line);
+         font-size:11.5px;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.view th.n,.view td.n{text-align:right;font-family:var(--m)}
+.view td{padding:5px 11px;border-bottom:1px solid var(--line2);vertical-align:top}
+.view tr:last-child td{border-bottom:0}
+.view tr:hover td{background:var(--s1)}
+.view .none{color:var(--ink3);padding:26px 0;text-align:center}
+.view .grp{margin-bottom:20px}
+.view .grp h4{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--ink)}
+.view .tag{display:inline-block;padding:1px 7px;border-radius:2px;font-size:11.5px;
+           background:var(--s2);color:var(--ink2)}
+.view .tag.goz{background:var(--warnbg);color:var(--warn)}
+.view .scroller{max-height:100%;overflow:auto}

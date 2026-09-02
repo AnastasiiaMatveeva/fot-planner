@@ -63,6 +63,10 @@ class Case(Base):
     # памяти процесса: экономист уходит и возвращается через день.
     passport: Mapped[str | None] = mapped_column(Text, default=None)
 
+    employees: Mapped[list["Employee"]] = relationship(back_populates="case",
+                                                       cascade="all, delete-orphan")
+    contracts: Mapped[list["Contract"]] = relationship(back_populates="case",
+                                                       cascade="all, delete-orphan")
     documents: Mapped[list["Document"]] = relationship(back_populates="case",
                                                        cascade="all, delete-orphan")
     messages: Mapped[list["Message"]] = relationship(back_populates="case",
@@ -73,6 +77,49 @@ class Case(Base):
                                                        cascade="all, delete-orphan")
     runs: Mapped[list["Run"]] = relationship(back_populates="case",
                                              cascade="all, delete-orphan")
+
+
+class Employee(Base):
+    """Строка штатного расписания.
+
+    Отдельной таблицей, а не полем в деле: это то, что экономист открывает и
+    просматривает чаще всего, по этому же списку сверяют ставки и оклады.
+    Собирается агентом из документов, дальше живет в деле самостоятельно.
+    """
+
+    __tablename__ = "employees"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
+    code: Mapped[str] = mapped_column(String(60))
+    fio: Mapped[str | None] = mapped_column(String(200), default=None)
+    position: Mapped[str | None] = mapped_column(String(200), default=None)
+    rate: Mapped[float | None] = mapped_column(Float, default=None)
+    salary: Mapped[float | None] = mapped_column(Float, default=None)
+    date_from: Mapped[str | None] = mapped_column(String(20), default=None)
+    date_to: Mapped[str | None] = mapped_column(String(20), default=None)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+
+    case: Mapped[Case] = relationship(back_populates="employees")
+
+
+class Contract(Base):
+    """Договор: фонд, признак ГОЗ, разрешенные виды выплат."""
+
+    __tablename__ = "contracts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
+    code: Mapped[str] = mapped_column(String(60))
+    name: Mapped[str | None] = mapped_column(String(300), default=None)
+    number: Mapped[str | None] = mapped_column(String(120), default=None)
+    kind: Mapped[str | None] = mapped_column(String(60), default=None)
+    goz: Mapped[str | None] = mapped_column(String(10), default=None)
+    fund: Mapped[float | None] = mapped_column(Float, default=None)
+    kinds: Mapped[str | None] = mapped_column(String(200), default=None)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+
+    case: Mapped[Case] = relationship(back_populates="contracts")
 
 
 class Document(Base):

@@ -32,7 +32,7 @@ import intake            # noqa: E402
 import llm               # noqa: E402
 import reference         # noqa: E402
 from db import (         # noqa: E402
-    Activity, Case, Document, Message, Question, Run,
+    Activity, Case, Contract, Document, Employee, Message, Question, Run,
     RESULT_DIR, UPLOAD_DIR, init_db, now, session,
 )
 
@@ -84,7 +84,10 @@ def case_state(db, case):
     return {
         "case": {"id": case.id, "title": case.title, "year": case.year,
                  "stage": case.stage, "updated": _dt(case.updated),
-                 "has_data": bool(case.passport)},
+                 "has_data": bool(case.passport),
+                 "counts": {
+                     "employees": db.query(Employee).filter_by(case_id=case.id).count(),
+                     "contracts": db.query(Contract).filter_by(case_id=case.id).count()}},
         "documents": [{"id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
                        "by": d.parsed_by, "summary": d.summary,
                        "uploaded": _dt(d.uploaded), "size": d.size} for d in docs],
@@ -260,6 +263,51 @@ async def answer_question(case_id: int, qid: int, request: Request):
         return {"ok": True}
     finally:
         db.close()
+
+
+# ── просмотр данных ─────────────────────────────────────────────
+@app.get("/api/case/{case_id}/data")
+def case_data(case_id: int):
+    """Входные данные дела: то, что экономист открывает и читает."""
+    db = session()
+    try:
+        emps = (db.query(Employee).filter_by(case_id=case_id)
+                .order_by(Employee.code).all())
+        ctrs = (db.query(Contract).filter_by(case_id=case_id)
+                .order_by(Contract.code).all())
+        return {
+            "employees": [{"code": e.code, "fio": e.fio, "position": e.position,
+                           "rate": e.rate, "salary": e.salary,
+                           "from": e.date_from, "to": e.date_to,
+                           "source": e.source} for e in emps],
+            "contracts": [{"code": c.code, "name": c.name, "number": c.number,
+                           "kind": c.kind, "goz": c.goz, "fund": c.fund,
+                           "kinds": c.kinds, "source": c.source} for c in ctrs],
+            "reference": reference.read_rows(),
+        }
+    finally:
+        db.close()
+
+
+@app.get("/api/case/{case_id}/run/{run_id}/result")
+def run_result(case_id: int, run_id: int):
+    """Результат прогона: план, освоение, сводка, ограничения.
+
+    Читается из файла, который сохранил решатель, а не пересчитывается: для
+    ГОЗ важно показывать ровно то, на чем построен план.
+    """
+    db = session()
+    try:
+        run = db.get(Run, run_id)
+        if run is None or run.case_id != case_id:
+            raise HTTPException(404, "прогон не найден")
+    finally:
+        db.close()
+    path = os.path.join(RESULT_DIR, "case%d_run%d.json" % (case_id, run_id))
+    if not os.path.exists(path):
+        raise HTTPException(404, "разбор результата не сохранен")
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
 
 
 # ── справочник ──────────────────────────────────────────────────

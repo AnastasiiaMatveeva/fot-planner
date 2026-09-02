@@ -30,7 +30,21 @@
   <!-- лента дела -->
   <main class="chat">
     <div class="stage" id="stage"></div>
+
+    <!-- Лента — основной режим; остальные вкладки нужны, чтобы открыть и
+         посмотреть данные, которые агенты собрали, и результат расчета. -->
+    <nav class="tabs" id="tabs">
+      <button type="button" class="tab on" data-view="feed">Лента</button>
+      <button type="button" class="tab" data-view="emp">Сотрудники</button>
+      <button type="button" class="tab" data-view="ctr">Договоры</button>
+      <button type="button" class="tab" data-view="ref">Справочник</button>
+      <button type="button" class="tab" data-view="plan">План выплат</button>
+      <button type="button" class="tab" data-view="cash">Освоение</button>
+      <button type="button" class="tab" data-view="lim">Ограничения</button>
+    </nav>
+
     <div class="feed" id="feed"></div>
+    <div class="view" id="view" hidden></div>
 
     <div class="ask" id="ask" hidden></div>
 

@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
 import extract          # noqa: E402
 import llm              # noqa: E402
 from agents import say, working  # noqa: E402
-from db import Document, Question, now  # noqa: E402
+from db import Contract, Document, Employee, Question, now  # noqa: E402
 
 # Слова, по которым книга опознается как нормативный документ, а не как
 # расчетно-калькуляционные материалы по договору.
@@ -74,6 +74,48 @@ def classify(path):
     return "документ по договору", "intake", contract / (norm + contract)
 
 
+def _excel_date(v):
+    """Даты в книгах приходят порядковым номером — приводим к читаемому виду."""
+    if v is None or v == "":
+        return None
+    s = str(v).strip()
+    try:
+        n = float(s)
+    except ValueError:
+        return s                      # уже строка вида 01.01.2026
+    if not (1 <= n <= 80000):
+        return s
+    import datetime as _dt
+    # Excel считает от 30.12.1899: 1900 год ошибочно високосный, эпоха сдвинута.
+    return (_dt.date(1899, 12, 30) + _dt.timedelta(days=int(n))).strftime("%d.%m.%Y")
+
+
+def _store_passport(db, case, passport, source):
+    """Разложить разобранное по таблицам, чтобы это можно было открыть и читать.
+
+    Паспорт остается в деле целиком — из него собирается вход решателя. Но для
+    просмотра нужны обычные строки: сотрудники и договоры, отсортированные,
+    с указанием, из какого документа взяты. Пересобираем их заново на каждый
+    разбор: документ — источник истины, ручные правки идут через ленту.
+    """
+    db.query(Employee).filter_by(case_id=case.id).delete()
+    db.query(Contract).filter_by(case_id=case.id).delete()
+    for e in passport.get("employees") or []:
+        db.add(Employee(case_id=case.id, code=str(e.get("code") or ""),
+                        fio=e.get("fio"), position=e.get("pos"),
+                        rate=e.get("rate"), salary=e.get("sal"),
+                        date_from=_excel_date(e.get("from")),
+                        date_to=_excel_date(e.get("to")), source=source))
+    for c in passport.get("contracts") or []:
+        kinds = c.get("kinds")
+        db.add(Contract(case_id=case.id, code=str(c.get("code") or ""),
+                        name=c.get("name"), number=c.get("num"), kind=c.get("type"),
+                        goz=c.get("goz"), fund=c.get("fot"),
+                        kinds=", ".join(kinds) if isinstance(kinds, list) else kinds,
+                        source=source))
+    db.commit()
+
+
 # ── агент 1: данные договоров ───────────────────────────────────
 def run_intake(db, case, doc):
     """Разобрать документ по договору и доложить в ленту."""
@@ -88,6 +130,7 @@ def run_intake(db, case, doc):
         ctr = len(passport.get("contracts") or [])
         doc.summary = "сотрудников %d, договоров %d" % (emp, ctr)
         w["detail"] = doc.summary
+        _store_passport(db, case, passport, doc.name)
         db.commit()
 
     ready = out.get("ready") or {}
