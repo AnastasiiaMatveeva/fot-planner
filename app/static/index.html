@@ -30,12 +30,7 @@
 
   <!-- лента плана -->
   <main class="chat">
-    <!-- Расчет — главное действие плана, поэтому кнопка стоит в его шапке
-         и видна всегда, а не внизу вспомогательной колонки. -->
-    <div class="stage">
-      <div class="st" id="stage"></div>
-      <button id="solve" class="primary" type="button">Рассчитать план</button>
-    </div>
+    <div class="stage" id="stage"></div>
 
     <!-- Лента — основной режим; остальные вкладки нужны, чтобы открыть и
          посмотреть данные, которые агенты собрали, и результат расчета. -->
@@ -44,6 +39,10 @@
       <button type="button" class="tab" data-view="plan">План выплат</button>
       <button type="button" class="tab" data-view="cash">Освоение</button>
       <button type="button" class="tab" data-view="lim">Ограничения</button>
+      <!-- Расчет — главное действие плана. Стоит по правому краю ряда
+           вкладок: вровень с содержимым, всегда на виду и не спорит
+           с названием плана за место в строке. -->
+      <button id="solve" class="primary" type="button">Рассчитать план</button>
     </nav>
 
     <div class="feed" id="feed"></div>

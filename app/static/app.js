@@ -888,7 +888,7 @@ $("agents").addEventListener("click", function (e) {
 });
 
 $("tabs").addEventListener("click", function (e) {
-  var b = e.target.closest(".tab");
+  var b = e.target.closest(".tab");   // кнопка расчета не .tab и сюда не попадет
   if (b) setView(b.getAttribute("data-view"));
 });
 

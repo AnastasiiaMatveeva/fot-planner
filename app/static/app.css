@@ -54,9 +54,8 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 .chat{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--s1)}
 .stage{padding:10px 22px;background:var(--s0);border-bottom:1px solid var(--line2);
        font-size:13px;color:var(--ink2);display:flex;align-items:center;gap:14px;flex:0 0 auto}
-.stage .st{flex:1;min-width:0;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.stage .primary{flex:0 0 auto;width:auto;padding:9px 18px;border-radius:999px;
-                font-size:13.5px}
+.tabs .primary{margin-left:auto;flex:0 0 auto;width:auto;padding:7px 17px;
+               border-radius:999px;font-size:13.5px}
 .stage b{color:var(--ink)}
 .stage .pill{padding:2px 10px;border-radius:10px;font-size:12px;background:var(--s2);color:var(--ink2)}
 .stage .pill.ok{background:var(--okbg);color:var(--ok)}
@@ -163,7 +162,7 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 }
 
 /* ── вкладки просмотра ─────────────────────────────────────── */
-.tabs{flex:0 0 auto;display:flex;gap:4px;padding:9px 22px;background:var(--s0);
+.tabs{flex:0 0 auto;display:flex;align-items:center;gap:4px;padding:9px 22px;background:var(--s0);
       border-bottom:1px solid var(--line2);overflow-x:auto}
 /* display:flex перебивает встроенное [hidden] — гасим явно.
    Та же ловушка была у ленты и полосы вопроса. */
