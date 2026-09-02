@@ -365,10 +365,10 @@ function renderStage() {
     : '<span class="pill' + (c.stage === "посчитано" ? " ok" : "") + '">' + esc(c.stage) + "</span>";
   $("stage").innerHTML = "<b>" + esc(c.title) + "</b>" + pill +
     '<span class="empty">обновлено ' + esc(c.updated) + "</span>";
-  // Кнопка объясняет, почему недоступна: иначе неясно, чего ждать.
-  $("solve").title = !c.has_data
-    ? "Нет данных: загрузите документы по договорам"
-    : (working.length ? "Идет работа агента" : "Запустить расчет плана");
+  // Рядом с кнопкой видно, чего она ждет, — а не только в подсказке.
+  $("solvehint").textContent = !c.has_data
+    ? "Для расчета нужны документы по договорам"
+    : (working.length ? "Идет работа агента" : "");
   $("solve").disabled = !c.has_data || working.length > 0;
 }
 
@@ -710,6 +710,7 @@ function openRegistry() {
   $("view").hidden = true;
   $("regview").hidden = false;
   document.querySelector(".tabs").hidden = true;
+  document.querySelector(".act").hidden = true;
   $("openreg").classList.add("on");
   Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
     el.classList.remove("on");
@@ -722,6 +723,7 @@ function leaveRegistry() {
   inRegistry = false;
   $("regview").hidden = true;
   document.querySelector(".tabs").hidden = false;
+  document.querySelector(".act").hidden = false;
   $("openreg").classList.remove("on");
 }
 
@@ -831,6 +833,7 @@ function tick() {
       if (inRegistry) {
         $("feed").hidden = true; $("view").hidden = true; $("regview").hidden = false;
         document.querySelector(".tabs").hidden = true;
+        document.querySelector(".act").hidden = true;
       } else if (view !== "feed") {
         $("feed").hidden = true; $("view").hidden = false;
       }

@@ -39,10 +39,6 @@
       <button type="button" class="tab" data-view="plan">План выплат</button>
       <button type="button" class="tab" data-view="cash">Освоение</button>
       <button type="button" class="tab" data-view="lim">Ограничения</button>
-      <!-- Расчет — главное действие плана. Стоит по правому краю ряда
-           вкладок: вровень с содержимым, всегда на виду и не спорит
-           с названием плана за место в строке. -->
-      <button id="solve" class="primary" type="button">Рассчитать план</button>
     </nav>
 
     <div class="feed" id="feed"></div>
@@ -50,6 +46,14 @@
     <div class="view" id="regview" hidden></div>
 
     <div class="ask" id="ask" hidden></div>
+
+    <!-- Расчет — главное действие плана, поэтому кнопка стоит над строкой
+         ввода: там взгляд и так находится, прокрутки не требует и ничего
+         не выдавливает из строки. -->
+    <div class="act">
+      <span class="hint" id="solvehint"></span>
+      <button id="solve" class="primary" type="button">Рассчитать план</button>
+    </div>
 
     <form class="composer" id="composer">
       <label class="attach" title="Загрузить документы">

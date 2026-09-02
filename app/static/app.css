@@ -54,8 +54,12 @@ body{margin:0;font:14px/1.5 var(--f);color:var(--ink);background:var(--paper);
 .chat{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--s1)}
 .stage{padding:10px 22px;background:var(--s0);border-bottom:1px solid var(--line2);
        font-size:13px;color:var(--ink2);display:flex;align-items:center;gap:14px;flex:0 0 auto}
-.tabs .primary{margin-left:auto;flex:0 0 auto;width:auto;padding:7px 17px;
-               border-radius:999px;font-size:13.5px}
+.act{flex:0 0 auto;display:flex;align-items:center;gap:14px;justify-content:flex-end;
+     padding:11px 26px 0;background:var(--s0)}
+.act[hidden]{display:none}
+.act .hint{flex:1;min-width:0;font-size:12.5px;color:var(--ink3)}
+.act .primary{width:auto;flex:0 0 auto;padding:9px 20px;border-radius:999px;font-size:13.5px}
+.composer{border-top:0}
 .stage b{color:var(--ink)}
 .stage .pill{padding:2px 10px;border-radius:10px;font-size:12px;background:var(--s2);color:var(--ink2)}
 .stage .pill.ok{background:var(--okbg);color:var(--ok)}
