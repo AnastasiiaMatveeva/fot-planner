@@ -160,6 +160,30 @@ async def create_case(request: Request):
         db.close()
 
 
+@app.patch("/api/case/{case_id}")
+async def rename_case(case_id: int, request: Request):
+    """Переименовать план.
+
+    Название дает экономист: «План ФОТ на 2026 год» ничего не говорит, когда
+    планов на год несколько, а «после сокращения» или «с новым договором» —
+    говорит.
+    """
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "пустое название")
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        case.title = title[:200]
+        db.commit()
+        return {"ok": True, "title": case.title}
+    finally:
+        db.close()
+
+
 @app.delete("/api/case/{case_id}")
 def delete_case(case_id: int):
     """Удалить план: ленту, работы агентов, вопросы и прогоны расчета.

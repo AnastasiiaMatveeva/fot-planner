@@ -85,6 +85,22 @@ function ask(title, detail, okText) {
    «…», которое появляется при наведении и собирает действия над записью.
    Кнопка-корзина остается для строк таблицы, где действие одно и колонка
    под него отведена. */
+/* Два действия — две кнопки: меню при таком наборе только добавляет щелчок.
+   Появляются при наведении на строку. */
+function iconBtn(cls, attr, id, title, path) {
+  return '<button class="rowbtn ' + cls + '" ' + attr + '="' + id + '" title="' + esc(title) +
+         '" aria-label="' + esc(title) + '">' +
+         '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ' +
+         'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' + path +
+         "</svg></button>";
+}
+
+var ICON_EDIT = '<path d="M11.3 2.6a1.4 1.4 0 0 1 2 2l-7.2 7.2-2.7.7.7-2.7z"/>' +
+                '<path d="M10.2 3.7l2.1 2.1"/>';
+var ICON_TRASH = '<path d="M2.8 4.3h10.4M6.4 4.3V3.1c0-.4.3-.7.7-.7h1.8c.4 0 .7.3.7.7v1.2"/>' +
+                 '<path d="M4.2 4.3l.6 8.2c0 .6.5 1 1 1h4.4c.6 0 1-.4 1-1l.6-8.2"/>' +
+                 '<path d="M6.7 6.8v4.2M9.3 6.8v4.2"/>';
+
 function rowMenu(attr, id) {
   return '<button class="more" ' + attr + '="' + id + '" title="Действия" ' +
          'aria-label="Действия">' +
@@ -143,31 +159,74 @@ function loadCases() {
   return api("/api/cases").then(function (rows) {
     $("caselist").innerHTML = rows.length ? rows.map(function (c) {
       return '<div class="case' + (c.id === caseId ? " on" : "") + '" data-id="' + c.id + '">' +
-             rowMenu("data-menu", c.id) +
-             esc(c.title) + "<small>" + esc(c.stage) + " · документов " + c.documents +
-             "</small></div>";
+             '<span class="acts">' +
+               iconBtn("edit", "data-rename", c.id, "Переименовать", ICON_EDIT) +
+               iconBtn("del", "data-del", c.id, "Удалить план", ICON_TRASH) +
+             "</span>" +
+             '<span class="ttl">' + esc(c.title) + "</span>" +
+             "<small>" + esc(c.stage) + " · документов " + c.documents + "</small></div>";
     }).join("") : '<div class="empty" style="padding:0 16px">Планов пока нет</div>';
     Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
       el.addEventListener("click", function (e) {
-        if (e.target.closest(".more")) return;
+        if (e.target.closest(".rowbtn") || e.target.closest("input")) return;
         open(+el.getAttribute("data-id"));
       });
     });
-    Array.prototype.forEach.call(document.querySelectorAll(".case .more"), function (b) {
+    Array.prototype.forEach.call(document.querySelectorAll(".case .del"), function (b) {
       b.addEventListener("click", function (e) {
         e.stopPropagation();
-        var id = +b.getAttribute("data-menu");
-        showMenu(b, [{ label: "Удалить план", danger: true,
-                       run: function () { removeCase(id); } }]);
+        removeCase(+b.getAttribute("data-del"));
+      });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".case .edit"), function (b) {
+      b.addEventListener("click", function (e) {
+        e.stopPropagation();
+        startRename(b.closest(".case"));
       });
     });
     return rows;
   });
 }
 
+/* Переименование прямо в строке: отдельное окно ради одного поля — лишний шаг. */
+function startRename(row) {
+  var id = +row.getAttribute("data-id");
+  var ttl = row.querySelector(".ttl");
+  var was = ttl.textContent;
+  var inp = document.createElement("input");
+  inp.className = "rename";
+  inp.value = was;
+  ttl.replaceWith(inp);
+  inp.focus();
+  inp.select();
+
+  var done = false;
+  function finish(save) {
+    if (done) return;
+    done = true;
+    var name = inp.value.trim();
+    var span = document.createElement("span");
+    span.className = "ttl";
+    span.textContent = save && name ? name : was;
+    inp.replaceWith(span);
+    if (!save || !name || name === was) return;
+    api("/api/case/" + id, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: name })
+    }).then(function () { loadCases(); if (caseId === id) tick(); });
+  }
+  inp.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+  });
+  inp.addEventListener("blur", function () { finish(true); });
+  inp.addEventListener("click", function (e) { e.stopPropagation(); });
+}
+
 function removeCase(id) {
   var el = document.querySelector('.case[data-id="' + id + '"]');
-  var name = el ? el.querySelector("small").previousSibling.textContent.trim() : "план";
+  var t = el && el.querySelector(".ttl");
+  var name = t ? t.textContent.trim() : "план";
   ask("Удалить «" + name + "»?",
       "Лента, работы агентов и расчеты этого плана будут удалены. Документы, " +
       "договоры, штатное расписание и нормативы останутся — они общие для " +
@@ -596,7 +655,11 @@ function table(head, rows, note, opts) {
   if (!rows.length) return h + '<div class="none">Пусто</div>';
   h += '<table><thead><tr>' + (num ? '<th class="num">№</th>' : "") +
        head.map(function (c) {
-         return (typeof c === "object" ? '<th class="n">' + esc(c.t) : "<th>" + esc(c)) + "</th>";
+         // Заголовок бывает строкой, числовой колонкой {t} или готовой
+         // разметкой {v} — в ней, например, флажок «выделить все».
+         if (typeof c !== "object") return "<th>" + esc(c) + "</th>";
+         if (c.v != null) return '<th class="' + (c.cls || "") + '">' + c.v + "</th>";
+         return '<th class="n">' + esc(c.t) + "</th>";
        }).join("") + "</tr></thead><tbody>";
   h += rows.map(function (r, i) {
     return "<tr>" + (num ? '<td class="num">' + (i + 1) + "</td>" : "") +

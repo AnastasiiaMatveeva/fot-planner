@@ -201,8 +201,11 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .view table{border-collapse:collapse;width:100%;background:var(--s0);
             border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden;
             font-size:13px}
-.view th{position:sticky;top:0;text-align:left;font-weight:600;color:var(--ink3);
-         padding:9px 13px;background:var(--s1);border-bottom:1px solid var(--line);
+/* Шапка сливалась с телом таблицы: серый #F7F9FB против белого почти
+   неразличим. Даем более плотную заливку и заметную нижнюю границу —
+   при прокрутке шапка липнет к верху и должна читаться поверх строк. */
+.view th{position:sticky;top:0;z-index:1;text-align:left;font-weight:600;color:var(--ink2);
+         padding:10px 13px;background:var(--s2);border-bottom:1px solid var(--line);
          font-size:12px;white-space:nowrap}
 .view th.n,.view td.n{text-align:right;font-variant-numeric:tabular-nums;
                       white-space:nowrap}
@@ -438,3 +441,17 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 /* Подсветка отмеченной строки. :has поддерживают все нынешние браузеры;
    если правило не сработает, выбор все равно виден по флажку. */
 .view tbody tr:has(input[type=checkbox]:checked) td{background:var(--accbg)}
+
+/* ── действия на строке плана ──────────────────────────────── */
+.case{position:relative;padding-right:56px}
+.case .acts{position:absolute;top:7px;right:6px;display:flex;gap:1px;opacity:0;
+            transition:opacity .12s}
+.case:hover .acts,.case.on .acts,.case:focus-within .acts{opacity:1}
+.rowbtn{display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;
+        border-radius:var(--r3);background:none;color:var(--ink3);cursor:pointer}
+.rowbtn:hover{background:var(--s2);color:var(--ink)}
+.rowbtn.del:hover{background:var(--badbg);color:var(--bad)}
+.case .ttl{display:block}
+.case .rename{width:100%;font:600 13px var(--f);color:var(--ink);padding:1px 5px;
+              border:1px solid var(--acc);border-radius:var(--r3);background:var(--s0)}
+.case .rename:focus{outline:0}
