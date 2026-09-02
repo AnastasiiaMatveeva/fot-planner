@@ -526,9 +526,17 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
        border-bottom:1px solid var(--line2)}
 .dhead h3{flex:1;min-width:0;margin:0;font-size:15px;font-weight:600;color:var(--ink);
           word-break:break-word;line-height:1.35}
-.dhead .x{flex:0 0 auto;width:28px;height:28px;border:0;background:none;cursor:pointer;
-          color:var(--ink3);font-size:20px;line-height:1;border-radius:var(--r3)}
-.dhead .x:hover{background:var(--s2);color:var(--ink)}
+.dhead .x,.dhead .wider{flex:0 0 auto;width:28px;height:28px;border:0;
+                        background:none;cursor:pointer;color:var(--ink3);
+                        border-radius:var(--r3);display:grid;place-items:center}
+.dhead .x{font-size:20px;line-height:1}
+.dhead .x:hover,.dhead .wider:hover{background:var(--s2);color:var(--ink)}
+/* Развернутая панель: у форм РКМ два десятка колонок, в 580 пикселях их не
+   прочесть. Затемнение остается — это по-прежнему окно поверх реестра. */
+.drawer.wide .panel{width:100%}
+.drawer.wide .sheetview,.drawer.wide .pdf{height:calc(100vh - 260px);
+                                          min-height:420px}
+.drawer.wide .wider svg{transform:rotate(180deg)}
 .dbody{flex:1;min-height:0;overflow:auto;padding:16px 18px 20px}
 .dfoot{flex:0 0 auto;padding:12px 18px;border-top:1px solid var(--line2);
        display:flex;justify-content:flex-end}
@@ -611,17 +619,17 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
    оказался кашей, причина отказа видна глазами, а не со слов агента. */
 .dbody .pdf{width:100%;height:520px;border:1px solid var(--line2);
             border-radius:var(--r2);background:var(--s1)}
-.dbody .sheet{margin-bottom:14px}
-.dbody .sheet .sn{display:flex;align-items:baseline;gap:8px;margin-bottom:6px;
-                  font-size:12px;font-weight:600;color:var(--ink2)}
-.dbody .sheet .sn .c{font-weight:400;color:var(--ink3);
-                     font-variant-numeric:tabular-nums}
-.dbody .scroll{overflow-x:auto;border:1px solid var(--line2);
-               border-radius:var(--r2)}
-.dbody .scroll table{border:0;border-radius:0;font-size:12px;min-width:100%}
-.dbody .scroll td,.dbody .scroll th{white-space:nowrap;max-width:260px;
-                                    overflow:hidden;text-overflow:ellipsis;
-                                    padding:5px 9px}
+.dbody .sheetview{width:100%;height:520px;border:1px solid var(--line2);
+                  border-radius:var(--r2);background:var(--s0)}
+/* Выбор листа — одна строка: у формы РКМ тридцать листов, и ряд вкладок был
+   бы стеной в пол-панели. Разметку выбранного листа собирает сервер. */
+.spick{display:flex;align-items:center;gap:9px;margin-bottom:8px;
+       font-size:12.5px;color:var(--ink2)}
+.spick select{flex:1;min-width:0;max-width:340px;border:1px solid var(--line);
+              background:var(--s0);color:var(--ink);border-radius:var(--r3);
+              padding:5px 7px;font:500 12.5px var(--f);cursor:pointer}
+.spick select:hover{border-color:var(--acc)}
+.spick .c{color:var(--ink3);white-space:nowrap;font-variant-numeric:tabular-nums}
 .dbody .ptext{margin:0;padding:12px 13px;border:1px solid var(--line2);
               border-radius:var(--r2);background:var(--s1);color:var(--ink2);
               font:12px/1.55 ui-monospace,"Cascadia Mono",Consolas,monospace;

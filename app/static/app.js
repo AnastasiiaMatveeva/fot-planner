@@ -95,6 +95,14 @@ function iconBtn(cls, attr, id, title, path) {
          "</svg></button>";
 }
 
+/* Две стрелки в углы — «развернуть»; в свернутом виде та же иконка
+   разворачивается обратно поворотом на 180°, отдельного значка не нужно. */
+var ICON_WIDE =
+  '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" ' +
+  'stroke-linejoin="round"><path d="M9.5 2.5h4v4M13.5 2.5 9 7"/>' +
+  '<path d="M6.5 13.5h-4v-4M2.5 13.5 7 9"/></svg>';
+
 var ICON_EDIT = '<path d="M11.3 2.6a1.4 1.4 0 0 1 2 2l-7.2 7.2-2.7.7.7-2.7z"/>' +
                 '<path d="M10.2 3.7l2.1 2.1"/>';
 var ICON_TRASH = '<path d="M2.8 4.3h10.4M6.4 4.3V3.1c0-.4.3-.7.7-.7h1.8c.4 0 .7.3.7.7v1.2"/>' +
@@ -1058,22 +1066,20 @@ function preview(d) {
     return head + '<iframe class="pdf" src="/api/document/' + d.id +
            '/file" title="Предпросмотр документа"></iframe></div>';
   }
-  if (p["вид"] === "таблица") {
-    return head + (p["листы"] || []).map(function (s) {
-      var rows = s["строки"];
-      return '<div class="sheet"><div class="sn">' + esc(s["лист"]) +
-        '<span class="c">' + s["всего строк"] + " " +
-        px(s["всего строк"], "строка", "строки", "строк") + "</span></div>" +
-        '<div class="scroll"><table>' + rows.map(function (r, i) {
-          var cell = i ? "td" : "th";
-          return "<tr>" + r.map(function (v) {
-            return "<" + cell + ">" + esc(v) + "</" + cell + ">";
-          }).join("") + "</tr>";
-        }).join("") + "</table></div>" +
-        (s["всего строк"] > rows.length
-          ? '<div class="more">показаны первые ' + rows.length + "</div>" : "") +
-        "</div>";
-    }).join("") + "</div>";
+  if (p["вид"] === "книга") {
+    var names = p["листы"] || [];
+    // У формы РКМ тридцать листов: рядом вкладок это стена в пол-панели.
+    // Выбор списком занимает одну строку и не растет с числом листов.
+    var pick = names.length > 1
+      ? '<label class="spick">Лист <select id="sheetpick">' +
+        names.map(function (n) {
+          return '<option value="' + esc(n) + '">' + esc(n) + "</option>";
+        }).join("") + "</select>" +
+        '<span class="c">' + names.length + " " +
+        px(names.length, "лист", "листа", "листов") + "</span></label>"
+      : "";
+    return head + pick + '<iframe class="sheetview" src="/api/document/' +
+           d.id + '/preview" title="Предпросмотр листа"></iframe></div>';
   }
   if (p["вид"] === "текст") {
     return head + '<pre class="ptext">' + esc(p["текст"]) + "</pre>" +
@@ -1108,6 +1114,11 @@ function openDocument(id) {
 
   var back = document.createElement("div");
   back.className = "drawer";
+  // Ширину помним между открытиями: у форм РКМ два десятка колонок, и если
+  // экономист раз развернул панель, следующий документ он смотрит так же.
+  try {
+    if (localStorage.getItem("docwide") === "1") back.classList.add("wide");
+  } catch (e) { /* приватный режим — обойдемся без памяти */ }
   back.innerHTML = '<div class="scrim"></div><aside class="panel" role="dialog" ' +
                    'aria-modal="true"><div class="none">Загружаю…</div></aside>';
   document.body.appendChild(back);
@@ -1189,6 +1200,8 @@ function openDocument(id) {
 
     back.querySelector(".panel").innerHTML =
       '<header class="dhead"><h3>' + esc(d.name) + "</h3>" +
+        '<button type="button" class="wider" aria-label="Развернуть" ' +
+        'title="Развернуть на весь экран">' + ICON_WIDE + "</button>" +
         '<button type="button" class="x" aria-label="Закрыть">×</button></header>' +
       '<div class="dbody">' +
         meta([["Вид", d.kind], ["Статус", docStatus(d.state).text],
@@ -1204,6 +1217,28 @@ function openDocument(id) {
       "</footer>";
 
     back.querySelector(".x").onclick = close;
+
+    var wider = back.querySelector(".wider");
+    wider.onclick = function () {
+      var on = back.classList.toggle("wide");
+      wider.title = on ? "Свернуть" : "Развернуть на весь экран";
+      wider.setAttribute("aria-label", on ? "Свернуть" : "Развернуть");
+      try { localStorage.setItem("docwide", on ? "1" : "0"); } catch (e) {}
+    };
+    if (back.classList.contains("wide")) {
+      wider.title = "Свернуть";
+      wider.setAttribute("aria-label", "Свернуть");
+    }
+
+    // Лист переключаем перезагрузкой рамки: разметку собирает сервер.
+    var pickEl = back.querySelector("#sheetpick");
+    if (pickEl) {
+      pickEl.onchange = function () {
+        back.querySelector(".sheetview").src =
+          "/api/document/" + d.id + "/preview?sheet=" +
+          encodeURIComponent(this.value);
+      };
+    }
 
     var take = back.querySelector(".take");
     if (take) {

@@ -19,7 +19,7 @@ import sys
 import time
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -506,9 +506,43 @@ async def decide_proposals(doc_id: int, request: Request):
 
 #: Сколько показывать в предпросмотре. Карточка — это заглянуть в документ, а
 #: не прочитать его целиком: для того есть «Открыть файл».
-PREVIEW_ROWS = 24
-PREVIEW_COLS = 12
 PREVIEW_CHARS = 2500
+WORKBOOK_TYPES = (".xlsx", ".xlsm", ".xltx", ".xltm")
+PREVIEW_DIR = os.path.join(os.path.dirname(UPLOAD_DIR), "previews")
+os.makedirs(PREVIEW_DIR, exist_ok=True)
+
+
+def _sheet_html(doc, sheet):
+    """Лист книги как HTML — через конвертер, а не своей разметкой.
+
+    Настоящие формы держатся на объединенных ячейках: у РКМ шапка склеена по
+    десятку колонок, и таблица, собранная по клеткам, разваливается. Конвертер
+    сохраняет объединения, ширины колонок и начертание.
+
+    Результат кладем рядом с файлом: разбор листа занимает секунды, а карточку
+    открывают не по одному разу. Файл документа не меняется — при повторной
+    загрузке заводится новая запись со своим номером, — поэтому кэш можно не
+    сбрасывать.
+    """
+    import hashlib
+    import io
+
+    from xlsx2html import xlsx2html
+
+    key = hashlib.md5(("%d|%s" % (doc.id, sheet or "")).encode("utf-8")).hexdigest()
+    cached = os.path.join(PREVIEW_DIR, key + ".html")
+    if os.path.exists(cached):
+        with open(cached, encoding="utf-8") as f:
+            return f.read()
+    out = io.StringIO()
+    if sheet:
+        xlsx2html(doc.path, out, sheet=sheet)
+    else:
+        xlsx2html(doc.path, out)
+    html = out.getvalue()
+    with open(cached, "w", encoding="utf-8") as f:
+        f.write(html)
+    return html
 
 
 def _preview(doc):
@@ -524,27 +558,15 @@ def _preview(doc):
         return {"вид": "нет", "почему": "файла нет на диске"}
     if ext == ".pdf":
         return {"вид": "документ"}
-    if ext in (".xlsx", ".xlsm", ".xltx", ".xltm"):
+    if ext in WORKBOOK_TYPES:
         try:
             import openpyxl
             wb = openpyxl.load_workbook(doc.path, data_only=True, read_only=True)
+            names = wb.sheetnames
+            wb.close()
         except Exception as e:  # noqa: BLE001 — битая книга не должна ронять карточку
             return {"вид": "нет", "почему": str(e)[:200]}
-        sheets = []
-        for ws in wb.worksheets:
-            rows = []
-            for r in ws.iter_rows(min_row=1, max_row=PREVIEW_ROWS,
-                                  max_col=PREVIEW_COLS, values_only=True):
-                if any(v is not None and str(v).strip() for v in r):
-                    rows.append(["" if v is None else str(v) for v in r])
-            if rows:
-                sheets.append({"лист": ws.title, "строки": rows,
-                               "всего строк": ws.max_row})
-            if len(sheets) >= 4:
-                break
-        wb.close()
-        return {"вид": "таблица", "листы": sheets} if sheets else {
-            "вид": "нет", "почему": "в книге нет заполненных строк"}
+        return {"вид": "книга", "листы": names}
     try:
         text = docread.to_text(doc.path, PREVIEW_CHARS)
     except docread.Unreadable as e:
@@ -564,6 +586,31 @@ INLINE_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
 }
+
+
+@app.get("/api/document/{doc_id}/preview")
+def document_preview(doc_id: int, sheet: str | None = None):
+    """Лист книги, отрисованный конвертером, — для рамки предпросмотра."""
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        if os.path.splitext(d.path)[1].lower() not in WORKBOOK_TYPES:
+            raise HTTPException(400, "предпросмотр листами только для книг")
+        try:
+            html = _sheet_html(d, sheet)
+        except Exception as e:  # noqa: BLE001 — лист может быть пустым или битым
+            html = ("<p style='font:13px system-ui;color:#64748B'>Лист не "
+                    "показывается: %s</p>" % str(e)[:200])
+        return HTMLResponse(
+            "<meta charset='utf-8'>"
+            "<style>body{margin:12px;font:12px/1.4 system-ui,sans-serif}"
+            "table{border-collapse:collapse}"
+            "td,th{border:1px solid #E3E8EF;padding:3px 6px;"
+            "vertical-align:top;white-space:pre-wrap}</style>" + html)
+    finally:
+        db.close()
 
 
 @app.get("/api/document/{doc_id}/file")
