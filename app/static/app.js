@@ -393,8 +393,16 @@ function renderTabs() {
   });
 }
 
+function renderMode() {
+  var m = state.model;
+  $("mode").textContent = m.provider
+    ? "модель " + m.name + ", " + m.label
+    : "без модели: разбор по заголовкам";
+}
+
 function render() {
   if (!state) return;
+  safely("режим", renderMode);
   safely("вкладки", renderTabs);
   safely("заголовок плана", renderStage);
   if (view === "feed") safely("лента", renderFeed);
@@ -846,6 +854,24 @@ function tick() {
 }
 
 /* ── события ──────────────────────────────────────────────── */
+$("toggleside").addEventListener("click", function () {
+  var shell = document.querySelector(".shell");
+  var off = shell.classList.toggle("noside");
+  this.classList.toggle("off", off);
+  this.title = off ? "Показать колонку контекста" : "Скрыть колонку контекста";
+  this.setAttribute("aria-label", this.title);
+});
+
+$("openagents").addEventListener("click", function () {
+  // Агенты — контекст плана, а не отдельный экран: открываем колонку и
+  // подсвечиваем ее, а не уводим пользователя со страницы.
+  var shell = document.querySelector(".shell");
+  shell.classList.remove("noside");
+  $("toggleside").classList.remove("off");
+  var el = document.querySelector(".side section");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
 $("openreg").addEventListener("click", openRegistry);
 if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
 

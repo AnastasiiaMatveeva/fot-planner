@@ -12,20 +12,56 @@
 <header class="brandbar">
   <img src="/logo.svg" alt="CML-Bench 2.0" class="logo">
   <span class="bname">Сервис планирования фонда оплаты труда</span>
+  <span class="spacer"></span>
+  <!-- Справа — режим работы и переключатель контекстной колонки: то, что
+       относится ко всему сервису, а не к текущему плану. -->
+  <span class="mode" id="mode"></span>
+  <button type="button" class="iconbtn" id="toggleside" title="Скрыть колонку контекста"
+          aria-label="Скрыть колонку контекста">
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+         stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="3" width="12" height="10" rx="1.6"/>
+      <path d="M10.5 3v10"/>
+    </svg>
+  </button>
 </header>
 
 <div class="shell">
 
-  <!-- планы: точка возврата -->
+  <!-- Навигация: разделы с иконками, ниже список планов, внизу главное
+       действие и аккаунт. Иконка означает «это раздел», ее отсутствие —
+       «это запись». -->
   <aside class="cases">
-    <!-- Реестр организации отделен от планов: документы, договоры, штатка и
-         нормативы служат всем планам сразу, а план — это год планирования. -->
-    <div class="ctitle">Организация</div>
-    <button type="button" class="reg" id="openreg">Реестр документов и данных</button>
+    <nav class="nav">
+      <button type="button" class="navi" id="openreg">
+        <span class="ic" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 4.2c0-.7.6-1.2 1.2-1.2h2.4c.4 0 .8.2 1 .5l.7 1h5.5c.7 0 1.2.5 1.2 1.2v6.1c0 .7-.5 1.2-1.2 1.2H3.2c-.6 0-1.2-.5-1.2-1.2z"/>
+          </svg>
+        </span>
+        Реестр организации
+      </button>
+      <button type="button" class="navi" id="openagents">
+        <span class="ic" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="5.5" width="10" height="7.5" rx="1.6"/>
+            <path d="M8 3v2.5M5.8 9h.01M10.2 9h.01"/>
+          </svg>
+        </span>
+        Агенты
+      </button>
+    </nav>
 
     <div class="ctitle">Планы</div>
     <div id="caselist" class="clist"></div>
+
     <button type="button" class="cta" id="newcase">+&nbsp;&nbsp;Новый план</button>
+    <div class="acct">
+      <span class="av" aria-hidden="true">ЭК</span>
+      <span class="who">Экономист<small>планово-экономический отдел</small></span>
+    </div>
   </aside>
 
   <!-- лента плана -->
