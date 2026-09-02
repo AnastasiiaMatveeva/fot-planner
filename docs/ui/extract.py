@@ -423,8 +423,12 @@ def rebuild_funds(passport):
             "funds": {k: round(v) for k, v in fund.items()}}
 
 
-def passport_to_input(passport, template_path, out_path):
-    """Собрать вход fot-planner из паспорта с точным раскроем фондов."""
+def passport_to_input(passport, template_path, out_path, warnings=None):
+    """Собрать вход fot-planner из паспорта с точным раскроем фондов.
+
+    ``warnings`` — список, куда складываются предупреждения для экономиста:
+    расчет идет, но о том, что в него не попало, надо сказать вслух.
+    """
     info = rebuild_funds(passport)
     if info and info.get("error"):
         raise ValueError(info["error"])
@@ -441,11 +445,37 @@ def passport_to_input(passport, template_path, out_path):
     ws = wb["договоры"]
     chdr = [str(ws.cell(1, c).value or "") for c in range(1, ws.max_column + 1)]
     fot_c = chdr.index("фот") + 1
-    fots = {c["code"]: c["fot"] for c in passport["contracts"]}
+    # Не только фонд: признак ГОЗ и срок действия тоже приходят из паспорта.
+    # Раньше переносился один фонд, а ГОЗ брался из шаблона — и правка,
+    # сделанная экономистом, до расчета не доходила, хотя в таблице стояла.
+    also = {}
+    for key, column in (("goz", "гоз"), ("from", "дата начала"),
+                        ("to", "дата окончания"), ("name", "название"),
+                        ("num", "номер"), ("type", "тип договора")):
+        if column in chdr:
+            also[key] = chdr.index(column) + 1
+    by_code = {c["code"]: c for c in passport["contracts"]}
+    fots = {code: c["fot"] for code, c in by_code.items()}
+    seen = set()
     for r in range(2, ws.max_row + 1):
         code = str(ws.cell(r, 1).value or "")
-        if code in fots:
-            ws.cell(r, fot_c).value = fots[code]
+        c = by_code.get(code)
+        if c is None:
+            continue
+        seen.add(code)
+        ws.cell(r, fot_c).value = c["fot"]
+        for key, col in also.items():
+            if c.get(key) not in (None, ""):
+                ws.cell(r, col).value = c[key]
+    missing = [code for code in by_code if code not in seen]
+    if missing and warnings is not None:
+        # Строки в шаблоне нет — значит договор в расчет не вошел, ни фондом,
+        # ни признаком ГОЗ. Раньше это происходило молча и давало правдоподобный,
+        # но чужой ответ. Расчет не срываем: у шаблона свои договоры, и он
+        # считается. Но молчать об этом нельзя.
+        warnings.append(
+            "В шаблоне расчета нет договоров: %s. Их условия в расчет не вошли — "
+            "считалось по договорам шаблона." % ", ".join(sorted(missing)))
 
     ws = wb["фот_по_месяцам"]
     for r in range(2, ws.max_row + 1):

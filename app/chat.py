@@ -21,7 +21,35 @@ from agents import AGENTS
 #: Что агент умеет сделать по итогам разговора. Список закрытый: модель
 #: выбирает из него, а выполняет сервис.
 ACTIONS = ("ничего", "переразобрать документ", "запустить расчет",
-           "ответить на вопрос агента")
+           "ответить на вопрос агента", "заполнить поле")
+
+#: Что экономист может продиктовать в чате. Список закрытый и по одной
+#: причине: модель называет поле словами, а писать в базу по слову от модели
+#: нельзя. Здесь слово переводится в столбец строки реестра и в ключ паспорта,
+#: по которому собирается вход решателя, — писать надо в оба места, иначе
+#: правка либо не видна в таблице, либо не доходит до расчета.
+FIELDS = {
+    "договор": {
+        "ГОЗ": ("goz", "goz"),
+        "фонд": ("fund", "fot"),
+        "наименование": ("name", "name"),
+        "номер": ("number", "num"),
+        "вид": ("kind", "type"),
+        "действует с": ("date_from", "from"),
+        "действует по": ("date_to", "to"),
+        "разрешенные выплаты": ("kinds", "kinds"),
+    },
+    "сотрудник": {
+        "должность": ("position", "pos"),
+        "ставка": ("rate", "rate"),
+        "оклад": ("salary", "sal"),
+        "работает с": ("date_from", "from"),
+        "работает по": ("date_to", "to"),
+    },
+}
+
+#: Поля, где значение — число, а не текст.
+NUMERIC = {"фонд", "ставка", "оклад"}
 
 SYSTEM = """Ты — агент сервиса планирования фонда оплаты труда. Отвечаешь
 экономисту в рабочей ленте плана.
@@ -38,6 +66,20 @@ SYSTEM = """Ты — агент сервиса планирования фонд
 - если данных для расчета не хватает, скажи, каких именно и откуда их взять;
 - не обещай того, чего сервис не делает.
 
+Форма бывает не по шаблону, и тогда часть величин из нее не извлеклась. Если
+экономист сам называет величину — «договор 1234 ГОЗ», «по 0421 фонд 3 млн»,
+«у Петрова оклад 90 000», — выбери действие «заполнить поле» и перечисли
+правки в edits. Что можно заполнить:
+- у договора: ГОЗ, фонд, наименование, номер, вид, действует с, действует по,
+  разрешенные выплаты. «ГОЗ» — это признак «да» или «нет»: гособоронзаказ это
+  или обычная работа. «Вид» — совсем другое: ОКР, НИР, поставка. Фраза
+  «договор 1234 — это ГОЗ» означает поле ГОЗ со значением «да», а не вид;
+- у сотрудника: должность, ставка, оклад, работает с, работает по.
+Ключ — шифр договора или табельный номер сотрудника, ровно так, как назвал
+экономист. Ничего не додумывай: заполняй только то, что он сказал вслух. Если
+он называет величину, которой в этом списке нет, скажи прямо, что такое поле
+через чат не заполняется.
+
 Чего сервис пока не умеет, и об этом надо говорить прямо: распознавать сканы
 без текстового слоя; извлекать таблицы из старых файлов .doc; подставлять
 в расчет направленные правила замещения должностей."""
@@ -47,7 +89,11 @@ SHAPE = """Ответь одним объектом JSON:
  "action": "ничего | переразобрать документ | запустить расчет | ответить на вопрос агента",
  "document": "имя документа, если действие относится к нему, иначе null",
  "as_kind": "вид документа для переразбора, иначе null",
- "answer": "если это ответ на вопрос агента — его суть, иначе null"}"""
+ "answer": "если это ответ на вопрос агента — его суть, иначе null",
+ "edits": [{"entity": "договор | сотрудник",
+            "key": "шифр договора или табельный номер",
+            "field": "название поля из списка выше",
+            "value": "значение словами или числом"}]}"""
 
 SCHEMA = {
     "type": "object",
@@ -57,6 +103,20 @@ SCHEMA = {
         "document": {"type": ["string", "null"]},
         "as_kind": {"type": ["string", "null"], "enum": list(llm.DOC_KINDS) + [None]},
         "answer": {"type": ["string", "null"]},
+        "edits": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "entity": {"type": "string", "enum": list(FIELDS)},
+                    "key": {"type": "string"},
+                    "field": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": ["entity", "key", "field", "value"],
+                "additionalProperties": False,
+            },
+        },
     },
     "required": ["reply", "action"],
     "additionalProperties": False,
@@ -143,11 +203,13 @@ def reply(db, case, text):
         return {"ok": False, "error": "модель вернула пустой ответ"}
 
     action = raw.get("action")
+    edits = raw.get("edits")
     return {"ok": True, "reply": raw["reply"].strip(),
             "action": action if action in ACTIONS else "ничего",
             "document": raw.get("document") or None,
             "as_kind": raw.get("as_kind") or None,
-            "answer": raw.get("answer") or None}
+            "answer": raw.get("answer") or None,
+            "edits": edits if isinstance(edits, list) else []}
 
 
 def _ask_anthropic(user, model):
@@ -168,3 +230,181 @@ def _ask_anthropic(user, model):
         model=model, max_tokens=1500, system=SYSTEM,
         messages=[{"role": "user", "content": user}], output_format=Reply)
     return msg.parsed_output.model_dump() if msg.parsed_output else None
+
+
+# ── правки, продиктованные в чате ────────────────────────────────────────
+#
+# Форма не по шаблону — обычное дело: величина в ней есть, но лежит не там,
+# где ее ищет разборщик, и в реестр не попадает. Раньше выхода не было
+# вообще: чат отвечал словами и ничего не менял, а поправить фонд или
+# признак ГОЗ можно было только пересобрав документ.
+#
+# Правка идет сразу в два места. Строка реестра — то, что экономист видит в
+# таблице. Паспорт дела — то, из чего собирается входной файл решателя. Одно
+# без другого дает молчаливое расхождение: в таблице значение стоит, а
+# считается по-старому.
+#
+# Откуда взялось значение, видно и потом: в графу «источник» пишется, что это
+# правка экономиста и когда сделана, а сама реплика остается в ленте. Для ГОЗ
+# это обязательно — проверяющий спросит, откуда цифра.
+
+def _num(v):
+    """Число из того, как его пишут: 3 000 000, 3000000.50, 1,5."""
+    s = str(v or "").replace("\u00a0", " ").replace(" ", "").replace(",", ".")
+    s = "".join(ch for ch in s if ch.isdigit() or ch in ".-")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _goz(v):
+    """«ГОЗ», «государственный», «да» — все это да; остальное нет."""
+    s = str(v or "").strip().lower()
+    if s in ("да", "гоз", "yes", "true", "1") or "гособорон" in s or "государствен" in s:
+        return "да"
+    if s in ("нет", "no", "false", "0") or "граждан" in s or "коммерч" in s:
+        return "нет"
+    return None
+
+
+def _redirect(field, raw):
+    """Поправить поле, если модель перепутала признак ГОЗ с видом договора.
+
+    Эти два поля путаются постоянно: «договор 1234 — ГОЗ» модель кладет в
+    «вид», хотя ГОЗ — признак да/нет, а вид это ОКР или поставка. Подсказка
+    в промпте помогает не всегда, поэтому здесь еще и проверка: слово ГОЗ в
+    значении «вида» — это признак.
+    """
+    if field == "вид" and _goz(raw) == "да":
+        return "ГОЗ"
+    return field
+
+
+def _value(field, raw):
+    """Значение к виду, в котором оно лежит в базе. None — не разобрали."""
+    if field == "ГОЗ":
+        return _goz(raw)
+    if field in NUMERIC:
+        return _num(raw)
+    s = str(raw or "").strip()
+    return s or None
+
+
+def _find_contract(db, case_id, key):
+    """Договор по шифру или номеру. Реестр общий, план берет из него свое."""
+    from sqlalchemy import or_
+    from db import Contract
+
+    rows = (db.query(Contract)
+            .filter(or_(Contract.case_id == case_id, Contract.case_id.is_(None)))
+            .order_by(Contract.id).all())
+    k = str(key or "").strip().lower()
+    for c in rows:
+        if (c.code or "").lower() == k or (c.number or "").lower() == k:
+            return c
+    for c in rows:
+        if k and (k in (c.code or "").lower() or k in (c.number or "").lower()):
+            return c
+    return None
+
+
+def _find_employee(db, case_id, key):
+    from sqlalchemy import or_
+    from db import Employee
+
+    rows = (db.query(Employee)
+            .filter(or_(Employee.case_id == case_id, Employee.case_id.is_(None)))
+            .order_by(Employee.id).all())
+    k = str(key or "").strip().lower()
+    for e in rows:
+        if (e.code or "").lower() == k:
+            return e
+    for e in rows:
+        if k and k in ((e.fio or "") + " " + (e.code or "")).lower():
+            return e
+    return None
+
+
+def _shown(v):
+    if isinstance(v, float):
+        return ("%.2f" % v).rstrip("0").rstrip(".").replace(".", ",")
+    return str(v)
+
+
+def apply_edits(db, case, edits):
+    """Записать продиктованное. Возвращает строки отчета для ленты."""
+    import datetime as dt
+    import json as _json
+
+    from db import now
+
+    passport = _json.loads(case.passport) if case.passport else None
+    mark = "правка экономиста %s" % dt.datetime.now().strftime("%d.%m.%Y")
+    out, touched = [], False
+
+    for ed in edits or []:
+        entity = (ed.get("entity") or "").strip()
+        field = (ed.get("field") or "").strip()
+        key = (ed.get("key") or "").strip()
+        table = FIELDS.get(entity)
+        if table is None:
+            out.append("Не знаю, к чему отнести «%s»." % entity)
+            continue
+        field = _redirect(field, ed.get("value")) if entity == "договор" else field
+        if field not in table:
+            out.append("Поле «%s» через чат не заполняется. У %s можно: %s."
+                       % (field, entity, ", ".join(table)))
+            continue
+        val = _value(field, ed.get("value"))
+        if val is None:
+            out.append("Не разобрал значение «%s» для поля «%s»."
+                       % (ed.get("value"), field))
+            continue
+
+        column, pkey = table[field]
+        if entity == "договор":
+            row = _find_contract(db, case.id, key)
+            if row is None:
+                # Договора нет ни в одном документе: заводим строку реестра —
+                # именно этого и не хватало, когда форма пришла не по шаблону.
+                from db import Contract
+                row = Contract(code=key, case_id=None)
+                db.add(row)
+                out.append("Договора %s в реестре не было — завела строку. "
+                           "В расчет он войдет, только когда появится в шаблоне "
+                           "расчета: вход решателя собирается по нему." % key)
+            bag = (passport or {}).get("contracts") or []
+            ident = ("code", row.code)
+        else:
+            row = _find_employee(db, case.id, key)
+            if row is None:
+                out.append("Сотрудника «%s» в штатном расписании нет. "
+                           "Заводить людей через чат не берусь: строка штатки "
+                           "заводится приказом." % key)
+                continue
+            bag = (passport or {}).get("employees") or []
+            ident = ("code", row.code)
+
+        was = getattr(row, column)
+        setattr(row, column, val)
+        row.source = mark
+        touched = True
+
+        # То же значение в паспорт: вход решателя собирается из него, и без
+        # этого правка осталась бы только в таблице.
+        for item in bag:
+            if str(item.get(ident[0]) or "").lower() == str(ident[1] or "").lower():
+                item[pkey] = val
+                break
+
+        out.append("%s %s: %s — %s%s."
+                   % (entity.capitalize(), row.code, field, _shown(val),
+                      "" if was in (None, "") else " (было %s)" % _shown(was)))
+
+    if touched:
+        if passport is not None:
+            case.passport = _json.dumps(passport, ensure_ascii=False)
+        case.updated = now()
+        db.commit()
+    return out

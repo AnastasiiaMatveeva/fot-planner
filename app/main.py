@@ -431,6 +431,20 @@ async def post_message(case_id: int, background: BackgroundTasks, request: Reque
                 pending.answered = now()
                 db.commit()
 
+        if action == "заполнить поле":
+            # Величину, продиктованную в чате, пишет сервис по закрытому
+            # списку полей: модель называет поле словами, а имя столбца от
+            # модели в базу не идет.
+            with agents.working(db, case_id, "intake", "вносит правку") as w:
+                lines = chat.apply_edits(db, case, res.get("edits"))
+                w["detail"] = "; ".join(lines)[:200] or "нечего вносить"
+                db.commit()
+            agents.say(db, case_id,
+                       "\n".join(lines) or "Не разобрал, что именно записать.",
+                       agent="intake")
+            db.commit()
+            return {"ok": True, "action": "правка", "edits": len(lines)}
+
         # Действие модель предлагает, а выполняет сервис — и только если оно
         # выполнимо. Иначе «не поняла» запускает расчет на пустом деле, а PDF
         # уходит в разборщик книг Excel.
@@ -651,14 +665,19 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         run = db.get(Run, run_id)
         with agents.working(db, case_id, "intake", "собирает входной файл для расчета") as w:
             src = os.path.join(RESULT_DIR, "case%d_input.xlsx" % case_id)
+            warn = []
             if case.passport:
                 intake.extract.passport_to_input(json.loads(case.passport),
-                                                 reference.TEMPLATE, src)
+                                                 reference.TEMPLATE, src, warn)
             else:
                 import shutil
                 shutil.copy(reference.TEMPLATE, src)
             run.input_path = src
-            w["detail"] = "вход собран"
+            w["detail"] = "; ".join(warn) or "вход собран"
+            db.commit()
+        for line in warn:
+            agents.say(db, case_id, line, agent="intake")
+        if warn:
             db.commit()
 
         out = os.path.join(RESULT_DIR, "case%d_run%d.xlsx" % (case_id, run_id))
