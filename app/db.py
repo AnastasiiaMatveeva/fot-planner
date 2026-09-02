@@ -100,6 +100,15 @@ class Employee(Base):
     salary: Mapped[float | None] = mapped_column(Float, default=None)
     date_from: Mapped[str | None] = mapped_column(String(20), default=None)
     date_to: Mapped[str | None] = mapped_column(String(20), default=None)
+    # Поля входного листа «сотрудники», которых раньше не было. Без них не
+    # выразить совместительство: тип занятости прописывался в файл расчета
+    # жестко как «основное», а категория — как «основной», хотя у студентов и
+    # аспирантов свои пределы суммарной ставки.
+    department: Mapped[str | None] = mapped_column(String(200), default=None)
+    employment_type: Mapped[str | None] = mapped_column(String(40), default=None)
+    employment_category: Mapped[str | None] = mapped_column(String(40), default=None)
+    allowed_contracts: Mapped[str | None] = mapped_column(String(300), default=None)
+    forbidden_contracts: Mapped[str | None] = mapped_column(String(300), default=None)
     source: Mapped[str | None] = mapped_column(String(300), default=None)
     # Из какого документа взята строка. По имени файла связь ненадежна:
     # документ можно загрузить повторно или удалить, и данные должны уйти
@@ -133,6 +142,15 @@ class Contract(Base):
     goz: Mapped[str | None] = mapped_column(String(10), default=None)
     fund: Mapped[float | None] = mapped_column(Float, default=None)
     kinds: Mapped[str | None] = mapped_column(String(200), default=None)
+    # Поля входного листа «договоры», которых не было. Счет важен по существу:
+    # договор со счетом на «23» платит 120 без оклада на этом же договоре —
+    # правило в модели есть, а данных для него не было.
+    account: Mapped[str | None] = mapped_column(String(60), default=None)
+    priority: Mapped[str | None] = mapped_column(String(60), default=None)
+    allow_main: Mapped[str | None] = mapped_column(String(10), default=None)
+    allow_part_time: Mapped[str | None] = mapped_column(String(10), default=None)
+    salary_deadline: Mapped[str | None] = mapped_column(String(20), default=None)
+    allowance_deadline: Mapped[str | None] = mapped_column(String(20), default=None)
     source: Mapped[str | None] = mapped_column(String(300), default=None)
     # Из какого документа взята строка. По имени файла связь ненадежна:
     # документ можно загрузить повторно или удалить, и данные должны уйти
@@ -281,6 +299,64 @@ engine = create_engine("sqlite:///" + DB_PATH, future=True,
 SessionLocal = sessionmaker(bind=engine, autoflush=False, future=True)
 
 
+class LaborRow(Base):
+    """Строка трудоемкости договора: план в чел.-мес. и средняя стоимость.
+
+    Главные данные РКМ и Формы 9д, и до сих пор им негде было лежать: лист
+    «трудоемкость_по_договорам» входного файла оставался пустым, а весь раздел
+    модели про закрытие плановых чел.-мес. работал вхолостую.
+    """
+
+    __tablename__ = "labor_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contract_code: Mapped[str] = mapped_column(String(60))
+    year: Mapped[int | None] = mapped_column(Integer, default=None)
+    position: Mapped[str | None] = mapped_column(String(200), default=None)
+    salary_page: Mapped[str | None] = mapped_column(String(60), default=None)
+    salary_group: Mapped[int | None] = mapped_column(Integer, default=None)
+    position_level: Mapped[int | None] = mapped_column(Integer, default=None)
+    person_months: Mapped[float | None] = mapped_column(Float, default=None)
+    avg_cost: Mapped[float | None] = mapped_column(Float, default=None)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
+
+
+class Inflow(Base):
+    """Поступление денег по договору за месяц.
+
+    Решатель не может потратить деньги раньше, чем они поступили. Раньше
+    помесячная разбивка бралась из шаблона и масштабировалась под фонд —
+    то есть попросту выдумывалась.
+    """
+
+    __tablename__ = "inflows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contract_code: Mapped[str] = mapped_column(String(60))
+    year: Mapped[int | None] = mapped_column(Integer, default=None)
+    month: Mapped[int] = mapped_column(Integer)
+    amount: Mapped[float | None] = mapped_column(Float, default=None)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
+
+
+class SecretAllowance(Base):
+    """Кому платится 120 и какой договор задает период секретности."""
+
+    __tablename__ = "secret_allowances"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_code: Mapped[str] = mapped_column(String(60))
+    secret_contract_code: Mapped[str | None] = mapped_column(String(60), default=None)
+    rate: Mapped[float | None] = mapped_column(Float, default=None)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
+
+
 class Proposal(Base):
     """Строка, вычитанная моделью из документа неизвестной формы, — до
     подтверждения экономистом.
@@ -310,8 +386,39 @@ class Proposal(Base):
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
 
 
+#: Колонки, добавленные к уже существующим таблицам. create_all создает
+#: недостающие таблицы, но не колонки, а базу с делами экономиста мы не
+#: пересоздаем. SQLite умеет ADD COLUMN, этого достаточно.
+_ADDED_COLUMNS = {
+    "employees": [
+        ("department", "VARCHAR(200)"),
+        ("employment_type", "VARCHAR(40)"),
+        ("employment_category", "VARCHAR(40)"),
+        ("allowed_contracts", "VARCHAR(300)"),
+        ("forbidden_contracts", "VARCHAR(300)"),
+    ],
+    "contracts": [
+        ("account", "VARCHAR(60)"),
+        ("priority", "VARCHAR(60)"),
+        ("allow_main", "VARCHAR(10)"),
+        ("allow_part_time", "VARCHAR(10)"),
+        ("salary_deadline", "VARCHAR(20)"),
+        ("allowance_deadline", "VARCHAR(20)"),
+    ],
+}
+
+
 def init_db():
     Base.metadata.create_all(engine)
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        for table, columns in _ADDED_COLUMNS.items():
+            have = {r[1] for r in conn.execute(text("PRAGMA table_info(%s)" % table))}
+            for name, kind in columns:
+                if name not in have:
+                    conn.execute(text("ALTER TABLE %s ADD COLUMN %s %s"
+                                      % (table, name, kind)))
 
 
 def session():

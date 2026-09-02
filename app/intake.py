@@ -28,7 +28,8 @@ import extract          # noqa: E402
 import llm              # noqa: E402
 from agents import handoff, say, working  # noqa: E402
 from db import (  # noqa: E402
-    Contract, Document, Employee, Proposal, Question, Substitution, now,
+    Contract, Document, Employee, Inflow, LaborRow, Proposal, Question,
+    SecretAllowance, Substitution, now,
 )
 
 # Слова, по которым книга опознается как нормативный документ, а не как
@@ -259,6 +260,20 @@ def _known(db, entity, f):
         code = str(f.get("code") or "").strip()
         return bool(code) and any((c.code or "").strip().lower() == code.lower()
                                   for c in db.query(Contract).all())
+    if entity == "трудоемкость":
+        code = str(f.get("contract") or "").strip().lower()
+        pos = str(f.get("position") or "").strip().lower()
+        return any((r.contract_code or "").strip().lower() == code
+                   and (r.position or "").strip().lower() == pos
+                   for r in db.query(LaborRow).all())
+    if entity == "поступление":
+        code = str(f.get("contract") or "").strip().lower()
+        return any((r.contract_code or "").strip().lower() == code
+                   and r.month == f.get("month") for r in db.query(Inflow).all())
+    if entity == "надбавка 120":
+        who = str(f.get("employee") or "").strip().lower()
+        return any((r.employee_code or "").strip().lower() == who
+                   for r in db.query(SecretAllowance).all())
     if entity == "должность":
         # Должность считается известной, только если она уже в справочнике и
         # документ не приносит по ней других величин: перечень должностей
@@ -308,6 +323,8 @@ def propose_entities(db, case, doc):
             return False
 
         buckets = (("employees", "сотрудник"), ("contracts", "договор"),
+                   ("labor", "трудоемкость"), ("inflows", "поступление"),
+                   ("secret", "надбавка 120"),
                    ("substitutions", "правило замещения"),
                    ("positions", "должность"))
         counts, skipped = {}, 0

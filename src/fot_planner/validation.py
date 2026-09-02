@@ -181,7 +181,21 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                 )
 
     for c in ctx.contracts:
-        if c.end_date < c.start_date:
+        # Пустой срок разбирался сравнением None с None и ронял проверку
+        # TypeError: экономист получал трассировку вместо ответа, что не так
+        # во входном файле.
+        if c.start_date is None or c.end_date is None:
+            conflicts.append(
+                ConflictRecord(
+                    code="MISSING_CONTRACT_DATES",
+                    message=(
+                        f"Договор {c.id}: не задан срок действия "
+                        f"(дата начала и дата окончания)"
+                    ),
+                    contract_id=c.id,
+                )
+            )
+        elif c.end_date < c.start_date:
             conflicts.append(
                 ConflictRecord(
                     code="INVALID_DATES",

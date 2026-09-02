@@ -538,82 +538,161 @@ def _no_thinking(name):
 # предложение нельзя: экономисту пришлось бы искать значение в файле глазами.
 
 FREEFORM_SYSTEM = """Ты читаешь документ планово-экономического отдела и
-достаешь из него строки трех видов.
+достаешь из него строки для расчета фонда оплаты труда.
 
-Сотрудник: табельный номер, ФИО, должность, доля ставки, оклад в рублях,
-срок работы.
-Договор: шифр, наименование, номер, вид работ, признак гособоронзаказа,
-фонд оплаты труда в рублях, срок действия.
-Правило замещения: должность и должности, которыми ее можно заместить.
-Должность справочника: название должности и категория персонала (НТП, НР,
+Сотрудник (employees) — строка штатного расписания: табельный номер, ФИО,
+должность, подразделение, доля ставки, месячная зарплата, срок работы. Тип
+занятости — «основное» или «совместительство». Категория занятости —
+«основной», «студент» или «аспирант». Разрешенные и запрещенные договоры,
+если они названы. Один человек может быть задан несколькими строками с
+разными должностями и ставками — это нормально, не объединяй их.
+
+Договор (contracts): шифр, наименование, номер, вид работ, номер счета,
+признак гособоронзаказа, срок действия, фонд оплаты труда. Разрешенные виды
+выплат — оклад, 120, 122, 124, 152, стимулирующая приказом: по каждому «да»
+или «нет», если в документе сказано. Разрешено ли основное место и
+совместительство, приоритет, конечные даты выплат оклада и надбавок.
+
+Трудоемкость (labor) — плановые позиции договора: шифр договора, год,
+должность или окладная группа (страница, номер группы, номер уровня), план в
+человеко-месяцах, средняя стоимость одного человеко-месяца в рублях. Это
+главное содержание расчетно-калькуляционных материалов и Формы 9д.
+
+Поступления (inflows) — деньги по договору помесячно: шифр договора, год,
+номер месяца от 1 до 12, сумма поступления. Строку заводи на каждый месяц,
+где сумма названа.
+
+Надбавка 120 (secret): табельный номер сотрудника, шифр договора
+секретности, доля ставки для 120.
+
+Должность справочника (positions): название и категория персонала (НТП, НР,
 АУП, ППС, ПП), а если в документе есть — оклад за полную ставку, предельный
-размер по приказу № 2556, предельный размер по приказу № 4, БЭП. Это перечень
-должностей организации, а не люди: ФИО у такой строки нет.
+размер по приказу № 2556, предельный размер по приказу № 4, БЭП. Это
+перечень должностей организации, а не люди: ФИО у такой строки нет.
+
+Правило замещения (substitutions): должность сотрудника и должности, которые
+ему можно дать дополнительно к собственной.
 
 Правила:
 - бери только то, что в документе действительно написано; ничего не выводи
   по смыслу и не достраивай по образцу;
+- у сотрудника обязательно заполни position и salary, если они в документе
+  есть: должность и месячная зарплата — главное в строке штатного расписания,
+  без них строка бесполезна;
 - поля from и to — это только срок, даты вида 01.01.2026; если срок в
   документе не указан, оставь их пустыми и ничего туда не подставляй;
 - для каждой строки заполни поле «место»: где она в документе — лист и номер
   строки, адрес ячейки или короткая цитата;
-- суммы возвращай числом без пробелов и знака рубля;
+- суммы возвращай числом без пробелов и знака рубля; проценты — числом;
 - перечень должностей с категориями — это positions, а не employees:
   сотрудника без ФИО и табельного номера не бывает;
-- если строк какого-то вида в документе нет, верни пустой список;
-- если документ вообще не об этом, верни три пустых списка."""
+- разрешения выплат отмечай словами «да» и «нет», а не галочками;
+- если строк какого-то вида в документе нет, верни пустой список."""
 
 FREEFORM_SHAPE = """Ответь одним объектом JSON:
-{"employees": [{"code": "табельный", "fio": "ФИО", "pos": "должность",
-                "rate": 1.0, "sal": 50000, "from": "01.01.2026",
-                "to": "31.12.2026", "место": "лист «штат», строка 7"}],
+{"employees": [{"code": "табельный", "fio": "ФИО", "position": "должность",
+                "salary": 50000, "department": "подразделение", "rate": 1.0,
+                "employment": "основное", "category": "основной",
+                "allowed": "шифры через запятую", "forbidden": "шифры",
+                "from": "01.01.2026", "to": "31.12.2026",
+                "место": "лист «штат», строка 7"}],
  "contracts": [{"code": "шифр", "name": "наименование", "num": "номер",
-                "type": "вид", "goz": "да", "fot": 1000000,
+                "type": "вид", "account": "счет", "goz": "да", "fot": 1000000,
+                "allow_salary": "да", "allow_120": "нет", "allow_122": "да",
+                "allow_124": "нет", "allow_152": "нет", "allow_order": "нет",
+                "priority": null, "allow_main": "да", "allow_part": "да",
+                "salary_deadline": null, "allowance_deadline": null,
                 "from": "01.01.2026", "to": "31.12.2026",
                 "место": "лист «договоры», строка 3"}],
+ "labor": [{"contract": "шифр", "year": 2026, "position": "Инженер",
+            "page": null, "group": null, "level": null,
+            "person_months": 12.5, "avg_cost": 95000,
+            "место": "Форма 9д, строка 14"}],
+ "inflows": [{"contract": "шифр", "year": 2026, "month": 3, "amount": 1200000,
+              "место": "график поступлений, строка 5"}],
+ "secret": [{"employee": "табельный", "contract": "шифр договора секретности",
+             "rate": 0.5, "место": "приказ, пункт 2"}],
  "substitutions": [{"position": "должность", "replaced_by": "кем",
                     "место": "строка 12"}],
- "positions": [{"pos": "Инженер", "cat": "НТП", "sal": 40400, "p2556": 110000,
-                "p4": 149648.9, "bep": 112261, "место": "лист «ШР», строка 20"}]}"""
+ "positions": [{"position": "Инженер", "category": "НТП",
+                "salary_for_rate": 40400, "p2556": 110000, "p4": 149648.9,
+                "bep": 112261, "место": "лист «ШР», строка 20"}]}"""
+
+_TXT = {"type": ["string", "null"]}
+_NUM = {"type": ["number", "null"]}
 
 _FF_EMP = {
     "type": "object",
     "properties": {
-        "code": {"type": ["string", "null"]}, "fio": {"type": ["string", "null"]},
-        "pos": {"type": ["string", "null"]}, "rate": {"type": ["number", "null"]},
-        "sal": {"type": ["number", "null"]}, "from": {"type": ["string", "null"]},
-        "to": {"type": ["string", "null"]}, "место": {"type": ["string", "null"]},
+        "code": _TXT, "fio": _TXT, "position": _TXT, "salary": _NUM,
+        "department": _TXT, "rate": _NUM, "employment": _TXT, "category": _TXT,
+        "allowed": _TXT, "forbidden": _TXT,
+        "from": _TXT, "to": _TXT, "место": _TXT,
     },
+    # Должность, ставка и зарплата — обязательные: без них строка штатного
+    # расписания бесполезна, а необязательное поле модель молча пропускает,
+    # даже когда значение стоит прямо перед ней. Пустым его вернуть можно —
+    # тип допускает null, — но соврать умолчанием уже не выйдет.
+    "required": ["code", "position", "rate", "salary"],
+    "additionalProperties": False,
+}
+
+_FF_LABOR = {
+    "type": "object",
+    "properties": {
+        "contract": _TXT, "year": _NUM, "position": _TXT, "page": _TXT,
+        "group": _NUM, "level": _NUM, "person_months": _NUM, "avg_cost": _NUM,
+        "место": _TXT,
+    },
+    "required": ["contract", "person_months", "avg_cost"],
+    "additionalProperties": False,
+}
+
+_FF_INFLOW = {
+    "type": "object",
+    "properties": {
+        "contract": _TXT, "year": _NUM, "month": _NUM, "amount": _NUM,
+        "место": _TXT,
+    },
+    "required": ["contract", "month", "amount"],
+    "additionalProperties": False,
+}
+
+_FF_SECRET = {
+    "type": "object",
+    "properties": {
+        "employee": _TXT, "contract": _TXT, "rate": _NUM, "место": _TXT,
+    },
+    "required": ["employee", "contract"],
     "additionalProperties": False,
 }
 _FF_CTR = {
     "type": "object",
     "properties": {
-        "code": {"type": ["string", "null"]}, "name": {"type": ["string", "null"]},
-        "num": {"type": ["string", "null"]}, "type": {"type": ["string", "null"]},
-        "goz": {"type": ["string", "null"]}, "fot": {"type": ["number", "null"]},
-        "from": {"type": ["string", "null"]}, "to": {"type": ["string", "null"]},
-        "место": {"type": ["string", "null"]},
+        "code": _TXT, "name": _TXT, "num": _TXT, "type": _TXT,
+        "account": _TXT, "goz": _TXT, "fot": _NUM,
+        "allow_salary": _TXT, "allow_120": _TXT, "allow_122": _TXT,
+        "allow_124": _TXT, "allow_152": _TXT, "allow_order": _TXT,
+        "priority": _TXT, "allow_main": _TXT, "allow_part": _TXT,
+        "salary_deadline": _TXT, "allowance_deadline": _TXT,
+        "from": _TXT, "to": _TXT, "место": _TXT,
     },
+    "required": ["code", "fot", "goz"],
     "additionalProperties": False,
 }
 _FF_SUB = {
     "type": "object",
-    "properties": {
-        "position": {"type": ["string", "null"]},
-        "replaced_by": {"type": ["string", "null"]},
-        "место": {"type": ["string", "null"]},
-    },
+    "properties": {"position": _TXT, "replaced_by": _TXT, "место": _TXT},
+    "required": ["position", "replaced_by"],
     "additionalProperties": False,
 }
 _FF_POS = {
     "type": "object",
     "properties": {
-        "pos": {"type": ["string", "null"]}, "cat": {"type": ["string", "null"]},
-        "sal": {"type": ["number", "null"]}, "p2556": {"type": ["number", "null"]},
-        "p4": {"type": ["number", "null"]}, "bep": {"type": ["number", "null"]},
-        "место": {"type": ["string", "null"]},
+        "position": _TXT, "category": _TXT, "salary_for_rate": _NUM,
+        "p2556": _NUM, "p4": _NUM, "bep": _NUM, "место": _TXT,
     },
+    "required": ["position", "category"],
     "additionalProperties": False,
 }
 FREEFORM_SCHEMA = {
@@ -621,16 +700,24 @@ FREEFORM_SCHEMA = {
     "properties": {
         "employees": {"type": "array", "items": _FF_EMP},
         "contracts": {"type": "array", "items": _FF_CTR},
+        "labor": {"type": "array", "items": _FF_LABOR},
+        "inflows": {"type": "array", "items": _FF_INFLOW},
+        "secret": {"type": "array", "items": _FF_SECRET},
         "substitutions": {"type": "array", "items": _FF_SUB},
         "positions": {"type": "array", "items": _FF_POS},
     },
-    "required": ["employees", "contracts", "substitutions", "positions"],
+    "required": ["employees", "contracts", "labor", "inflows", "secret",
+                 "substitutions", "positions"],
     "additionalProperties": False,
 }
 
 #: По каким полям строка считается той же самой на стыке частей документа.
 _FF_KEY = {"employees": ("code", "fio"), "contracts": ("code", "num"),
-           "substitutions": ("position", "replaced_by"), "positions": ("pos",)}
+           "substitutions": ("position", "replaced_by"),
+           "positions": ("position",),
+           "labor": ("contract", "position", "person_months"),
+           "inflows": ("contract", "month"),
+           "secret": ("employee", "contract")}
 
 
 def freeform(path, filename="", max_chunks=8):
@@ -645,8 +732,7 @@ def freeform(path, filename="", max_chunks=8):
         return {"ok": False, "error": str(e)}
 
     filename = filename or os.path.basename(path)
-    found = {"employees": [], "contracts": [], "substitutions": [],
-             "positions": []}
+    found = {key: [] for key in _FF_KEY}
     seen = {k: set() for k in found}
     parts = _chunks(text)[:max_chunks]
     errors = []

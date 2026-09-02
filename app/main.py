@@ -28,14 +28,15 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
 
 import agents            # noqa: E402
+import build_input       # noqa: E402
 import chat              # noqa: E402
 import docread           # noqa: E402
 import intake            # noqa: E402
 import llm               # noqa: E402
 import reference         # noqa: E402
 from db import (         # noqa: E402
-    Activity, Case, Contract, Document, Employee, Message, Proposal, Question, Run,
-    Substitution,
+    Activity, Case, Contract, Document, Employee, Inflow, LaborRow, Message,
+    Proposal, Question, Run, SecretAllowance, Substitution,
     RESULT_DIR, UPLOAD_DIR, init_db, now, session,
 )
 
@@ -448,7 +449,8 @@ async def decide_proposals(doc_id: int, request: Request):
         rows = (db.query(Proposal)
                 .filter(Proposal.document_id == doc_id,
                         Proposal.state == "предложено").all())
-        added = {"сотрудник": 0, "договор": 0, "правило замещения": 0,
+        added = {"сотрудник": 0, "договор": 0, "трудоемкость": 0,
+                 "поступление": 0, "надбавка 120": 0, "правило замещения": 0,
                  "должность": 0}
         ref_log = []
         for pr in rows:
@@ -459,25 +461,57 @@ async def decide_proposals(doc_id: int, request: Request):
                 continue
             f = json.loads(pr.payload)
             if pr.entity == "сотрудник":
-                db.add(Employee(code=str(f.get("code") or ""), fio=f.get("fio"),
-                                position=f.get("pos"), rate=f.get("rate"),
-                                salary=f.get("sal"), date_from=f.get("from"),
-                                date_to=f.get("to"), source=doc.name,
-                                document_id=doc.id))
+                db.add(Employee(
+                    code=str(f.get("code") or ""), fio=f.get("fio"),
+                    position=f.get("position"), rate=f.get("rate"),
+                    salary=f.get("salary"), department=f.get("department"),
+                    employment_type=f.get("employment"),
+                    employment_category=f.get("category"),
+                    allowed_contracts=f.get("allowed"),
+                    forbidden_contracts=f.get("forbidden"),
+                    date_from=f.get("from"), date_to=f.get("to"),
+                    source=doc.name, document_id=doc.id))
             elif pr.entity == "договор":
-                db.add(Contract(code=str(f.get("code") or ""), name=f.get("name"),
-                                number=f.get("num"), kind=f.get("type"),
-                                goz=f.get("goz"), fund=f.get("fot"),
-                                date_from=f.get("from"), date_to=f.get("to"),
-                                source=doc.name, document_id=doc.id))
+                db.add(Contract(
+                    code=str(f.get("code") or ""), name=f.get("name"),
+                    number=f.get("num"), kind=f.get("type"),
+                    account=f.get("account"), goz=f.get("goz"),
+                    fund=f.get("fot"), kinds=_allowed_kinds(f),
+                    priority=f.get("priority"), allow_main=f.get("allow_main"),
+                    allow_part_time=f.get("allow_part"),
+                    salary_deadline=f.get("salary_deadline"),
+                    allowance_deadline=f.get("allowance_deadline"),
+                    date_from=f.get("from"), date_to=f.get("to"),
+                    source=doc.name, document_id=doc.id))
+            elif pr.entity == "трудоемкость":
+                db.add(LaborRow(
+                    contract_code=str(f.get("contract") or ""),
+                    year=f.get("year"), position=f.get("position"),
+                    salary_page=f.get("page"), salary_group=f.get("group"),
+                    position_level=f.get("level"),
+                    person_months=f.get("person_months"),
+                    avg_cost=f.get("avg_cost"),
+                    source=doc.name, document_id=doc.id))
+            elif pr.entity == "поступление":
+                db.add(Inflow(
+                    contract_code=str(f.get("contract") or ""),
+                    year=f.get("year"), month=int(f.get("month") or 0),
+                    amount=f.get("amount"),
+                    source=doc.name, document_id=doc.id))
+            elif pr.entity == "надбавка 120":
+                db.add(SecretAllowance(
+                    employee_code=str(f.get("employee") or ""),
+                    secret_contract_code=f.get("contract"), rate=f.get("rate"),
+                    source=doc.name, document_id=doc.id))
             elif pr.entity == "должность":
                 # Должность живет не в базе, а листом «лимиты_по_должностям»
                 # входного файла: оттуда ее читает сам решатель.
                 what, changed = reference.upsert_position(
-                    f.get("pos"), f.get("cat"), f.get("sal"), f.get("p2556"),
+                    f.get("position"), f.get("category"),
+                    f.get("salary_for_rate"), f.get("p2556"),
                     f.get("p4"), f.get("bep"))
                 ref_log.append("«%s» %s%s" % (
-                    f.get("pos"), what,
+                    f.get("position"), what,
                     " (%s)" % ", ".join(c[0] for c in changed) if changed else ""))
             else:
                 db.add(Substitution(position=str(f.get("position") or ""),
@@ -535,10 +569,7 @@ def _sheet_html(doc, sheet):
         with open(cached, encoding="utf-8") as f:
             return f.read()
     out = io.StringIO()
-    if sheet:
-        xlsx2html(doc.path, out, sheet=sheet)
-    else:
-        xlsx2html(doc.path, out)
+    xlsx2html(doc.path, out, sheet=sheet if sheet else 0)
     html = out.getvalue()
     with open(cached, "w", encoding="utf-8") as f:
         f.write(html)
@@ -633,6 +664,38 @@ def document_file(doc_id: int):
         db.close()
 
 
+#: Из каких полей предложения собирается графа «разрешенные выплаты».
+_KIND_FIELDS = (("allow_salary", "оклад"), ("allow_120", "120"),
+                ("allow_122", "122"), ("allow_124", "124"),
+                ("allow_152", "152"), ("allow_order", "приказ"))
+
+
+def _allowed_kinds(f):
+    """Разрешенные виды выплат одной строкой — как их показывает реестр."""
+    yes = [name for key, name in _KIND_FIELDS
+           if str(f.get(key) or "").strip().lower() in ("да", "true", "1", "+")]
+    return ", ".join(yes) or None
+
+
+def _registry_data(db, case):
+    """Все, что агент собрал для расчета, — из реестра организации.
+
+    Реестр общий для всех планов: договор живет несколько лет, штатка меняется
+    приказами. План на год берет из реестра то, что в этом году действует, а
+    год берется из самого плана.
+    """
+    return {
+        "year": case.year,
+        "employees": db.query(Employee).order_by(Employee.id).all(),
+        "contracts": db.query(Contract).order_by(Contract.id).all(),
+        "inflows": db.query(Inflow).order_by(Inflow.id).all(),
+        "labor": db.query(LaborRow).order_by(LaborRow.id).all(),
+        "secret": db.query(SecretAllowance).order_by(SecretAllowance.id).all(),
+        "substitutions": [(s.position, s.replaced_by) for s in
+                          db.query(Substitution).order_by(Substitution.id).all()],
+    }
+
+
 def _forget_document(db, doc):
     """Удалить документ вместе со всем, что из него извлечено.
 
@@ -642,6 +705,10 @@ def _forget_document(db, doc):
     gone = {
         "сотрудников": db.query(Employee).filter_by(document_id=doc.id).delete(),
         "договоров": db.query(Contract).filter_by(document_id=doc.id).delete(),
+        "строк трудоемкости": db.query(LaborRow).filter_by(document_id=doc.id).delete(),
+        "поступлений": db.query(Inflow).filter_by(document_id=doc.id).delete(),
+        "надбавок 120": db.query(SecretAllowance)
+                          .filter_by(document_id=doc.id).delete(),
         "правил замещения": db.query(Substitution).filter_by(document_id=doc.id).delete(),
     }
     # Непринятые предложения уходят вместе с документом: подтверждать строки
@@ -968,12 +1035,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         with agents.working(db, case_id, "intake", "собирает входной файл для расчета") as w:
             src = os.path.join(RESULT_DIR, "case%d_input.xlsx" % case_id)
             warn = []
-            if case.passport:
-                intake.extract.passport_to_input(json.loads(case.passport),
-                                                 reference.TEMPLATE, src, warn)
-            else:
-                import shutil
-                shutil.copy(reference.TEMPLATE, src)
+            build_input.build(reference.TEMPLATE, src, _registry_data(db, case), warn)
             run.input_path = src
             w["detail"] = "; ".join(warn) or "вход собран"
             db.commit()

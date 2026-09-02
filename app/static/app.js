@@ -1079,7 +1079,8 @@ function preview(d) {
         px(names.length, "лист", "листа", "листов") + "</span></label>"
       : "";
     return head + pick + '<iframe class="sheetview" src="/api/document/' +
-           d.id + '/preview" title="Предпросмотр листа"></iframe></div>';
+           d.id + "/preview?sheet=" + encodeURIComponent(names[0] || "") +
+           '" title="Предпросмотр листа"></iframe></div>';
   }
   if (p["вид"] === "текст") {
     return head + '<pre class="ptext">' + esc(p["текст"]) + "</pre>" +
