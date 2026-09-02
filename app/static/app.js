@@ -1046,6 +1046,18 @@ function produced(made) {
     }).join(" · ");
 }
 
+/* Заголовок раздела — существительное: «Сверка со справочником» читается как
+   название, а «сверяет» посреди карточки выглядит обрывком фразы. Шаги
+   приходят из названий работ агента, поэтому переводим их здесь. */
+var STEP_TITLES = {
+  "определяет вид": "Определение вида",
+  "сверяет": "Сверка со справочником",
+  "разбирает": "Разбор документа",
+  "перечитывает": "Чтение без шаблона",
+  "читает правила замещения": "Чтение правил замещения",
+  "вносит правку": "Правка из чата",
+};
+
 function bytes(n) {
   if (!n) return "—";
   if (n < 1024) return n + " Б";
@@ -1054,7 +1066,9 @@ function bytes(n) {
 }
 
 function meta(pairs) {
-  return '<dl class="meta">' + pairs.filter(function (p) { return p[1]; })
+  return '<dl class="meta">' + pairs.filter(function (p) {
+      return p[1] !== null && p[1] !== undefined && p[1] !== "";
+    })
     .map(function (p) {
       return "<dt>" + esc(p[0]) + "</dt><dd>" + esc(p[1]) + "</dd>";
     }).join("") + "</dl>";
@@ -1136,9 +1150,22 @@ function openDocument(id) {
         "</div></div>";
     }
 
+    // Работа агентов над документом. У нормативного документа строк реестра
+    // нет вовсе, и графа «что дал» пустовала — хотя агент знает про него
+    // многое: сколько величин извлек, с какой даты действует, сколько
+    // должностей не нашел в справочнике. Показываем это, а не одну сводку.
+    (d["работа"] || []).forEach(function (w) {
+      if (!w["поля"].length) return;
+      got += '<div class="grp"><h4>' + esc(STEP_TITLES[w["шаг"]] || w["шаг"]) +
+        "</h4>" +
+        meta(w["поля"].map(function (kv) {
+          var v = kv[1];
+          return [kv[0], Array.isArray(v) ? v.join(", ")
+                       : (typeof v === "boolean" ? (v ? "да" : "нет") : v)];
+        })) + "</div>";
+    });
+
     if (!got) {
-      // Пусто — это не всегда сбой: нормативный документ дает не строки, а
-      // расхождения. Что именно вышло, сказано в сводке разбора.
       got = '<div class="grp"><h4>Что дал</h4><div class="none">' +
             esc(d.summary || "ничего не извлечено") + "</div></div>";
     }
@@ -1150,7 +1177,8 @@ function openDocument(id) {
         meta([["Вид", d.kind], ["Состояние", d.state], ["Разобран", d.by],
               ["Размер", bytes(d.size)], ["Загружен", d.uploaded]]) +
         (d.exists
-          ? '<a class="dfile" href="/api/document/' + d.id + '/file">Открыть файл</a>'
+          ? '<a class="dfile" href="/api/document/' + d.id +
+            '/file" target="_blank" rel="noopener">Открыть файл</a>'
           : '<div class="none">Файла нет на диске</div>') +
         prop + got +
       "</div>" +

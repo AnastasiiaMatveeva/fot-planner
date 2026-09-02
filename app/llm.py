@@ -415,11 +415,20 @@ CLASSIFY_SYSTEM = """Определи, что за документ перед �
 - «штатное расписание» — перечень сотрудников с должностями и ставками;
 - «иное» — все остальное.
 
-Отвечай по существу документа, а не по названию файла."""
+Отвечай по существу документа, а не по названию файла.
+
+Отдельно оцени, читаем ли сам текст. Бывает, что PDF собран из скана чужим
+распознаванием, и вместо слов идет каша: латинские буквы посреди русских слов,
+разорванные слова, бессмысленные сочетания знаков — «МИН ИСТRJ>Сrво»,
+«(МИ НОSОР)». Тогда garbled = true. Опечатки, переносы, обрывки таблиц и
+колонки цифр кашей не считаются: если документ в целом можно прочесть
+глазами, garbled = false."""
 
 CLASSIFY_SHAPE = """Ответь одним объектом JSON:
 {"kind": "один из видов", "title": "как называется документ, одной фразой",
- "why": "по каким признакам решил, одной фразой"}"""
+ "why": "по каким признакам решил, одной фразой",
+ "garbled": false,
+ "garbled_why": "если текст нечитаемый — чем именно, одной фразой, иначе null"}"""
 
 CLASSIFY_SCHEMA = {
     "type": "object",
@@ -427,6 +436,8 @@ CLASSIFY_SCHEMA = {
         "kind": {"type": "string", "enum": list(DOC_KINDS)},
         "title": {"type": "string"},
         "why": {"type": "string"},
+        "garbled": {"type": "boolean"},
+        "garbled_why": {"type": ["string", "null"]},
     },
     "required": ["kind"],
     "additionalProperties": False,
@@ -470,6 +481,8 @@ def classify(path, filename="", head=6000):
         return {"ok": False, "error": "модель вернула неизвестный вид: %r" % kind}
     return {"ok": True, "kind": kind, "title": (raw.get("title") or "").strip(),
             "why": (raw.get("why") or "").strip(),
+            "garbled": bool(raw.get("garbled")),
+            "garbled_why": (raw.get("garbled_why") or "").strip(),
             "model": "%s, %s" % (model, PROVIDER_LABEL.get(name, name))}
 
 
@@ -484,6 +497,8 @@ def _classify_anthropic(text, filename, model):
                       "правила замещения должностей", "штатное расписание", "иное"]
         title: Optional[str] = None
         why: Optional[str] = None
+        garbled: bool = False
+        garbled_why: Optional[str] = None
 
     msg = anthropic.Anthropic().messages.parse(
         model=model, max_tokens=500, system=CLASSIFY_SYSTEM,

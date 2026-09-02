@@ -87,7 +87,7 @@ def classify_by_words(path):
 
 
 def classify(path, filename=""):
-    """(вид документа, чей он, чем определили).
+    """(вид документа, чей он, чем определили, каша ли текст).
 
     Вид определяет модель: счет ключевых слов на настоящих документах путается
     — в приказе об оплате труда слово «договор» встречается не реже, чем в
@@ -97,16 +97,20 @@ def classify(path, filename=""):
     res = llm.classify(path, filename)
     if res.get("ok"):
         kind = res["kind"]
-        if kind == "иное":
-            return kind, None, "модель " + res["model"]
-        return kind, OWNER.get(kind), "модель " + res["model"]
+        garbled = (res.get("garbled_why") or "").strip() if res.get("garbled") else None
+        if res.get("garbled") and not garbled:
+            # Модель не назвала причину — обходимся без нее, лишь бы не
+            # повторять в сообщении одно и то же дважды.
+            garbled = ""
+        owner = None if kind == "иное" else OWNER.get(kind)
+        return kind, owner, "модель " + res["model"], garbled
 
     if res.get("unavailable"):
         kind, owner, _ = classify_by_words(path)
-        return kind, owner, "разбор по заголовкам"
+        return kind, owner, "разбор по заголовкам", None
 
     # Файл не прочитан — про это надо сказать прямо, а не гадать по словам.
-    return res.get("error") or "не прочитан", None, None
+    return res.get("error") or "не прочитан", None, None, None
 
 
 # ── правила замещения должностей ────────────────────────────────
@@ -510,13 +514,35 @@ def _plural(n, one, few, many):
 def handle_document(db, case, doc):
     """Определить, чей документ, и передать нужному агенту."""
     with working(db, case.id, "intake", "определяет вид «%s»" % doc.name) as w:
-        kind, owner, by = classify(doc.path, doc.name)
-        w["detail"] = kind
+        kind, owner, by, garbled = classify(doc.path, doc.name)
+        w["detail"] = "текст нечитаемый" if garbled is not None else kind
         w["artifact"] = {"файл": doc.name, "формат": docread.kind_of(doc.path),
                          "размер, байт": doc.size, "определен вид": kind,
                          "чем определен": by or "не удалось прочитать",
                          "передан агенту": AGENT_TITLE.get(AGENT_OF.get(owner), "—")}
+        if garbled is not None:
+            w["artifact"]["текст нечитаемый"] = garbled or "да"
         db.commit()
+
+    # Плохой текстовый слой опаснее его отсутствия: скан честно говорит, что не
+    # читается, а PDF, собранный чужим распознаванием, выглядит прочитанным и
+    # подсовывает кашу — «МИН ИСТRJ>Сrво». Извлекать из нее величины нельзя:
+    # получится правдоподобная неправда, а это ГОЗ. Останавливаемся здесь.
+    if garbled is not None:
+        doc.state = "не прочитан"
+        doc.kind = kind
+        doc.parsed_by = by
+        doc.summary = ("текст в файле нечитаемый — похоже, это распознанный "
+                       "скан плохого качества")
+        db.commit()
+        say(db, case.id,
+            "«%s» открылся, но текст в нем нечитаемый — похоже, это "
+            "распознанный скан плохого качества%s. Извлекать величины из "
+            "такого текста я не стану: выйдет правдоподобная неправда. "
+            "Приложите документ в текстовом виде или введите величины вручную."
+            % (doc.name, ": " + garbled if garbled else ""), agent="intake")
+        db.commit()
+        return
 
     # Два разных отказа, и путать их нельзя. Файл, который не читается,
     # не станет читаемым от того, что экономист назовет его вид: спрашивать

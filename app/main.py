@@ -367,6 +367,7 @@ def one_document(doc_id: int):
                            "to": c.date_to} for c in ctr],
             "substitutions": [{"position": s.position, "replaced_by": s.replaced_by}
                               for s in sub],
+            "работа": _document_work(db, d.name),
             "proposals": [{"id": pr.id, "entity": pr.entity,
                            "fields": json.loads(pr.payload),
                            "evidence": pr.evidence, "state": pr.state}
@@ -376,6 +377,38 @@ def one_document(doc_id: int):
         }
     finally:
         db.close()
+
+
+def _document_work(db, name):
+    """Что агенты сделали с этим документом — из их же артефактов.
+
+    Связь по имени файла: артефакт пишется агентом и хранит имя, а не ссылку.
+    Для показа этого хватает; на удаление данных завязан document_id, там связь
+    надежная.
+
+    Берем по одной, последней записи на каждый вид работы: документ могли
+    перезагружать, и три одинаковых блока подряд ничего не добавляют.
+    """
+    out, seen = [], set()
+    rows = (db.query(Activity).filter(Activity.artifact.isnot(None))
+            .order_by(Activity.id.desc()).limit(200).all())
+    for a in rows:
+        try:
+            art = json.loads(a.artifact)
+        except ValueError:
+            continue
+        if art.get("файл") != name:
+            continue
+        step = a.title.split("«")[0].strip()
+        if step in seen:
+            continue
+        seen.add(step)
+        out.append({
+            "шаг": step,
+            "поля": [[k, v] for k, v in art.items()
+                     if k != "файл" and v not in (None, "", [], {})],
+        })
+    return list(reversed(out))
 
 
 @app.post("/api/document/{doc_id}/proposals")
@@ -453,6 +486,17 @@ async def decide_proposals(doc_id: int, request: Request):
         db.close()
 
 
+#: Что браузер показывает сам, не скачивая.
+INLINE_TYPES = {
+    ".pdf": "application/pdf",
+    ".txt": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
+
+
 @app.get("/api/document/{doc_id}/file")
 def document_file(doc_id: int):
     """Отдать исходный файл. Проверить извлеченное можно только по оригиналу."""
@@ -463,6 +507,11 @@ def document_file(doc_id: int):
             raise HTTPException(404, "документ не найден")
         if not os.path.exists(d.path):
             raise HTTPException(404, "файл не найден на диске")
+        ext = os.path.splitext(d.path)[1].lower()
+        if ext in INLINE_TYPES:
+            return FileResponse(
+                d.path, media_type=INLINE_TYPES[ext],
+                headers={"Content-Disposition": "inline"})
         return FileResponse(d.path, filename=d.name)
     finally:
         db.close()
