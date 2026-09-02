@@ -438,6 +438,29 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .view tr.sel td{background:var(--accbg)}
 .view tr.sel:hover td{background:var(--accbg)}
 
+/* ── страницы ──────────────────────────────────────────────── */
+/* Панель под таблицей: слева размер страницы, посередине счет строк,
+   справа номера. Порядок принятый — сколько показывать, что показано,
+   куда перейти. Номера не рамками, а заливкой у текущего: ряд обведенных
+   квадратов вдоль всей ширины спорит с самой таблицей. */
+.pager{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+       margin:12px 0 4px;font-size:12.5px;color:var(--ink2)}
+.pager .per{display:flex;align-items:center;gap:8px;white-space:nowrap}
+.pager select{border:1px solid var(--line);background:var(--s0);color:var(--ink);
+              border-radius:var(--r3);padding:4px 6px;font:500 12.5px var(--f);
+              cursor:pointer}
+.pager select:hover{border-color:var(--acc)}
+.pager .rng{flex:1;min-width:0;font-variant-numeric:tabular-nums;color:var(--ink3)}
+.pager .pgs{display:flex;align-items:center;gap:2px}
+.pager .pgs button{min-width:28px;height:28px;padding:0 8px;border:0;background:none;
+                   border-radius:var(--r3);color:var(--ink2);cursor:pointer;
+                   font:500 12.5px var(--f);font-variant-numeric:tabular-nums}
+.pager .pgs button:hover:not([disabled]){background:var(--s2);color:var(--ink)}
+.pager .pgs button.on{background:var(--accbg);color:var(--acc2);font-weight:600}
+.pager .pgs button[disabled]{color:var(--line);cursor:default}
+.pager .pgs .ar{font-size:16px;line-height:1}
+.pager .gap{color:var(--ink3);padding:0 2px}
+
 /* ── номер и выбор строк ───────────────────────────────────── */
 /* Номер и флажок занимают одну клетку и одно место в ней: в покое виден
    номер, при наведении на строку он сменяется флажком (так в Notion и

@@ -660,6 +660,81 @@ function loadResult() {
   });
 }
 
+/* ── страницы ─────────────────────────────────────────────────
+ * Справочник должностей — три десятка строк, штатное расписание вырастет
+ * до сотен. Отдавать их одним полотном значит заставлять экономиста
+ * прокручивать вслепую: непонятно, сколько осталось и где ты находишься.
+ *
+ * Резать список берется страница, а не сервер: данные и так приходят целиком
+ * одним ответом, и пока это так, серверная выборка только добавит запросов,
+ * ничего не ускорив. Когда полотно станет тяжелым для одного ответа, резать
+ * придется в запросе — тогда меняется и это место.
+ *
+ * Номер страницы у каждой таблицы свой: вернувшись на вкладку, попадаешь
+ * туда, где был.
+ */
+var PAGE_SIZES = [25, 50, 100];
+var pageOf = {}, sizeOf = {};
+
+function paged(key, rows) {
+  var per = sizeOf[key] || PAGE_SIZES[0];
+  var last = Math.max(1, Math.ceil(rows.length / per));
+  var p = Math.min(pageOf[key] || 1, last);
+  pageOf[key] = p;
+  var from = (p - 1) * per;
+  return { rows: rows.slice(from, from + per), from: from, page: p,
+           last: last, total: rows.length, per: per };
+}
+
+/* Номера страниц с пропусками: подряд показываем начало, окрестность
+   текущей и конец, иначе на полусотне страниц ряд номеров сам станет
+   полотном. */
+function pageNums(p, last) {
+  var out = [], i;
+  if (last <= 7) {
+    for (i = 1; i <= last; i++) out.push(i);
+    return out;
+  }
+  out.push(1);
+  var a = Math.max(2, p - 1), b = Math.min(last - 1, p + 1);
+  if (a > 2) out.push("…");
+  for (i = a; i <= b; i++) out.push(i);
+  if (b < last - 1) out.push("…");
+  out.push(last);
+  return out;
+}
+
+/* Панель под таблицей. Не показываем, пока список умещается на страницу:
+   «1–3 из 3» под таблицей из трех строк — служебный шум. */
+function pager(key, pg) {
+  if (pg.total <= PAGE_SIZES[0]) return "";
+  var arrow = function (to, label, off) {
+    return '<button type="button" class="ar" data-pg="' + key + ":" + to + '"' +
+           (off ? " disabled" : "") + ' aria-label="' + label + '">' +
+           (to < pg.page ? "‹" : "›") + "</button>";
+  };
+  return '<div class="pager">' +
+    '<label class="per">Строк на странице ' +
+      '<select data-per="' + key + '">' +
+      PAGE_SIZES.map(function (n) {
+        return '<option value="' + n + '"' + (n === pg.per ? " selected" : "") +
+               ">" + n + "</option>";
+      }).join("") + "</select></label>" +
+    '<span class="rng">' + (pg.from + 1) + "–" + (pg.from + pg.rows.length) +
+      " из " + pg.total + "</span>" +
+    '<nav class="pgs">' +
+      arrow(pg.page - 1, "Предыдущая страница", pg.page === 1) +
+      pageNums(pg.page, pg.last).map(function (n) {
+        return n === "…"
+          ? '<span class="gap">…</span>'
+          : '<button type="button" data-pg="' + key + ":" + n + '"' +
+            (n === pg.page ? ' class="on" aria-current="page"' : "") + ">" + n +
+            "</button>";
+      }).join("") +
+      arrow(pg.page + 1, "Следующая страница", pg.page === pg.last) +
+    "</nav></div>";
+}
+
 /* Перечни всегда нумеруются: по номеру строки удобно сослаться в разговоре
    и найти место в длинной таблице. Колонку добавляем здесь, а не в каждом
    вызове, — чтобы нумерация была одинаковой везде. Отключается opts.plain. */
@@ -678,10 +753,11 @@ function table(head, rows, note, opts) {
                                  c.v + "</th>";
          return '<th class="n">' + esc(c.t) + "</th>";
        }).join("") + "</tr></thead><tbody>";
+  var first = (opts && opts.startNum) || 0;
   h += rows.map(function (r, i) {
     var rc = opts && opts.rowCls ? opts.rowCls(i) : "";
     return "<tr" + (rc ? ' class="' + rc + '"' : "") + ">" +
-      (num ? '<td class="num">' + (i + 1) + "</td>" : "") +
+      (num ? '<td class="num">' + (first + i + 1) + "</td>" : "") +
       r.map(function (c) {
         return (c && typeof c === "object")
           ? '<td class="' + (c.cls || "") + '">' + (c.v == null ? "—" : c.v) + "</td>"
@@ -696,10 +772,11 @@ function renderView() {
 
   if (view === "emp") {
     var e = (vdata && vdata.employees) || [];
+    var pge = paged("v-emp", e);
     el.innerHTML = table(
       ["табельный", "ФИО", "должность", { t: "ставка" }, { t: "оклад, ₽" },
        "с", "по", "источник"],
-      e.map(function (x) {
+      pge.rows.map(function (x) {
         return [x.code, x.fio, x.position,
                 { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
                 { v: x.salary == null ? null : mo(x.salary), cls: "n" },
@@ -707,31 +784,35 @@ function renderView() {
       }),
       "Штатное расписание дела: <b>" + e.length + "</b> " +
       px(e.length, "сотрудник", "сотрудника", "сотрудников") +
-      ". Собрано агентом из загруженных документов.");
+      ". Собрано агентом из загруженных документов.",
+      { startNum: pge.from }) + pager("v-emp", pge);
     return;
   }
 
   if (view === "ctr") {
     var c = (vdata && vdata.contracts) || [];
+    var pgc = paged("v-ctr", c);
     el.innerHTML = table(
       ["шифр", "наименование", "номер", "вид", "ГОЗ", { t: "фонд, ₽" },
        "разрешенные выплаты", "источник"],
-      c.map(function (x) {
+      pgc.rows.map(function (x) {
         return [x.code, x.name, x.number, x.kind,
                 { v: x.goz ? '<span class="tag goz">' + esc(x.goz) + "</span>" : null },
                 { v: x.fund == null ? null : mo(x.fund), cls: "n" },
                 x.kinds, x.source];
       }),
-      "Договоры дела: <b>" + c.length + "</b>.");
+      "Договоры дела: <b>" + c.length + "</b>.",
+      { startNum: pgc.from }) + pager("v-ctr", pgc);
     return;
   }
 
   if (view === "ref") {
     var r = (vdata && vdata.reference) || [];
+    var pgr = paged("v-ref", r);
     el.innerHTML = table(
       ["должность", "категория", { t: "оклад за 1,0 ставки, ₽" }, { t: "П2556, ₽" },
        { t: "П4, ₽" }, "примечание"],
-      r.map(function (x) {
+      pgr.rows.map(function (x) {
         return [x.pos, x.cat,
                 { v: x.sal == null ? null : mo(x.sal), cls: "n" },
                 { v: x.p2556 == null ? null : mo(x.p2556), cls: "n" },
@@ -742,19 +823,22 @@ function renderView() {
       "Справочник должностей: <b>" + r.length + "</b> " +
       px(r.length, "позиция", "позиции", "позиций") +
       ". Прочерк — отдельной строки для должности в источнике нет. " +
-      "Обновляется, когда выходит новая редакция приказа или положения.");
+      "Обновляется, когда выходит новая редакция приказа или положения.",
+      { startNum: pgr.from }) + pager("v-ref", pgr);
     return;
   }
 
   if (view === "sub") {
     var s = (vdata && vdata.substitutions) || [];
+    var pgs = paged("v-sub", s);
     el.innerHTML = table(
       ["должность", "может быть замещена"],
-      s.map(function (x) { return [x.position, x.replaced_by]; }),
+      pgs.rows.map(function (x) { return [x.position, x.replaced_by]; }),
       "<b>Нормативная база организации</b>, общая для всех планов. " +
       "Правил замещения: <b>" + s.length + "</b>. Правила направленные — " +
       "кого кем можно заменить, не наоборот. В расчет пока не подставляются: " +
-      "модель работает симметричными группами взаимозаменяемости.");
+      "модель работает симметричными группами взаимозаменяемости.",
+      { startNum: pgs.from }) + pager("v-sub", pgs);
     return;
   }
 
@@ -986,7 +1070,11 @@ function renderRegistry() {
     // Номер виден всегда, флажок подменяет его при наведении: ряд пустых
     // квадратиков в спокойном состоянии — лишний шум, а нумерация нужна,
     // чтобы сослаться на строку.
-    var allOn = docs.length > 0 && docs.every(function (x) { return picked[x.id]; });
+    var pg = paged("docs", docs);
+    // «Отметить все» относится к текущей странице — так в почте и в списках
+    // задач: отмечать вслепую то, чего не видно, опасно. Отметки со страницы
+    // на страницу при этом не теряются.
+    var allOn = pg.rows.length > 0 && pg.rows.every(function (x) { return picked[x.id]; });
     var nPick = pickedIds().length;
     var pickBox = { v: pk('<input type="checkbox" class="pickall"' +
                           (allOn ? " checked" : "") + ">", "№"), cls: "pick" };
@@ -994,14 +1082,15 @@ function renderRegistry() {
         nPick
         ? [pickBox, { v: pickCell(nPick), cls: "pickcell", span: 5 }]
         : [pickBox, "документ", "вид", "что дал", "загружен", ""],
-        docs.map(function (x, i) {
+        pg.rows.map(function (x, i) {
           var made = Object.keys(x.produced || {})
             .filter(function (k) { return x.produced[k]; })
             .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
           var bad = x.state !== "разобран";
           return [
             { v: pk('<input type="checkbox" data-pick="' + x.id + '"' +
-                    (picked[x.id] ? " checked" : "") + ">", String(i + 1)),
+                    (picked[x.id] ? " checked" : "") + ">",
+                    String(pg.from + i + 1)),
               cls: "pick" },
             x.name,
             x.kind,
@@ -1012,48 +1101,51 @@ function renderRegistry() {
             { v: rowMenu("data-docmenu", x.id), cls: "act" }];
         }), "",
         { plain: true, headCls: nPick ? "picking" : "",
-          rowCls: function (i) { return picked[docs[i].id] ? "sel" : ""; } });
+          rowCls: function (i) { return picked[pg.rows[i].id] ? "sel" : ""; } }) +
+        pager("docs", pg);
   } else if (regTab === "ctr") {
-    var c = d.contracts || [];
+    var pgc = paged("ctr", d.contracts || []);
     body = table(["шифр", "наименование", "ГОЗ", { t: "фонд, ₽" },
                   "срок", "разрешенные выплаты"],
-      c.map(function (x) {
+      pgc.rows.map(function (x) {
         var term = [x.from, x.to].filter(Boolean).join(" — ");
         return [x.code, x.name,
                 { v: x.goz ? '<span class="tag goz">' + esc(x.goz) + "</span>" : null },
                 { v: x.fund == null ? null : mo(x.fund), cls: "n" },
                 term, x.kinds];
       }),
-      "");
+      "", { startNum: pgc.from }) + pager("ctr", pgc);
   } else if (regTab === "emp") {
-    var e = d.employees || [];
+    var pge = paged("emp", d.employees || []);
     body = table(["табельный", "ФИО", "должность", { t: "ставка" }, { t: "оклад, ₽" },
                   "срок"],
-      e.map(function (x) {
+      pge.rows.map(function (x) {
         var term = [x.from, x.to].filter(Boolean).join(" — ");
         return [x.code, x.fio, x.position,
                 { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
                 { v: x.salary == null ? null : mo(x.salary), cls: "n" },
                 term];
       }),
-      "");
+      "", { startNum: pge.from }) + pager("emp", pge);
   } else if (regTab === "ref") {
-    var r = d.reference || [];
+    var pgr = paged("ref", d.reference || []);
     body = table(["должность", "категория", { t: "оклад за 1,0 ставки, ₽" },
                   { t: "П2556, ₽" }, { t: "П4, ₽" }, "примечание"],
-      r.map(function (x) {
+      pgr.rows.map(function (x) {
         return [x.pos, x.cat,
                 { v: x.sal == null ? null : mo(x.sal), cls: "n" },
                 { v: x.p2556 == null ? null : mo(x.p2556), cls: "n" },
                 { v: x.p4 == null ? null : mo(x.p4), cls: "n" }, x.note];
       }),
-      "Прочерк — отдельной строки для должности в источнике нет.");
+      "Прочерк — отдельной строки для должности в источнике нет.",
+      { startNum: pgr.from }) + pager("ref", pgr);
   } else if (regTab === "sub") {
-    var s = d.substitutions || [];
+    var pgs = paged("sub", d.substitutions || []);
     body = table(["должность", "может быть замещена"],
-      s.map(function (x) { return [x.position, x.replaced_by]; }),
+      pgs.rows.map(function (x) { return [x.position, x.replaced_by]; }),
       "Правила направленные: кого кем можно заменить, не наоборот. " +
-      "В расчет пока не подставляются.");
+      "В расчет пока не подставляются.",
+      { startNum: pgs.from }) + pager("sub", pgs);
   }
 
   var tabsRow =
@@ -1138,11 +1230,21 @@ document.addEventListener("click", function (e) {
 });
 
 $("regview").addEventListener("change", function (e) {
+  var per = e.target.closest("[data-per]");
+  if (per) {
+    var k = per.getAttribute("data-per");
+    sizeOf[k] = +per.value;
+    pageOf[k] = 1;
+    renderRegistry();
+    return;
+  }
   // Перерисовывать таблицу на каждый щелчок нельзя: сбивается фокус и
   // теряются отметки при быстром выборе. Обновляем только панель и подсветку.
   var all = e.target.closest(".pickall");
   if (all) {
-    (regData.documents || []).forEach(function (d) { picked[d.id] = all.checked; });
+    // Только строки текущей страницы: их и видно.
+    Array.prototype.forEach.call(document.querySelectorAll("#regview [data-pick]"),
+      function (b) { picked[b.getAttribute("data-pick")] = all.checked; });
     refreshPickBar();
     return;
   }
@@ -1159,6 +1261,15 @@ $("regview").addEventListener("change", function (e) {
 });
 
 $("regview").addEventListener("click", function (e) {
+  var pgb = e.target.closest("[data-pg]");
+  if (pgb && !pgb.disabled) {
+    var v = pgb.getAttribute("data-pg").split(":");
+    pageOf[v[0]] = +v[1];
+    renderRegistry();
+    // Со второй страницы читают сверху, а не с того места, где нажали.
+    $("regview").scrollTop = 0;
+    return;
+  }
   var t = e.target.closest("[data-rtab]");
   if (t) {
     regTab = t.getAttribute("data-rtab");
@@ -1176,6 +1287,25 @@ $("regview").addEventListener("click", function (e) {
       loadRegistry(); tick();
     });
   } }]);
+});
+
+/* Страницы в разделах плана переключаются так же, как в реестре. */
+$("view").addEventListener("click", function (e) {
+  var b = e.target.closest("[data-pg]");
+  if (!b || b.disabled) return;
+  var v = b.getAttribute("data-pg").split(":");
+  pageOf[v[0]] = +v[1];
+  renderView();
+  $("view").scrollTop = 0;
+});
+
+$("view").addEventListener("change", function (e) {
+  var per = e.target.closest("[data-per]");
+  if (!per) return;
+  var k = per.getAttribute("data-per");
+  sizeOf[k] = +per.value;
+  pageOf[k] = 1;
+  renderView();
 });
 
 $("docs").addEventListener("click", function (e) {
