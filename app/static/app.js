@@ -825,7 +825,7 @@ function renderView() {
  * разом, — а не по одному через меню строки. Поэтому в реестре флажки
  * и панель действий, которая появляется, только когда что-то отмечено.
  */
-var picked = {};
+var picked = {}, selecting = false;
 
 function pickedIds() {
   return Object.keys(picked).filter(function (k) { return picked[k]; });
@@ -859,6 +859,13 @@ function refreshPickBar() {
   else document.body.insertAdjacentHTML("beforeend", html);
 }
 
+function stopSelecting() {
+  selecting = false;
+  picked = {};
+  refreshPickBar();
+  if (inRegistry) renderRegistry();
+}
+
 function removePicked() {
   var ids = pickedIds();
   if (!ids.length) return;
@@ -879,6 +886,7 @@ function removePicked() {
       return api("/api/document/" + id, { method: "DELETE" }).catch(function () {});
     })).then(function () {
       picked = {};
+      selecting = false;
       loadRegistry();
       tick();
     });
@@ -924,6 +932,7 @@ function leaveRegistry() {
   if (!inRegistry) return;
   inRegistry = false;
   picked = {};
+  selecting = false;
   refreshPickBar();
   $("regview").hidden = true;
   document.querySelector(".tabs").hidden = false;
@@ -956,8 +965,9 @@ function renderRegistry() {
     // чтобы сослаться на строку.
     var allOn = docs.length > 0 && docs.every(function (x) { return picked[x.id]; });
     body = table(
-        [{ v: '<span class="num">№</span><input type="checkbox" class="pickall"' +
-              (allOn ? " checked" : "") + ">", cls: "pick" },
+        [{ v: selecting
+              ? '<input type="checkbox" class="pickall"' + (allOn ? " checked" : "") + ">"
+              : '<span class="num">№</span>', cls: "pick" },
          "документ", "вид", "что дал", "загружен", ""],
         docs.map(function (x, i) {
           var made = Object.keys(x.produced || {})
@@ -965,9 +975,10 @@ function renderRegistry() {
             .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
           var bad = x.state !== "разобран";
           return [
-            { v: '<span class="num">' + (i + 1) + "</span>" +
-                 '<input type="checkbox" data-pick="' + x.id + '"' +
-                 (picked[x.id] ? " checked" : "") + ">", cls: "pick" },
+            { v: selecting
+                 ? '<input type="checkbox" data-pick="' + x.id + '"' +
+                   (picked[x.id] ? " checked" : "") + ">"
+                 : '<span class="num">' + (i + 1) + "</span>", cls: "pick" },
             x.name,
             x.kind,
             { v: made ? esc(made)
@@ -1019,6 +1030,16 @@ function renderRegistry() {
       "В расчет пока не подставляются.");
   }
 
+  // Режим выбора включается кнопкой: без него в таблице стоят номера, а не
+  // ряд пустых квадратиков. Кнопка есть только там, где выбор осмыслен.
+  var pickBtn = regTab === "docs"
+    ? '<button type="button" class="selmode' + (selecting ? " on" : "") + '" id="selmode">' +
+      '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
+      '<rect x="2.5" y="2.5" width="11" height="11" rx="2"/><path d="M5.5 8.2l1.8 1.8 3.4-3.6"/>' +
+      "</svg>" + (selecting ? "Готово" : "Выбрать") + "</button>"
+    : "";
+
   $("regview").innerHTML =
     '<div class="rtabs">' + REG_TABS.map(function (t) {
       var n = { docs: docs.length, ctr: (d.contracts || []).length,
@@ -1027,7 +1048,7 @@ function renderRegistry() {
       return '<button type="button" data-rtab="' + t.key + '"' +
              (regTab === t.key ? ' class="on"' : "") + ">" + esc(t.title) +
              (n ? '<span class="c"> ' + n + "</span>" : "") + "</button>";
-    }).join("") + "</div>" + body;
+    }).join("") + pickBtn + "</div>" + body;
 }
 
 /* ── опрос ────────────────────────────────────────────────── */
@@ -1080,14 +1101,13 @@ $("openagents").addEventListener("click", function () {
 $("openreg").addEventListener("click", openRegistry);
 if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
 
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && selecting && !document.querySelector(".modal")) stopSelecting();
+});
+
 document.addEventListener("click", function (e) {
   if (e.target.closest("#pickdel")) { removePicked(); return; }
-  if (e.target.closest("#pickclear")) {
-    picked = {};
-    Array.prototype.forEach.call(document.querySelectorAll("#regview input[type=checkbox]"),
-      function (b) { b.checked = false; });
-    refreshPickBar();
-  }
+  if (e.target.closest("#pickclear")) stopSelecting();
 });
 
 $("regview").addEventListener("change", function (e) {
@@ -1118,7 +1138,13 @@ $("regview").addEventListener("click", function (e) {
   var t = e.target.closest("[data-rtab]");
   if (t) {
     regTab = t.getAttribute("data-rtab");
-    if (regTab !== "docs") picked = {};
+    if (regTab !== "docs") { picked = {}; selecting = false; refreshPickBar(); }
+    renderRegistry();
+    return;
+  }
+  if (e.target.closest("#selmode")) {
+    selecting = !selecting;
+    if (!selecting) { picked = {}; refreshPickBar(); }
     renderRegistry();
     return;
   }
