@@ -365,6 +365,10 @@ function renderStage() {
     : '<span class="pill' + (c.stage === "посчитано" ? " ok" : "") + '">' + esc(c.stage) + "</span>";
   $("stage").innerHTML = "<b>" + esc(c.title) + "</b>" + pill +
     '<span class="empty">обновлено ' + esc(c.updated) + "</span>";
+  // Кнопка объясняет, почему недоступна: иначе неясно, чего ждать.
+  $("solve").title = !c.has_data
+    ? "Нет данных: загрузите документы по договорам"
+    : (working.length ? "Идет работа агента" : "Запустить расчет плана");
   $("solve").disabled = !c.has_data || working.length > 0;
 }
 
@@ -392,10 +396,8 @@ function render() {
   safely("документы", renderDocs);
   safely("расчеты", renderRuns);
   safely("вопрос", renderAsk);
-  var m = state.model;
-  $("model").textContent = m.provider
-    ? "разбор документов: " + m.name + ", " + m.label
-    : "разбор документов: по заголовкам (" + m.why + ")";
+  // Чем разобран документ, видно в его карточке и в артефакте агента —
+  // в шапке эта строка только шумела.
   wire();
 }
 

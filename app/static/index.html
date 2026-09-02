@@ -12,8 +12,6 @@
 <header class="brandbar">
   <img src="/logo.svg" alt="CML-Bench 2.0" class="logo">
   <span class="bname">Сервис планирования фонда оплаты труда</span>
-  <span class="spacer"></span>
-  <span class="model" id="model">—</span>
 </header>
 
 <div class="shell">
@@ -32,7 +30,12 @@
 
   <!-- лента плана -->
   <main class="chat">
-    <div class="stage" id="stage"></div>
+    <!-- Расчет — главное действие плана, поэтому кнопка стоит в его шапке
+         и видна всегда, а не внизу вспомогательной колонки. -->
+    <div class="stage">
+      <div class="st" id="stage"></div>
+      <button id="solve" class="primary" type="button">Рассчитать план</button>
+    </div>
 
     <!-- Лента — основной режим; остальные вкладки нужны, чтобы открыть и
          посмотреть данные, которые агенты собрали, и результат расчета. -->
@@ -76,7 +79,6 @@
     <section>
       <h3>Расчет</h3>
       <div id="runs" class="runs"></div>
-      <button id="solve" class="primary" type="button">Рассчитать план</button>
     </section>
   </aside>
 
