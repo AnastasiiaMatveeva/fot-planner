@@ -16,6 +16,7 @@ SHEET_MANUAL_PROHIBITIONS = "ручные_запреты"
 SHEET_SETTINGS = "настройки"
 SHEET_PLAN = "План выплат"
 SHEET_POSITION_LIMITS = "лимиты_по_должностям"
+SHEET_SUBSTITUTIONS = "правила_замещения"
 
 EMPLOYEE_COLUMN_ALIASES: dict[str, str] = {
     # Лист SHEET_EMPLOYEES / «сотрудники».
@@ -80,6 +81,14 @@ POSITION_LIMITS_COLUMN_ALIASES: dict[str, str] = {
     "п4": "p4_limit",
     "бэп": "bep_limit",
     "примечание": "note",
+}
+
+SUBSTITUTION_COLUMN_ALIASES: dict[str, str] = {
+    # Лист SHEET_SUBSTITUTIONS / «правила_замещения».
+    "должность": "position",
+    "может быть замещена": "substitutes",
+    "кем может быть замещена": "substitutes",
+    "замещающие должности": "substitutes",
 }
 
 CONTRACT_LABOR_COLUMN_ALIASES: dict[str, str] = {
@@ -172,6 +181,7 @@ COLUMN_ALIASES_BY_SHEET: dict[str, dict[str, str]] = {
     SHEET_SETTINGS: SETTINGS_COLUMN_ALIASES,
     SHEET_PLAN: PLAN_OVERRIDE_COLUMN_ALIASES,
     SHEET_POSITION_LIMITS: POSITION_LIMITS_COLUMN_ALIASES,
+    SHEET_SUBSTITUTIONS: SUBSTITUTION_COLUMN_ALIASES,
 }
 
 RU_MONTHS = {

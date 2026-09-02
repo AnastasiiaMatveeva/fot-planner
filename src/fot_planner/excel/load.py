@@ -17,6 +17,7 @@ from fot_planner.excel.constants import (
     SHEET_MIN_BALANCE_MATRIX,
     SHEET_PLAN,
     SHEET_POSITION_LIMITS,
+    SHEET_SUBSTITUTIONS,
     SHEET_SECRET_ALLOWANCES,
     SHEET_SETTINGS,
 )
@@ -103,9 +104,11 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         )
         for row in position_reference_rows
     ]
+    substitution_rules = _load_substitutions(xl)
     employees = _load_employees(
         _canonicalize_columns(pd.read_excel(xl, SHEET_EMPLOYEES), SHEET_EMPLOYEES),
         position_index,
+        substitution_rules,
     )
     contracts = _load_contracts(
         _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACTS), SHEET_CONTRACTS),
@@ -220,6 +223,7 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         weights=weights,
         salary_stability=salary_stability,
         labor_plans=labor_plans,
+        substitution_rules=substitution_rules,
         secret_allowances=secret_allowances,
         baseline_plan=baseline_plan,
         allow_deficit=allow_deficit,
@@ -380,11 +384,63 @@ def _bep_limit_from_position_limits(
     return min(limits)
 
 
+def _split_substitutes(value: object) -> list[str]:
+    """Замещающие должности из одной ячейки.
+
+    Отдел кадров перечисляет их через запятую — «Программист, Инженер 2 кат.,
+    Лаборант», — а общий _split_list режет только по «;». Точку с запятой тоже
+    принимаем: в чужих выгрузках встречается и она.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+    text = str(value).replace(";", ",")
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _load_substitutions(xl: pd.ExcelFile) -> dict[str, frozenset[str]]:
+    """Правила замещения: должность → кем ее можно заместить.
+
+    Правила направленные, и это главное про них: главного инженера проекта
+    можно заместить инженером, обратное неверно. Симметричная окладная группа
+    такого не выражает — она либо пускает обоих, либо никого.
+
+    Замещающие перечисляются в одной ячейке через запятую, как в выгрузке
+    отдела кадров. Лист необязательный: без него остаются прежние правила —
+    точное совпадение должности и окладная группа.
+    """
+    if SHEET_SUBSTITUTIONS not in xl.sheet_names:
+        return {}
+    df = _canonicalize_columns(
+        pd.read_excel(xl, SHEET_SUBSTITUTIONS), SHEET_SUBSTITUTIONS
+    )
+    rules: dict[str, set[str]] = {}
+    for _, r in df.iterrows():
+        position = normalize_position(_clean_optional_text(r.get("position")) or "")
+        if not position:
+            continue
+        for name in _split_substitutes(r.get("substitutes")):
+            key = normalize_position(name)
+            # Должность, замещающая сама себя, ничего не добавляет: точное
+            # совпадение и так разрешено.
+            if key and key != position:
+                rules.setdefault(position, set()).add(key)
+    return {k: frozenset(v) for k, v in rules.items() if v}
+
+
 def _load_employees(
     df: pd.DataFrame,
     position_index: dict[str, PositionReferenceRow],
+    substitution_rules: dict[str, frozenset[str]] | None = None,
 ) -> list[Employee]:
     rows: list[Employee] = []
+    # Правила заданы со стороны замещаемой должности, а спрашивают их со
+    # стороны сотрудника: «эту строку трудоемкости закрыть можешь?». Поэтому
+    # один раз разворачиваем их в обратный указатель.
+    covers: dict[str, set[str]] = {}
+    for target, subs in (substitution_rules or {}).items():
+        for sub_key in subs:
+            covers.setdefault(sub_key, set()).add(target)
+
     for _, r in df.iterrows():
         position = str(r["position"]).strip()
         ref = resolve_position(position, position_index)
@@ -401,6 +457,9 @@ def _load_employees(
                 allowed_contracts=_split_list(r.get("allowed_contracts")),
                 forbidden_contracts=_split_list(r.get("forbidden_contracts")),
                 equivalence_group=ref.equivalence_group if ref else None,
+                can_substitute=frozenset(
+                    covers.get(normalize_position(position), frozenset())
+                ),
                 position_level=ref.level if ref else None,
                 reference_salary_for_rate=ref.reference_salary_for_rate if ref else None,
                 employment_type=normalize_employment_type(r.get("employment_type")),

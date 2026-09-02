@@ -423,11 +423,16 @@ def rebuild_funds(passport):
             "funds": {k: round(v) for k, v in fund.items()}}
 
 
-def passport_to_input(passport, template_path, out_path, warnings=None):
+def passport_to_input(passport, template_path, out_path, warnings=None,
+                      substitutions=None):
     """Собрать вход fot-planner из паспорта с точным раскроем фондов.
 
     ``warnings`` — список, куда складываются предупреждения для экономиста:
     расчет идет, но о том, что в него не попало, надо сказать вслух.
+
+    ``substitutions`` — правила замещения из реестра организации, парами
+    (должность, кем можно заместить). Раньше они лежали в сервисе и в расчет
+    не попадали: листа для них во входном файле не было вовсе.
     """
     info = rebuild_funds(passport)
     if info and info.get("error"):
@@ -499,8 +504,32 @@ def passport_to_input(passport, template_path, out_path, warnings=None):
                 ws.cell(r, col).value = base
             ws.cell(r, 13).value = target - base * 11
 
+    if substitutions is not None:
+        _write_substitutions(wb, substitutions)
+
     wb.save(out_path)
     return out_path
+
+
+def _write_substitutions(wb, pairs):
+    """Переписать лист правил замещения содержимым реестра.
+
+    Правила общие для организации и заменяются целиком: новая редакция — новый
+    перечень, а не добавка к прежнему. Лист создается, если его нет: файл мог
+    быть собран старым шаблоном.
+    """
+    name = "правила_замещения"
+    if name in wb.sheetnames:
+        ws = wb[name]
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row)
+    else:
+        ws = wb.create_sheet(name)
+        ws.cell(1, 1).value = "должность"
+        ws.cell(1, 2).value = "может быть замещена"
+    for position, replaced_by in pairs:
+        if position:
+            ws.append([position, replaced_by or ""])
 
 
 # ── сценарные запросы ──────────────────────────────────────────

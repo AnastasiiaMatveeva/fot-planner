@@ -21,6 +21,7 @@ from fot_planner.excel.constants import (
     SHEET_POSITION_LIMITS,
     SHEET_SECRET_ALLOWANCES,
     SHEET_SETTINGS,
+    SHEET_SUBSTITUTIONS,
 )
 from fot_planner.excel.workbook_format import format_workbook
 from fot_planner.defaults.settings import (
@@ -336,6 +337,15 @@ def create_template(path: str | Path) -> None:
         _default_position_limits_table().to_excel(
             writer,
             sheet_name=SHEET_POSITION_LIMITS,
+            index=False,
+        )
+        # Лист правил замещения создается пустым: правила направленные и у
+        # каждой организации свои, придумывать их за нее нельзя. Пока лист
+        # пуст, действуют прежние правила — точное совпадение должности и
+        # симметричная окладная группа.
+        pd.DataFrame(columns=["должность", "может быть замещена"]).to_excel(
+            writer,
+            sheet_name=SHEET_SUBSTITUTIONS,
             index=False,
         )
 

@@ -38,6 +38,12 @@ class Employee:
     allowed_contracts: list[str] = field(default_factory=list)
     forbidden_contracts: list[str] = field(default_factory=list)
     equivalence_group: str | None = None
+    # Должности, работу по которым этот сотрудник может закрывать по
+    # правилам замещения (нормализованные названия). Правила направленные:
+    # главного инженера проекта можно заместить инженером, обратное неверно.
+    # Поэтому список считается для сотрудника заранее — «кого я могу
+    # заместить», — а не выводится из симметричной окладной группы.
+    can_substitute: frozenset[str] = field(default_factory=frozenset)
     position_level: int | None = None
     reference_salary_for_rate: float | None = None
     # auto — оптимизатор выбирает; main — основное место; part_time — совместительство
@@ -253,6 +259,10 @@ class PlanningContext:
     weights: OptimizationWeights = field(default_factory=OptimizationWeights)
     salary_stability: SalaryStabilityRules = field(default_factory=SalaryStabilityRules)
     labor_plans: list[ContractLaborPlan] = field(default_factory=list)
+    # Правила замещения: нормализованная должность → нормализованные
+    # должности, которыми ее можно заместить. Нужны отчетам, чтобы объяснить,
+    # почему сотрудник закрывает чужую строку трудоемкости.
+    substitution_rules: dict[str, frozenset[str]] = field(default_factory=dict)
     secret_allowances: list[SecretAllowance] = field(default_factory=list)
     baseline_plan: list[AllocationRecord] | None = None
     # Диагностический режим: разрешить недоплату с большим штрафом (см. allow_deficit)
