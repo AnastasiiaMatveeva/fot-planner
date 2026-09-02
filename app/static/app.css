@@ -11,7 +11,9 @@
   --bad:#DC2626; --badbg:#FEF0F0;
   --agent:#7C5CFF; --agentbg:#F1EEFF;
   --r:10px; --r2:8px; --r3:6px;
-  --f:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+  /* Inter: открытые формы и высокая строчная — воздушнее Segoe UI, которым
+     Windows рисует всё подряд и который тянет за собой канцелярский вид. */
+  --f:Inter,"Segoe UI",system-ui,-apple-system,Arial,sans-serif;
   --m:"Cascadia Mono",Consolas,ui-monospace,monospace;
   color-scheme:light;
 }
@@ -306,3 +308,9 @@ body{font-size:14.5px}
 .cases{overflow:hidden}
 .clist{flex:1;min-height:0;overflow:auto}
 .cases .cta{flex:0 0 auto;margin-bottom:12px}
+
+/* Inter плотнее по межбуквенному просвету, чем Segoe UI: чуть распускаем
+   заголовки и подтягиваем цифры к одной ширине, чтобы суммы вставали в столбик. */
+body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
+.stage b,.view .grp h4,.msg .head b{letter-spacing:-.01em}
+.view td.n,.view th.n,.card td.n,.ar .av,.run,.doc .mt{font-variant-numeric:tabular-nums}
