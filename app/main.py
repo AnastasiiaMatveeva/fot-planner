@@ -126,6 +126,9 @@ def list_cases():
         rows = db.query(Case).order_by(Case.updated.desc()).all()
         return [{"id": c.id, "title": c.title, "year": c.year, "stage": c.stage,
                  "updated": _dt(c.updated),
+                 # Список группируется по давности, для этого нужна дата,
+                 # а не отформатированная строка.
+                 "updated_at": c.updated.isoformat() if c.updated else None,
                  "documents": db.query(Document).filter_by(case_id=c.id).count()}
                 for c in rows]
     finally:

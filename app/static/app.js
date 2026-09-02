@@ -157,14 +157,21 @@ function delButton(attr, id, title) {
 /* ── планы ─────────────────────────────────────────────────── */
 function loadCases() {
   return api("/api/cases").then(function (rows) {
-    $("caselist").innerHTML = rows.length ? rows.map(function (c) {
-      return '<div class="case' + (c.id === caseId ? " on" : "") + '" data-id="' + c.id + '">' +
-             '<span class="acts">' +
-               iconBtn("edit", "data-rename", c.id, "Переименовать", ICON_EDIT) +
-               iconBtn("del", "data-del", c.id, "Удалить план", ICON_TRASH) +
-             "</span>" +
-             '<span class="ttl">' + esc(c.title) + "</span></div>";
-    }).join("") : '<div class="empty" style="padding:0 16px">Планов пока нет</div>';
+    // Плоский список, сверху последние измененные — так же, как в списках
+    // переписок. Сортировку дает сервер: cases отдаются по updated.
+    $("caselist").innerHTML = rows.length
+      ? rows.map(function (c) {
+          return '<div class="case' + (c.id === caseId ? " on" : "") +
+                 '" data-id="' + c.id + '">' +
+                 '<span class="acts">' +
+                   iconBtn("edit", "data-rename", c.id, "Переименовать", ICON_EDIT) +
+                   iconBtn("del", "data-del", c.id, "Удалить план", ICON_TRASH) +
+                 "</span>" +
+                 '<span class="cdot ' + stageClass(c.stage) +
+                 '" title="' + esc(c.stage) + '"></span>' +
+                 '<span class="ttl">' + esc(c.title) + "</span></div>";
+        }).join("")
+      : '<div class="empty" style="padding:0 16px">Планов пока нет</div>';
     Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
       el.addEventListener("click", function (e) {
         if (e.target.closest(".rowbtn") || e.target.closest("input")) return;
@@ -220,6 +227,14 @@ function startRename(row) {
   });
   inp.addEventListener("blur", function () { finish(true); });
   inp.addEventListener("click", function (e) { e.stopPropagation(); });
+}
+
+/* Состояние плана — точкой: слово «сбор данных» под каждым названием
+   загромождало список, а цвет читается с одного взгляда. */
+function stageClass(stage) {
+  if (stage === "посчитано") return "ok";
+  if (stage === "готово к расчету") return "ready";
+  return "";
 }
 
 function removeCase(id) {

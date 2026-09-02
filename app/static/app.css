@@ -456,3 +456,10 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .case .rename{width:100%;font:600 13px var(--f);color:var(--ink);padding:1px 5px;
               border:1px solid var(--acc);border-radius:var(--r3);background:var(--s0)}
 .case .rename:focus{outline:0}
+
+/* ── строка плана ──────────────────────────────────────────── */
+.case{display:flex;align-items:center;gap:9px}
+.cdot{flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:var(--line)}
+.cdot.ready{background:var(--warn)}
+.cdot.ok{background:var(--ok)}
+.case .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
