@@ -455,3 +455,18 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .case .rename{width:100%;font:600 13px var(--f);color:var(--ink);padding:1px 5px;
               border:1px solid var(--acc);border-radius:var(--r3);background:var(--s0)}
 .case .rename:focus{outline:0}
+
+/* ── номер и флажок в одной ячейке ─────────────────────────── */
+/* Ряд пустых квадратиков в спокойном состоянии — шум. Показываем номер,
+   а флажок подставляем при наведении на строку; у отмеченных строк флажок
+   остается на виду. */
+.view td.pick,.view th.pick{position:relative;width:1%;text-align:right;
+                            padding-left:13px;padding-right:6px;white-space:nowrap}
+.view .pick .num{color:var(--ink3);font-variant-numeric:tabular-nums;font-size:12.5px}
+.view .pick input[type=checkbox]{display:none}
+.view tbody tr:hover .pick .num,
+.view thead tr:hover .pick .num{display:none}
+.view tbody tr:hover .pick input[type=checkbox],
+.view thead tr:hover .pick input[type=checkbox],
+.view .pick input[type=checkbox]:checked{display:inline-block}
+.view tbody tr:has(input[type=checkbox]:checked) .pick .num{display:none}

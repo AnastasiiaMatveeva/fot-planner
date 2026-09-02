@@ -951,18 +951,22 @@ function renderRegistry() {
     // Точку состояния в таблице не ставим: цветной кружок в начале строки
     // читается как управляющий элемент. Состояние и так видно в графе
     // «что дал» — там либо результат, либо причина отказа.
+    // Номер виден всегда, флажок подменяет его при наведении: ряд пустых
+    // квадратиков в спокойном состоянии — лишний шум, а нумерация нужна,
+    // чтобы сослаться на строку.
     var allOn = docs.length > 0 && docs.every(function (x) { return picked[x.id]; });
     body = table(
-        [{ v: '<input type="checkbox" class="pickall"' + (allOn ? " checked" : "") + ">",
-           cls: "pick" },
+        [{ v: '<span class="num">№</span><input type="checkbox" class="pickall"' +
+              (allOn ? " checked" : "") + ">", cls: "pick" },
          "документ", "вид", "что дал", "загружен", ""],
-        docs.map(function (x) {
+        docs.map(function (x, i) {
           var made = Object.keys(x.produced || {})
             .filter(function (k) { return x.produced[k]; })
             .map(function (k) { return k + " " + x.produced[k]; }).join(", ");
           var bad = x.state !== "разобран";
           return [
-            { v: '<input type="checkbox" class="pick" data-pick="' + x.id + '"' +
+            { v: '<span class="num">' + (i + 1) + "</span>" +
+                 '<input type="checkbox" data-pick="' + x.id + '"' +
                  (picked[x.id] ? " checked" : "") + ">", cls: "pick" },
             x.name,
             x.kind,
