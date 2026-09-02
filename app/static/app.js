@@ -59,7 +59,7 @@ function ask(title, detail, okText) {
         (detail ? "<p>" + esc(detail) + "</p>" : "") +
         '<div class="btns">' +
           '<button type="button" class="no">Отмена</button>' +
-          '<button type="button" class="yes">' + esc(okText || "Убрать") + "</button>" +
+          '<button type="button" class="yes">' + esc(okText || "Удалить") + "</button>" +
         "</div>" +
       "</div>";
     document.body.appendChild(back);
@@ -157,7 +157,7 @@ function loadCases() {
       b.addEventListener("click", function (e) {
         e.stopPropagation();
         var id = +b.getAttribute("data-menu");
-        showMenu(b, [{ label: "Убрать план", danger: true,
+        showMenu(b, [{ label: "Удалить план", danger: true,
                        run: function () { removeCase(id); } }]);
       });
     });
@@ -168,10 +168,10 @@ function loadCases() {
 function removeCase(id) {
   var el = document.querySelector('.case[data-id="' + id + '"]');
   var name = el ? el.querySelector("small").previousSibling.textContent.trim() : "план";
-  ask("Убрать «" + name + "»?",
+  ask("Удалить «" + name + "»?",
       "Лента, работы агентов и расчеты этого плана будут удалены. Документы, " +
       "договоры, штатное расписание и нормативы останутся — они общие для " +
-      "организации.", "Убрать план").then(function (yes) {
+      "организации.", "Удалить план").then(function (yes) {
     if (yes) doRemoveCase(id);
   });
 }
@@ -776,7 +776,7 @@ function pickBar() {
   return '<div class="pickbar"><span class="n">' + ids.length + "</span>" +
          "<span>" + px(ids.length, "документ отмечен", "документа отмечено",
                        "документов отмечено") + "</span>" +
-         '<button type="button" id="pickdel">Убрать</button>' +
+         '<button type="button" id="pickdel">Удалить</button>' +
          '<button type="button" class="x" id="pickclear" aria-label="Снять отметки">' +
          '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ' +
          'stroke-width="1.6" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg>' +
@@ -803,10 +803,14 @@ function removePicked() {
     var d = (regData.documents || []).filter(function (x) { return String(x.id) === id; })[0];
     return d ? d.name : id;
   });
-  ask("Убрать " + ids.length + " " + px(ids.length, "документ", "документа", "документов") + "?",
-      names.slice(0, 4).join(", ") + (names.length > 4 ? " и еще " + (names.length - 4) : "") +
-      ". Вместе с ними уйдут данные, извлеченные из этих документов.",
-      "Убрать").then(function (yes) {
+  var one = ids.length === 1;
+  ask("Удалить " + ids.length + " " +
+      px(ids.length, "документ", "документа", "документов") + "?",
+      names.slice(0, 4).join(", ") +
+      (names.length > 4 ? " и еще " + (names.length - 4) : "") +
+      (one ? ". Вместе с ним уйдут данные, извлеченные из документа."
+           : ". Вместе с ними уйдут данные, извлеченные из этих документов."),
+      "Удалить").then(function (yes) {
     if (!yes) return;
     Promise.all(ids.map(function (id) {
       return api("/api/document/" + id, { method: "DELETE" }).catch(function () {});
@@ -1056,7 +1060,7 @@ $("regview").addEventListener("click", function (e) {
   if (!b) return;
   var row = b.closest("tr");
   var name = row ? row.children[1].textContent : "документ";
-  showMenu(b, [{ label: "Убрать документ", danger: true, run: function () {
+  showMenu(b, [{ label: "Удалить документ", danger: true, run: function () {
     removeDoc(b.getAttribute("data-docmenu"), name, function () {
       loadRegistry(); tick();
     });
@@ -1074,15 +1078,15 @@ $("docs").addEventListener("click", function (e) {
   var b = e.target.closest(".more");
   if (!b) return;
   var card = b.closest(".doc"), name = card.querySelector(".nm").textContent;
-  showMenu(b, [{ label: "Убрать документ", danger: true, run: function () {
+  showMenu(b, [{ label: "Удалить документ", danger: true, run: function () {
     removeDoc(b.getAttribute("data-docmenu"), name, tick);
   } }]);
 });
 
 function removeDoc(id, name, done) {
-  ask("Убрать «" + String(name).trim() + "»?",
+  ask("Удалить «" + String(name).trim() + "»?",
       "Вместе с документом уйдут данные, извлеченные из него: сотрудники, " +
-      "договоры и правила замещения.", "Убрать документ").then(function (yes) {
+      "договоры и правила замещения.", "Удалить документ").then(function (yes) {
     if (!yes) return;
     api("/api/document/" + id, { method: "DELETE" }).then(done || tick);
   });
