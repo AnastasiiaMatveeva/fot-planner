@@ -212,6 +212,8 @@ def _read_fot_detail(ws, p, log, q):
     """«Расшифровка ФОТ»: строки этапов, проверка гр.6×гр.7=гр.8."""
     rows, bad, empty = 0, 0, 0
     for r in range(1, ws.max_row + 1):
+        if _is_column_numbering(ws, r):
+            continue
         pos = ws.cell(r, 4).value
         cm = _num(ws.cell(r, 7).value)
         sal = _num(ws.cell(r, 8).value)
@@ -241,10 +243,31 @@ def _read_fot_detail(ws, p, log, q):
                    f"несоответствий формуле: {bad}")
 
 
+def _is_column_numbering(ws, r, width=12):
+    """Строка с номерами колонок: «1 | 2 | 3 | …».
+
+    В формах ФАС такая строка идёт под шапкой и данными не является. Без этой
+    проверки разборщик принимал номера колонок 6, 7 и 8 за трудоёмкость,
+    стоимость и ОЗП и задавал экономисту вопрос, почему 6 × 7 не равно 8.
+    """
+    seen = []
+    for c in range(1, width + 1):
+        v = ws.cell(r, c).value
+        if v is None or str(v).strip() == "":
+            continue
+        n = _num(v)
+        if n is None or n != c:
+            return False
+        seen.append(c)
+    return len(seen) >= 4
+
+
 def _read_form9(ws, p, log, q):
     """Форма 9д: гр.6 (чел.-мес) × гр.7 (стоимость) = гр.8 (ОЗП)."""
     rows, bad, empty = 0, 0, 0
     for r in range(1, ws.max_row + 1):
+        if _is_column_numbering(ws, r):
+            continue
         grp = ws.cell(r, 5).value
         cm = _num(ws.cell(r, 6).value)
         cost = _num(ws.cell(r, 7).value)
