@@ -128,8 +128,21 @@ def run_substitutions(db, case, doc):
         wb = openpyxl.load_workbook(doc.path, data_only=True)
         ws = wb.worksheets[0]
         # Правила общие для организации: новая редакция заменяет прежнюю
-        # целиком, а не добавляется к делу.
+        # целиком, а не добавляется к делу. Документ, который эти правила
+        # принес раньше, после этого не отвечает ни за одну строку реестра —
+        # помечаем его замененным. Иначе он остается в списке с пустой графой
+        # «внесено в реестр» и выглядит как неудавшийся разбор.
+        sources = {s.document_id for s in db.query(Substitution).all()
+                   if s.document_id and s.document_id != doc.id}
         db.query(Substitution).delete()
+        replaced = []
+        for old_id in sources:
+            prev = db.get(Document, old_id)
+            if prev is not None and prev.state != "заменен":
+                prev.state = "заменен"
+                replaced.append(prev.name)
+                if doc.supersedes_id is None:
+                    doc.supersedes_id = prev.id
         pairs = 0
         for r in range(2, ws.max_row + 1):
             src = ws.cell(r, 1).value
@@ -147,6 +160,7 @@ def run_substitutions(db, case, doc):
         w["detail"] = doc.summary
         w["artifact"] = {"файл": doc.name, "правил замещения": pairs,
                          "куда записано": "нормативная база организации",
+                         "заменил прежнюю редакцию": ", ".join(replaced) or None,
                          "применяется в расчете": True,
                          "как": "лист «правила_замещения» входного файла; "
                                 "правила направленные — кого кем можно "
@@ -164,7 +178,8 @@ def run_substitutions(db, case, doc):
             "В правилах есть должности, которых нет в справочнике: %s. Такие "
             "правила в расчете не сработают — название должно совпадать со "
             "справочником. Проверьте написание в документе."
-            % ", ".join("«%s»" % u for u in unknown[:8]), agent="intake")
+            % ", ".join("«%s»" % u for u in unknown[:8]), agent="intake",
+            document_id=doc.id)
         db.commit()
 
     say(db, case.id,
@@ -173,7 +188,10 @@ def run_substitutions(db, case, doc):
         "не нужно. Правила направленные: слева должность сотрудника, справа "
         "должности, которые ему можно дать дополнительно. В расчет уходят: "
         "работу по такой должности сотрудник выполнить может, обратное — нет."
-        % (doc.name, pairs, _plural(pairs, "правило", "правила", "правил")),
+        % (doc.name, pairs, _plural(pairs, "правило", "правила", "правил"))
+        + (" Прежняя редакция правил (%s) помечена замененной."
+           % ", ".join("«%s»" % n for n in replaced) if replaced else ""),
+        document_id=doc.id,
         agent="intake")
     db.commit()
 
@@ -500,7 +518,7 @@ def propose_entities(db, case, doc):
         "не пошло — откройте документ в реестре, проверьте строки и "
         "подтвердите те, что верны. У каждой написано, откуда она взята и "
         "насколько ей можно верить.%s"
-        % (doc.name, doc.summary, tail), agent="intake")
+        % (doc.name, doc.summary, tail), agent="intake", document_id=doc.id)
     db.commit()
     return True
 
@@ -660,7 +678,8 @@ def _ask_kind(db, case, doc):
                             "не нужен, удалить"], ensure_ascii=False)))
     say(db, case.id,
         "Прочитал «%s», но не понял, что это за документ, и строк из него не "
-        "достал. Подскажите вид — разберу заново." % doc.name, agent="intake")
+        "достал. Подскажите вид — разберу заново." % doc.name, agent="intake",
+        document_id=doc.id)
     db.commit()
 
 
@@ -713,7 +732,7 @@ def run_intake(db, case, doc):
         "Разобрал «%s»: %s.%s" % (doc.name, doc.summary or "строк реестра нет",
                                   (" Настройки расчета — из этого файла."
                                    if passport.get("settings") else "")),
-        agent="intake",
+        agent="intake", document_id=doc.id,
         payload={"kind": "passport", "employees": emp, "contracts": ctr,
                  "log": out.get("log") or []})
 
@@ -765,7 +784,8 @@ def run_norms(db, case, doc):
 
     if not changes:
         say(db, case.id,
-            "Сверил «%s» со справочником — расхождений нет." % doc.name, agent="norms")
+            "Сверил «%s» со справочником — расхождений нет." % doc.name,
+            agent="norms", document_id=doc.id)
         db.commit()
         return
 
@@ -774,7 +794,7 @@ def run_norms(db, case, doc):
         "поэтому изменения затронут и другие планы. Показываю, что изменится; "
         "запишу только после вашего подтверждения."
         % (doc.name, len(changes), _plural(len(changes), "расхождение", "расхождения", "расхождений")),
-        agent="norms",
+        agent="norms", document_id=doc.id,
         payload={"kind": "reference_diff", "changes": changes, "unknown": unknown,
                  "basis": res.get("basis"), "effective_from": res.get("effective_from"),
                  "by": by})
@@ -843,7 +863,8 @@ def handle_document(db, case, doc):
             "распознанный скан плохого качества%s. Извлекать величины из "
             "такого текста я не стану: выйдет правдоподобная неправда. "
             "Приложите документ в текстовом виде или введите величины вручную."
-            % (doc.name, ": " + garbled if garbled else ""), agent="intake")
+            % (doc.name, ": " + garbled if garbled else ""), agent="intake",
+            document_id=doc.id)
         db.commit()
         return
 
@@ -856,7 +877,7 @@ def handle_document(db, case, doc):
         doc.summary = kind                      # без by в kind лежит причина
         db.commit()
         say(db, case.id, "Не смог прочитать «%s». %s" % (doc.name, kind),
-            agent="intake")
+            agent="intake", document_id=doc.id)
         db.commit()
         return
 
@@ -884,7 +905,8 @@ def handle_document(db, case, doc):
         doc.summary = bad
         db.commit()
         say(db, case.id,
-            "«%s»: %s. Прочитаю его без шаблона." % (doc.name, bad), agent="intake")
+            "«%s»: %s. Прочитаю его без шаблона." % (doc.name, bad), agent="intake",
+            document_id=doc.id)
         db.commit()
         if not propose_entities(db, case, doc):
             doc.summary = "%s; сверх этого данных не нашлось" % bad
@@ -916,5 +938,6 @@ def handle_document(db, case, doc):
         doc.state = "не распознан"
         doc.summary = "разбор не удался"
         db.commit()
-        say(db, case.id, "Не смог разобрать «%s»: %s" % (doc.name, exc), agent=owner)
+        say(db, case.id, "Не смог разобрать «%s»: %s" % (doc.name, exc), agent=owner,
+            document_id=doc.id)
         db.commit()

@@ -111,9 +111,16 @@ def agent_list():
     return [dict(key=k, **v) for k, v in sorted(AGENTS.items(), key=lambda kv: kv[1]["n"])]
 
 
-def say(db, case_id, text, who="агент", agent=None, payload=None, to_agent=None):
-    """Реплика в ленту дела."""
-    m = Message(case_id=case_id, who=who, agent=agent, to_agent=to_agent, text=text,
+def say(db, case_id, text, who="агент", agent=None, payload=None, to_agent=None,
+        document_id=None):
+    """Реплика в ленту дела.
+
+    ``document_id`` — если реплика про конкретный документ. Она попадет и в
+    ленту плана, и в переписку по документу: разговор о документе идет там,
+    где документ открыт, а не в общей ленте, где он теряется среди чужих.
+    """
+    m = Message(case_id=case_id, document_id=document_id,
+                who=who, agent=agent, to_agent=to_agent, text=text,
                 payload=json.dumps(payload, ensure_ascii=False) if payload else None)
     db.add(m)
     db.commit()

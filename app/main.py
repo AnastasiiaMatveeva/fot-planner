@@ -343,7 +343,23 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
             db.add(doc)
             db.commit()
             added.append(doc.id)
-            agents.say(db, case_id, "Загружен документ «%s»." % name, who="экономист")
+            agents.say(db, case_id, "Загружен документ «%s»." % name, who="экономист",
+                       document_id=doc.id)
+            # Тот же файл под другим именем: содержимое совпадает байт в байт.
+            # Молчать об этом нельзя — одни и те же данные попадут в реестр
+            # дважды, а по именам это не видно.
+            twin = (db.query(Document).filter(Document.sha256 == digest,
+                                              Document.id != doc.id,
+                                              Document.name != name,
+                                              Document.state != "заменен")
+                    .order_by(Document.id.desc()).first())
+            if twin is not None:
+                agents.say(db, case_id,
+                           "Содержимое «%s» совпадает с «%s», загруженным раньше. "
+                           "Если это тот же документ, лишнюю копию лучше удалить: "
+                           "иначе одни и те же данные окажутся в реестре дважды."
+                           % (name, twin.name), agent="intake", document_id=doc.id)
+                db.commit()
         case.stage = "сбор данных"
         db.commit()
         for doc_id in added:

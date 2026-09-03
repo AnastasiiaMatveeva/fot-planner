@@ -1798,6 +1798,40 @@ var inRegistry = false, regTab = "docs", regData = null;
 //: формат, который потом «не прочитан», — тем более.
 var UPLOAD_ACCEPT = ".xlsx,.xlsm,.xls,.pdf,.doc,.docx";
 
+//: Документы, загруженные в этот заход: за ними следим до тех пор, пока
+//: экономист не закроет полосу.
+var fresh = [];
+
+/* Что стало с только что загруженным — прямо в реестре, без ухода в ленту
+   плана. Пока агент читает, здесь видно «в обработке»; когда прочитал —
+   что он взял и что просит подтвердить, с переходом в карточку документа.
+   Разбираться с документом надо там, где он открыт: в карточке и предпросмотр,
+   и извлеченные строки, и разговор с агентом о правках. */
+function freshStrip(docs) {
+  if (!fresh.length) return "";
+  var rows = fresh.map(function (id) {
+    return docs.filter(function (d) { return d.id === id; })[0];
+  }).filter(Boolean);
+  if (!rows.length) return "";
+  var busy = rows.filter(function (d) { return d.state === "ожидает"; }).length;
+  return '<div class="fresh"><div class="fh">' +
+    (busy ? "Агент читает загруженное" : "Загруженные документы прочитаны") +
+    '<button type="button" class="fx" id="freshclose">Скрыть</button></div>' +
+    rows.map(function (d) {
+      var s = docStatus(d.state);
+      var wait = d.state === "ждет подтверждения";
+      return '<div class="frow"><span class="fn">' + esc(d.name) + "</span>" +
+        '<span class="st ' + s.cls + '">' + esc(s.text) + "</span>" +
+        '<span class="fp">' + (produced(d.produced) || (d.state === "ожидает" ? "" : "—")) + "</span>" +
+        '<button type="button" class="fopen' + (wait ? " go" : "") +
+        '" data-fresh="' + d.id + '">' +
+        (wait ? "Проверить строки" : "Открыть") + "</button></div>";
+    }).join("") +
+    '<div class="fnote">В карточке документа видно, что из него взято, и есть ' +
+    "разговор с агентом: напишите, если разобрано неверно, — он поправит " +
+    "реестр и запомнит правку.</div></div>";
+}
+
 //: Короткие имена месяцев для графика поступлений.
 var MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
               "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -1906,6 +1940,7 @@ function renderRegistry() {
           widths: ["46px", "", "118px", "152px", "178px", "44px"],
           rowCls: function (i) { return picked[pg.rows[i].id] ? "sel" : ""; } }) +
         pager("docs", pg);
+    body = freshStrip(docs) + body;
     if (!docs.length) {
       body = '<div class="empty2"><b>Документов пока нет</b>' +
         "<p>Перетащите сюда файлы или нажмите «Загрузить документы». " +
@@ -2278,6 +2313,17 @@ $("regview").addEventListener("click", function (e) {
     return;
   }
 
+  if (e.target.closest("#freshclose")) {
+    fresh = [];
+    renderRegistry();
+    return;
+  }
+  var fo = e.target.closest("[data-fresh]");
+  if (fo) {
+    openDocument(+fo.getAttribute("data-fresh"));
+    return;
+  }
+
   var b = e.target.closest(".more");
   if (!b) return;
   var row = b.closest("tr");
@@ -2371,7 +2417,15 @@ function sendFiles(list) {
   var box = document.querySelector("#regview .regup");
   if (box) box.classList.add("busy");
   return api("/api/case/" + caseId + "/upload", { method: "POST", body: fd })
-    .then(function () {
+    .then(function (r) {
+      // Запоминаем, что именно сейчас загрузили: пока агент читает, эти
+      // документы показываются отдельной полосой над таблицей. Иначе
+      // загрузка в реестре была бы действием без ответа: файл где-то в
+      // списке, а что с ним стало — написано в ленте плана, которой отсюда
+      // не видно.
+      (r && r.documents || []).forEach(function (id) {
+        if (fresh.indexOf(id) < 0) fresh.push(id);
+      });
       if (inRegistry) loadRegistry(true);
       return tick();
     })
