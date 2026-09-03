@@ -717,6 +717,9 @@ function monthName(m) { return MONTHS[m] || MONTHS[m - 1] || m; }
 
 function setView(v) {
   view = v;
+  // Подробным таблицам нужна ширина: колонка контекста забирает 320 пикселей
+  // и разрезает месяцы. На вкладках результата убираем ее, как в реестре.
+  if (!inRegistry && !inAgents) wideScreen(v !== "feed");
   // Ответ агента приходит в ленту. Если экономист смотрит план или сводку,
   // он о нем не узнает: раньше вопрос выглядел оставленным без ответа.
   if (v === "feed") unseen = 0;
@@ -969,8 +972,8 @@ function payrollView() {
     px(t["человек"], "человек", "человека", "человек") + ", всего <b>" +
     mo(t["за год"]) + " ₽</b>. Сумма за месяц у каждого равна его зарплате — " +
     "это жесткое условие, и смотреть надо не на нее, а на то, из чего она " +
-    "сложилась: договоры, ставки, виды выплат. Щелчок по строке — месяц за " +
-    "месяцем.</div>" +
+    "сложилась: договоры, ставки, виды выплат. Ниже — все месяцы каждого " +
+    "человека числами.</div>" +
     '<div class="kpis small">' + [
       ["Месяцев со сменой структуры", t["месяцев со сменой структуры"],
        "менялись договор, ставка или доли"],
@@ -1042,6 +1045,75 @@ function payrollView() {
       ];
     }), "", { startNum: pg.from }) + pager("payroll", pg);
   return head + why + legend + body;
+}
+
+/* Подробно: у каждого человека все двенадцать месяцев видно сразу.
+
+   Компактная строка со полосой годится, чтобы охватить сотню людей взглядом,
+   но экономист работает с числами: ставка, договоры, суммы по видам выплат.
+   Прятать их за наведением и щелчком значит заставлять его открывать
+   тридцать шесть подсказок подряд. Поэтому подробности раскрыты, а страницы
+   режут список по людям, а не по месяцам. */
+function payrollFull() {
+  if (!vpay || !vpay["люди"].length) return "";
+  var kindOrder = ["оклад", "120", "122", "124", "152", "приказ"];
+  var pg = paged("payroll-full", vpay["люди"]);
+  return pg.rows.map(function (p) {
+    var used = kindOrder.filter(function (k) {
+      return p["месяцы"].some(function (m) {
+        return m && m["договоры"].some(function (c) {
+          return c["виды"].some(function (v) { return v["вид"] === k; });
+        });
+      });
+    });
+    var rows = [];
+    p["месяцы"].forEach(function (m, i) {
+      if (!m) {
+        rows.push([MONTHS[i], { v: "—", cls: "n" }, { v: "не работает" }]
+          .concat(used.map(function () { return { v: null, cls: "n" }; }))
+          .concat([{ v: null, cls: "n" }, { v: null }]));
+        return;
+      }
+      rows.push([
+        MONTHS[i],
+        { v: num(m["ставка"]), cls: "n" +
+             (m["ставка"] > (p["ставка"] || 1) + 0.01 ? " up" : "") },
+        { v: m["договоры"].map(function (c) {
+            return '<span class="ctag ' + ctrClass(c["код"]) + '">' + esc(c["код"]) +
+                   (c["ставка"] ? " · " + num(c["ставка"]) : "") + "</span>";
+          }).join("") },
+      ].concat(used.map(function (k) {
+        var s = 0;
+        m["договоры"].forEach(function (c) {
+          c["виды"].forEach(function (v) { if (v["вид"] === k) s += v["сумма"]; });
+        });
+        return { v: s ? mo(s) : null, cls: "n" };
+      })).concat([
+        { v: mo(m["всего"]), cls: "n tot" },
+        { v: m["изменилось"].length
+            ? '<span class="chgtag">' + esc(m["изменилось"].join("; ")) + "</span>"
+            : null },
+      ]));
+    });
+    var meta = [
+      p["должность"] || "должность не указана",
+      "ставка " + num(p["ставка"]) +
+        (p["ставка макс"] > p["ставка"] + 0.01
+          ? ", в плане до " + num(p["ставка макс"]) : ""),
+      "зарплата " + mo(p["зарплата"]) + " ₽ в месяц",
+      "за год " + mo(p["за год"]) + " ₽",
+      p["месяцев со сменой структуры"]
+        ? "смен структуры: " + p["месяцев со сменой структуры"] : "схема не менялась",
+    ].join(" · ");
+    return '<div class="grp person"><h4>' + esc(p["фио"]) +
+      (p["подразделение"] ? ' <span class="dep">' + esc(p["подразделение"]) +
+                            "</span>" : "") + "</h4>" +
+      '<div class="vh">' + esc(meta) + "</div>" +
+      table(["Месяц", { t: "ставка" }, "Договоры и ставки"].concat(
+              used.map(function (k) { return { t: k + ", ₽" }; }),
+              [{ t: "всего, ₽" }, "Что изменилось"]),
+        rows, "", { plain: true }) + "</div>";
+  }).join("") + pager("payroll-full", pg);
 }
 
 /* Месяц за месяцем по одному человеку: договоры со ставками, виды выплат
@@ -1432,7 +1504,7 @@ function renderView() {
   }
 
   if (view === "plan") {
-    el.innerHTML = payrollView() + '<div id="plandetail"></div>';
+    el.innerHTML = payrollView() + payrollFull() + '<div id="plandetail"></div>';
     return;
   }
 
