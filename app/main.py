@@ -1186,7 +1186,16 @@ def _registry_data(db, case):
         "secret": db.query(SecretAllowance).order_by(SecretAllowance.id).all(),
         "substitutions": [(s.position, s.replaced_by) for s in
                           db.query(Substitution).order_by(Substitution.id).all()],
+        "settings": _case_settings(case),
     }
+
+
+def _case_settings(case):
+    """Лист «настройки» из последнего загруженного шаблона этого плана."""
+    try:
+        return (json.loads(case.passport) if case.passport else {}).get("settings") or {}
+    except (TypeError, ValueError):
+        return {}
 
 
 def _retire_document(db, doc):
@@ -1557,6 +1566,214 @@ async def post_reference(request: Request):
 
 
 # ── расчет ──────────────────────────────────────────────────────
+def _explain_failure(db, case, run, src, out, err_text=""):
+    """Почему решения нет — словами экономиста, а не кодом статуса.
+
+    Решатель и при отказе пишет файл с листами «Итог расчета» и «Проблемы и
+    предупреждения»: какое ограничение не сошлось и на каком объекте. Этого
+    мало: «отклонение по строке трудоемкости C_NEW / Специалист» не говорит,
+    что делать. Агент сверяет каждую ошибку с реестром — есть ли вообще
+    сотрудник с такой должностью, может ли ее кто-то занять по правилам
+    замещения, действует ли договор в эти месяцы — и называет причину и
+    выход. Проверки решателя при этом сохраняются как результат прогона:
+    вкладка «Ограничения» показывает их и для неудачного расчета.
+    """
+    import re
+    import result2json
+    from fot_planner.position_reference import normalize_position
+
+    found = {"ошибки": [], "почему": [], "has_result": False, "текст": ""}
+    warnings = []
+    if os.path.exists(out):
+        try:
+            js = os.path.join(RESULT_DIR, "case%d_run%d.json" % (case.id, run.id))
+            result2json.convert(src, out, js)
+            with open(js, encoding="utf-8") as f:
+                data = json.load(f)
+            warnings = [w for w in data.get("warnings") or [] if w and w[0] == "Ошибка"]
+            found["has_result"] = True
+        except Exception as exc:  # noqa: BLE001 — разбор важнее файла проверок
+            found["почему"].append("Проверки решателя прочитать не удалось: %s" % str(exc)[:160])
+    found["ошибки"] = warnings
+
+    employees = db.query(Employee).all()
+    subs = db.query(Substitution).all()
+    contracts = {(c.code or "").strip().lower(): c for c in db.query(Contract).all()}
+
+    def holders(position):
+        """Кто может занять должность: напрямую или по правилу замещения."""
+        want = normalize_position(position)
+        direct = [e for e in employees if normalize_position(e.position or "") == want]
+        via = []
+        for s in subs:
+            allowed = [normalize_position(x.strip()) for x in (s.replaced_by or "").split(",")]
+            if want in allowed:
+                via += [e for e in employees
+                        if normalize_position(e.position or "") == normalize_position(s.position or "")
+                        and e not in direct and e not in via]
+        return direct, via
+
+    for w in warnings:
+        section, obj, descr = w[1], w[2], w[4]
+        if section == "Трудоёмкость" and obj and "/" in str(obj):
+            code, position = [x.strip() for x in str(obj).split("/", 1)]
+            row = next((r for r in db.query(LaborRow).all()
+                        if (r.contract_code or "").strip().lower() == code.lower()
+                        and normalize_position(r.position or "") == normalize_position(position)),
+                       None)
+            need = ("%s чел.-мес." % _n(row.person_months)) if row and row.person_months else "трудоемкость"
+            direct, via = holders(position)
+            c = contracts.get(code.lower())
+            span = (" (действует %s — %s)" % (c.date_from, c.date_to)) if c and c.date_from else ""
+            if not direct and not via:
+                found["почему"].append(
+                    "Договор %s%s требует %s по должности «%s», а в реестре нет "
+                    "сотрудника с такой должностью, и по правилам замещения ее никто "
+                    "занять не может. Выход: добавить сотрудника, исправить должность "
+                    "в строке трудоемкости или добавить правило замещения."
+                    % (code, span, need, position))
+            else:
+                who = ", ".join((e.fio or e.code) for e in (direct + via)[:4])
+                text = ("Договор %s%s требует %s по должности «%s». Занять ее могут: %s%s."
+                        % (code, span, need, position, who,
+                           " (по правилам замещения)" if via and not direct else ""))
+                # Чаще всего не сходится цена: в РКМ чел.-мес. стоит одно, а
+                # оклад тех, кто будет работать, — другое. Тогда либо не
+                # хватает ФОТ договора на все чел.-мес., либо чел.-мес.
+                # выходит меньше плана.
+                sal = [float(e.salary) / float(e.rate or 1) for e in direct + via
+                       if e.salary and float(e.salary) > 0]
+                cost = float(row.avg_cost) if row and row.avg_cost else None
+                if sal and cost and row.person_months:
+                    typical = sorted(sal)[len(sal) // 2]
+                    if abs(typical - cost) / cost > 0.05:
+                        text += (" Но средняя стоимость чел.-мес. в строке трудоемкости — "
+                                 "%s ₽, а оклад этих сотрудников на ставку — %s ₽: %s чел.-мес. "
+                                 "стоят %s ₽ при ФОТ договора %s ₽. Выход: уточнить среднюю "
+                                 "стоимость или чел.-мес. в РКМ либо ФОТ договора."
+                                 % (_money(cost), _money(typical), _n(row.person_months),
+                                    _money(typical * float(row.person_months)),
+                                    _money(c.fund) if c and c.fund else "—"))
+                    else:
+                        text += (" Распределить трудоемкость все равно не удалось: проверьте "
+                                 "сроки договора и сотрудников, их ставки и допуск "
+                                 "трудоемкости в настройках.")
+                else:
+                    text += (" Распределить трудоемкость не удалось: проверьте сроки "
+                             "договора и сотрудников, их ставки и допуск трудоемкости "
+                             "в настройках.")
+                found["почему"].append(text)
+        elif section == "Конфликт":
+            m = re.search(r"\(([^)]+)\)", str(descr or ""))
+            if m:
+                found["почему"].append("Решатель назвал ограничение, которое не сошлось: %s."
+                                       % m.group(1))
+        else:
+            where = " · ".join(str(x) for x in (obj, w[3]) if x not in (None, "", "—"))
+            found["почему"].append("%s%s%s" % (descr, (" — " + where) if where else "",
+                                               (". " + str(w[6])) if len(w) > 6 and w[6] else ""))
+
+    if not found["почему"] and not found["has_result"] and err_text:
+        # Не «нет решения», а остановка на входных данных: последняя строка
+        # ошибки говорит, какая графа не прочиталась.
+        last = [ln for ln in err_text.splitlines() if ln.strip()][-1][:300]
+        found["почему"].append("Решатель остановился с ошибкой, до поиска плана не дошло: %s. "
+                               "Это ошибка сборки входного файла — сообщите разработчику." % last)
+    if not found["почему"]:
+        found["почему"].append("Решатель не назвал ограничение. Проверьте предупреждения "
+                               "сборки входа в ленте и поступления по договорам.")
+    # Во что обойдется выход: те же данные, но с одним ослабленным условием.
+    # Первое, при котором план сходится, и есть цена вопроса.
+    found["опыты"] = _try_relaxations(src, case, run)
+    for name, status, cost in found["опыты"]:
+        if status == "сходится":
+            found["почему"].append("План сходится, если %s%s." % (name, (": " + cost) if cost else ""))
+            break
+    found["текст"] = ("Решения нет. " + " ".join(found["почему"]) +
+                      (" Проверки решателя — на вкладке «Ограничения»." if found["has_result"] else ""))
+    return found
+
+
+#: Ослабления для опытов: подпись, графа листа «настройки», значение.
+_RELAXATIONS = (
+    ("допустить дефицит выплат", "разрешить дефицит", "да"),
+    ("не требовать точного попадания в трудоемкость", "допуск трудоёмкости", 1),
+    ("не требовать равномерного освоения", "штраф отклонения от равномерного освоения", 0),
+)
+
+
+def _try_relaxations(src, case, run):
+    """Прогнать те же данные с одним ослабленным условием — по очереди.
+
+    Это дешевый аналог поиска минимального конфликта: три прогона по несколько
+    секунд вместо разбора модели. Ответ экономисту — не «INFEASIBLE», а «план
+    сходится, если допустить дефицит: общий дефицит 630 000 ₽, первый месяц —
+    июнь». Опыт, при котором план сошелся, останавливает перебор.
+    """
+    from openpyxl import load_workbook
+
+    out = []
+    for name, column, value in _RELAXATIONS:
+        try:
+            tmp = os.path.join(RESULT_DIR, "case%d_run%d_relax%d.xlsx" % (case.id, run.id, len(out) + 1))
+            res = tmp.replace(".xlsx", "_out.xlsx")
+            wb = load_workbook(src)
+            ws = wb["настройки"]
+            hdr = [c.value for c in ws[1]]
+            if column not in hdr:
+                out.append((name, "графы нет в шаблоне", ""))
+                continue
+            ws.cell(row=2, column=hdr.index(column) + 1).value = value
+            wb.save(tmp)
+            p = subprocess.run([EXE, "solve", "-i", tmp, "-o", res],
+                               capture_output=True, text=True, timeout=180, cwd=ROOT)
+            if p.returncode != 0:
+                out.append((name, "не сходится", ""))
+                continue
+            cost = _relaxation_cost(res)
+            out.append((name, "сходится", cost))
+            break
+        except Exception as exc:  # noqa: BLE001 — опыт не должен ронять разбор
+            out.append((name, "опыт не удался: %s" % str(exc)[:120], ""))
+    return out
+
+
+def _relaxation_cost(path):
+    """Цена ослабления по листу «Итог расчета»: дефицит, первый месяц, отклонения."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, read_only=True)
+    if "Итог расчета" not in wb.sheetnames:
+        return ""
+    rows = {str(r[0]): r[1:] for r in wb["Итог расчета"].iter_rows(values_only=True) if r and r[0]}
+    parts = []
+    d = rows.get("Общий дефицит")
+    if d and d[0]:
+        parts.append("общий дефицит %s ₽" % _money(d[0]))
+        m = rows.get("Первый месяц дефицита")
+        if m and m[0] not in (None, "—"):
+            parts.append("первый месяц дефицита — %s" % m[0])
+    lab = rows.get("Строк трудоёмкости с отклонением")
+    if lab and lab[0]:
+        parts.append("строк трудоемкости с отклонением: %s" % lab[0])
+    return ", ".join(parts)
+
+
+def _money(v):
+    try:
+        return "{:,.0f}".format(float(v)).replace(",", "\u202f")
+    except (TypeError, ValueError):
+        return str(v)
+
+
+def _n(v):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return ("%.2f" % v).rstrip("0").rstrip(".").replace(".", ",")
+
+
 def _run_sources(db):
     """Что легло в основание расчета: документы и версии агентов.
 
@@ -1643,17 +1860,28 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         run.seconds = sec
         if p.returncode != 0:
             run.status = "нет решения"
-            run.summary = json.dumps({"error": (p.stderr or p.stdout or "")[-800:]},
-                                     ensure_ascii=False)
-            db.commit()
             agents.handoff(db, case_id, "solver", "infeasible",
                            "Решения нет, передаю разбор причин агенту «Анализ "
                            "невыполнимости».")
-            agents.say(db, case_id,
-                       "Агент анализа невыполнимости в этой сборке не реализован. "
-                       "Текст отказа решателя: %s"
-                       % ((p.stderr or p.stdout or "").strip()[-300:] or "—"),
-                       agent="infeasible")
+            db.commit()
+            with agents.working(db, case_id, "infeasible",
+                                "разбирает, почему решения нет") as w:
+                found = _explain_failure(db, case, run, src, out,
+                                         (p.stderr or p.stdout or "").strip())
+                w["detail"] = ("причин: %d" % len(found["почему"])) if found["почему"] \
+                              else "решатель причину не назвал"
+                w["artifact"] = {"ошибок решателя": len(found["ошибки"]),
+                                 "причины": found["почему"],
+                                 "проверки сохранены": found["has_result"]}
+            run.summary = json.dumps({"error": (p.stderr or p.stdout or "")[-800:],
+                                      "анализ": found["почему"],
+                                      "опыты": found.get("опыты") or [],
+                                      "has_result": found["has_result"]},
+                                     ensure_ascii=False)
+            db.commit()
+            agents.say(db, case_id, found["текст"], agent="infeasible",
+                       payload={"kind": "infeasible", "run_id": run_id,
+                                "почему": found["почему"]})
             db.commit()
             return
 

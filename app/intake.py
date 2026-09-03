@@ -29,8 +29,7 @@ import llm              # noqa: E402
 from agents import handoff, say, working  # noqa: E402
 from db import (  # noqa: E402
     Contract, Correction, Document, Employee, Inflow, LaborRow, Proposal,
-    Question, SecretAllowance, Substitution, now,
-)
+    Question, SecretAllowance, Substitution, now)
 
 # Слова, по которым книга опознается как нормативный документ, а не как
 # расчетно-калькуляционные материалы по договору.
@@ -206,8 +205,18 @@ def _store_passport(db, case, passport, doc):
     Строки заменяются в пределах одного документа: повторная загрузка того же
     файла обновляет только то, что из него пришло, и не трогает остальное.
     """
-    db.query(Employee).filter_by(document_id=doc.id).delete()
-    db.query(Contract).filter_by(document_id=doc.id).delete()
+    for model in (Employee, Contract, LaborRow, Inflow, SecretAllowance, Substitution):
+        db.query(model).filter_by(document_id=doc.id).delete()
+    # Файл по шаблону читаем загрузчиком решателя — тем же кодом, что читает
+    # входной файл расчета. Тогда в реестр попадают все графы контракта по
+    # построению: сроки и тип договора, разрешения на виды выплат и на
+    # совместительство, подразделение и тип занятости, поступления по
+    # месяцам, трудоемкость, надбавки, правила замещения. Разбор по
+    # заголовкам брал шесть граф из двадцати, и расчет из реестра расходился
+    # с расчетом по самому файлу: договор «с июня» действовал весь год.
+    ctx = _solver_context(doc.path)
+    if ctx is not None:
+        return _store_context(db, ctx, doc)
     for e in passport.get("employees") or []:
         db.add(Employee(code=str(e.get("code") or ""),
                         fio=e.get("fio"), position=e.get("pos"),
@@ -225,6 +234,91 @@ def _store_passport(db, case, passport, doc):
                         date_to=_excel_date(c.get("to")),
                         source=doc.name, document_id=doc.id))
     db.commit()
+    return {"сотрудников": len(passport.get("employees") or []),
+            "договоров": len(passport.get("contracts") or [])}
+
+
+def _solver_context(path):
+    """Прочитать книгу загрузчиком решателя; None, если это не полный шаблон."""
+    try:
+        from fot_planner.excel.load import load_context
+        return load_context(path)
+    except Exception:  # noqa: BLE001 — не шаблон целиком: остается разбор по заголовкам
+        return None
+
+
+#: Разрешения договора → вид выплаты, как он записан в реестре.
+_KIND_FLAGS = (("allow_salary", "оклад"), ("allow_secret", "120"),
+               ("allow_allowance", "122"), ("allow_incentive", "124"),
+               ("allow_extra_work", "152"), ("allow_order_incentive", "приказ"))
+#: Значения решателя → слова реестра. Обратно их переводит сам загрузчик.
+_EMPLOYMENT_RU = {"auto": "по расчету", "main": "основное", "part_time": "совместительство"}
+_CATEGORY_RU = {"regular": "основной", "student": "студент", "graduate_student": "аспирант"}
+
+
+def _store_context(db, ctx, doc):
+    """Разложить прочитанное загрузчиком решателя по реестрам организации."""
+    def d(v):
+        return v.strftime("%d.%m.%Y") if v else None
+
+    def yn(v):
+        return "да" if v else "нет"
+
+    counts = {}
+    for e in ctx.employees:
+        db.add(Employee(code=e.id, fio=e.full_name, position=e.position,
+                        department=e.department or None, rate=e.rate,
+                        salary=e.monthly_wage,
+                        employment_type=_EMPLOYMENT_RU.get(e.employment_type),
+                        employment_category=_CATEGORY_RU.get(e.employment_category),
+                        allowed_contracts=", ".join(e.allowed_contracts) or None,
+                        forbidden_contracts=", ".join(e.forbidden_contracts) or None,
+                        date_from=d(e.start_date), date_to=d(e.end_date),
+                        source=doc.name, document_id=doc.id))
+    counts["сотрудников"] = len(ctx.employees)
+    inflows = 0
+    for c in ctx.contracts:
+        kinds = [name for flag, name in _KIND_FLAGS if getattr(c, flag)]
+        db.add(Contract(code=c.id, name=c.name or None, number=c.number or None,
+                        kind=c.contract_type or None, account=c.account or None,
+                        goz=yn(c.is_goz_defense_order), fund=c.total_fot,
+                        kinds=", ".join(kinds), priority=yn(c.priority_payment_mode),
+                        allow_main=yn(c.allow_main_employment),
+                        allow_part_time=yn(c.allow_part_time),
+                        salary_deadline=d(c.salary_payment_deadline),
+                        allowance_deadline=d(c.allowances_payment_deadline),
+                        date_from=d(c.start_date), date_to=d(c.end_date),
+                        source=doc.name, document_id=doc.id))
+        for b in c.monthly_budgets or []:
+            if b.inflow_amount:
+                db.add(Inflow(contract_code=c.id, year=b.year, month=b.month,
+                              amount=b.inflow_amount, source=doc.name, document_id=doc.id))
+                inflows += 1
+    counts["договоров"] = len(ctx.contracts)
+    counts["поступлений"] = inflows
+    for lp in ctx.labor_plans or []:
+        # Группа эквивалентности — вычисленная строка вида «3.247н / группа 3»,
+        # а графа «номер группы» в шаблоне числовая: в реестр идет только то,
+        # что было в документе.
+        db.add(LaborRow(contract_code=lp.contract_id, year=lp.year,
+                        position=lp.position,
+                        position_level=(lp.position_level
+                                        if isinstance(lp.position_level, int) else None),
+                        person_months=lp.person_months,
+                        avg_cost=lp.avg_monthly_labor_cost,
+                        source=doc.name, document_id=doc.id))
+    counts["строк трудоемкости"] = len(ctx.labor_plans or [])
+    for s in ctx.secret_allowances or []:
+        db.add(SecretAllowance(employee_code=s.employee_id, contract_code=s.secret_contract_id,
+                               rate=s.rate, source=doc.name, document_id=doc.id))
+    counts["надбавок 120"] = len(ctx.secret_allowances or [])
+    for position, extra in (ctx.substitution_rules or {}).items():
+        if extra:
+            db.add(Substitution(position=position, replaced_by=", ".join(sorted(extra)),
+                                source=doc.name, document_id=doc.id))
+    counts["правил замещения"] = sum(1 for v in (ctx.substitution_rules or {}).values() if v)
+    db.commit()
+    return counts
 
 
 #: Какие форматы читает каждый обработчик. Разбор документов по договору и
@@ -603,20 +697,22 @@ def run_intake(db, case, doc):
         passport = out["passport"]
         case.passport = json.dumps(passport, ensure_ascii=False)
         doc.state = "разобран"
-        emp = len(passport.get("employees") or [])
-        ctr = len(passport.get("contracts") or [])
-        doc.summary = "сотрудников %d, договоров %d" % (emp, ctr)
+        counts = _store_passport(db, case, passport, doc)
+        emp, ctr = counts.get("сотрудников", 0), counts.get("договоров", 0)
+        doc.summary = ", ".join("%s %d" % (k, v) for k, v in counts.items() if v)
         w["detail"] = doc.summary
-        w["artifact"] = {"файл": doc.name, "сотрудников": emp, "договоров": ctr,
+        w["artifact"] = {"файл": doc.name, **counts,
+                         "настроек расчета": len(passport.get("settings") or {}),
                          "прочитано в документе": out.get("log") or [],
                          "спорных значений": len(out.get("questions") or []),
                          "готово к расчету": bool((out.get("ready") or {}).get("ok"))}
-        _store_passport(db, case, passport, doc)
         db.commit()
 
     ready = out.get("ready") or {}
     say(db, case.id,
-        "Разобрал «%s». Нашел сотрудников — %d, договоров — %d." % (doc.name, emp, ctr),
+        "Разобрал «%s»: %s.%s" % (doc.name, doc.summary or "строк реестра нет",
+                                  (" Настройки расчета — из этого файла."
+                                   if passport.get("settings") else "")),
         agent="intake",
         payload={"kind": "passport", "employees": emp, "contracts": ctr,
                  "log": out.get("log") or []})

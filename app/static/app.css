@@ -894,3 +894,11 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .run .srcs ul{margin:6px 0 0;padding-left:14px}
 .run .srcs li{margin-bottom:5px}
 .run .srcs .mono{font-family:ui-monospace,Consolas,monospace;font-size:11px;cursor:help}
+
+/* решения нет: причины поверх вкладок результата */
+.failban{margin:0 0 14px;padding:12px 14px;border-radius:var(--r3);background:var(--badbg);
+         color:var(--ink);font-size:13px;line-height:1.5;border-left:3px solid var(--bad)}
+.failban ul{margin:6px 0 0;padding-left:18px}
+.failban li{margin-bottom:4px}
+.failban .mt{color:var(--ink3);font-size:12px}
+.run .why{color:var(--ink2);white-space:normal}

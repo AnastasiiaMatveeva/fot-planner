@@ -471,11 +471,22 @@ function renderRuns() {
   el.innerHTML = state.runs.map(function (r) {
     var cls = r.status === "OPTIMAL" ? "" : (r.status === "идет" ? "work" : "bad");
     var s = r.summary || {};
+    var why = (s["анализ"] || []).slice(0, 2).map(function (t) {
+      return '<div class="mt why">' + esc(t) + "</div>";
+    }).join("");
+    // Опыты с ослаблением: что пробовали снять и сошлось ли. Экономист видит
+    // не только «нет решения», но и что это не лечится одним допущением.
+    if ((s["опыты"] || []).length) {
+      why += '<div class="mt why">опыты: ' + esc(s["опыты"].map(function (o) {
+        return o[0] + " — " + o[1] + (o[2] ? " (" + o[2] + ")" : "");
+      }).join("; ")) + "</div>";
+    }
     return '<div class="run ' + cls + '"><b>' + esc(r.status) + "</b>" +
            (r.seconds != null ? " · " + r.seconds + " с" : "") +
            '<div class="mt">' + esc(r.created) +
            (s.plan_rows != null ? " · строк плана " + s.plan_rows : "") +
-           (s.error ? " · " + esc(String(s.error).slice(0, 120)) : "") + "</div>" +
+           (s.error && !why ? " · " + esc(String(s.error).slice(0, 120)) : "") + "</div>" +
+           why +
            (r.status === "OPTIMAL"
              ? '<div class="mt"><a href="/api/case/' + caseId + "/result/" + r.id +
                '">скачать xlsx</a></div>' : "") +
@@ -718,12 +729,32 @@ function setView(v) {
 }
 
 function loadResult() {
-  var ok = (state.runs || []).filter(function (r) { return r.status === "OPTIMAL"; })[0];
-  if (!ok) { vresult = null; vrun = null; return Promise.resolve(); }
-  if (vrun === ok.id) return Promise.resolve();
-  return api("/api/case/" + caseId + "/run/" + ok.id + "/result").then(function (d) {
-    vresult = d; vrun = ok.id;
+  var runs = state.runs || [];
+  var ok = runs.filter(function (r) { return r.status === "OPTIMAL"; })[0];
+  // Без удачного расчета показываем проверки последнего неудачного: где
+  // именно не сошлось — и есть ответ на вопрос «почему решения нет».
+  var failed = runs.filter(function (r) {
+    return r.status !== "OPTIMAL" && r.status !== "идет" && r.summary && r.summary.has_result;
+  })[0];
+  var pick = ok || failed;
+  if (!pick) { vresult = null; vrun = null; return Promise.resolve(); }
+  if (vrun === pick.id) return Promise.resolve();
+  return api("/api/case/" + caseId + "/run/" + pick.id + "/result").then(function (d) {
+    d.status = pick.status;
+    d.analysis = (pick.summary && pick.summary["анализ"]) || [];
+    vresult = d; vrun = pick.id;
   });
+}
+
+/* Неудачный расчет: плана нет, есть причины и проверки. Плашка одна на все
+   вкладки, чтобы пустая таблица плана не выглядела как «еще считает». */
+function failBanner() {
+  if (!vresult || vresult.status === "OPTIMAL") return "";
+  return '<div class="failban"><b>Решения нет.</b> ' +
+    (vresult.analysis.length
+      ? "<ul>" + vresult.analysis.map(function (t) { return "<li>" + esc(t) + "</li>"; }).join("") + "</ul>"
+      : "Решатель причину не назвал.") +
+    '<div class="mt">Проверки решателя — на вкладке «Ограничения».</div></div>';
 }
 
 /* ── страницы ─────────────────────────────────────────────────
@@ -925,6 +956,10 @@ function renderView() {
     el.innerHTML = '<div class="none">Расчет еще не выполнен</div>';
     return;
   }
+  if (vresult.status !== "OPTIMAL" && view !== "lim") {
+    el.innerHTML = failBanner();
+    return;
+  }
 
   if (view === "plan") {
     // Строка на человека, месяцы графами — так план и читают: кому сколько в
@@ -1051,7 +1086,7 @@ function renderView() {
       }).join("");
     if (!problems) problems = '<div class="grp"><h4>Проблемы</h4>' +
       '<div class="none">Ошибок и предупреждений нет</div></div>';
-    el.innerHTML = checks + problems;
+    el.innerHTML = failBanner() + checks + problems;
   }
 }
 

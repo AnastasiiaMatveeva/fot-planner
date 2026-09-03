@@ -70,7 +70,7 @@ def fill_employees(ws, rows, warn, year=None):
             # Тип и категория занятости раньше проставлялись жестко: любой
             # сотрудник уходил в расчет как основное место. Совместительство
             # так выразить нельзя, а на нем держится половина модели.
-            e.employment_type or "основное",
+            e.employment_type or "по расчету",
             e.employment_category or "основной",
             e.salary,
             e.date_from or ("01.01.%d" % year if year else ""),
@@ -283,6 +283,20 @@ def build(template_path, out_path, data, warn):
         col = _col(ws, "год")
         if col:
             ws.cell(2, col).value = year
+    # Настройки расчета — из загруженного шаблона, если он их принес: допуск
+    # трудоемкости и штрафы там выставлены под этот план, а не под демо.
+    settings = data.get("settings") or {}
+    if settings and "настройки" in wb.sheetnames:
+        ws = wb["настройки"]
+        taken = []
+        for name, value in settings.items():
+            col = _col(ws, name)
+            if col and value is not None and str(name).strip().lower() != "год":
+                ws.cell(2, col).value = value
+                taken.append("%s: %s" % (name, value))
+        if taken:
+            warn.append("Настройки расчета взяты из загруженного шаблона — %s."
+                        % "; ".join(taken))
 
     wb.save(out_path)
     return out_path
