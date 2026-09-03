@@ -407,6 +407,9 @@ class Verdict(Base):
     fields: Mapped[str] = mapped_column(Text)          # JSON строки предложения
     verdict: Mapped[str] = mapped_column(String(20))   # принято | отклонено
     agent_version: Mapped[str | None] = mapped_column(String(20), default=None)
+    # Оценка, которую строка получила до приговора: по ней стенд считает
+    # калибровку — сколько «надежных» экономист отклонил.
+    grade: Mapped[str | None] = mapped_column(String(20), default=None)
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
 
 
@@ -434,6 +437,11 @@ class Proposal(Base):
     entity: Mapped[str] = mapped_column(String(40))
     payload: Mapped[str] = mapped_column(Text)
     evidence: Mapped[str | None] = mapped_column(String(400), default=None)
+    # Насколько строке можно верить — «надежно», «проверить», «сомнительно» —
+    # и почему. Это не самооценка модели (та уверена всегда одинаково), а
+    # итог проверок по реестру и справочнику; см. intake.grade.
+    grade: Mapped[str | None] = mapped_column(String(20), default=None)
+    reason: Mapped[str | None] = mapped_column(Text, default=None)
     # предложено | принято | отклонено
     state: Mapped[str] = mapped_column(String(20), default="предложено")
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
@@ -447,6 +455,8 @@ _ADDED_COLUMNS = {
     # только с ссылкой на документ вместо плана.
     "messages": [("document_id", "INTEGER")],
     "documents": [("version", "INTEGER"), ("supersedes_id", "INTEGER")],
+    "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
+    "verdicts": [("grade", "VARCHAR(20)")],
     "employees": [
         ("department", "VARCHAR(200)"),
         ("employment_type", "VARCHAR(40)"),

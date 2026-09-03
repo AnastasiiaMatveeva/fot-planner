@@ -355,6 +355,8 @@ def propose_entities(db, case, doc):
                    ("substitutions", "правило замещения"),
                    ("positions", "должность"))
         counts, skipped = {}, 0
+        grades = {"надежно": 0, "проверить": 0, "сомнительно": 0}
+        ctx = _grade_context(db, res)
         for key, entity in buckets:
             counts[entity] = 0
             for item in res.get(key) or []:
@@ -364,9 +366,12 @@ def propose_entities(db, case, doc):
                     # ее второй раз значит просить подтвердить проверенное.
                     skipped += 1
                     continue
+                g, why = grade(entity, item, where, ctx)
+                grades[g] += 1
                 db.add(Proposal(document_id=doc.id, entity=entity,
                                 payload=json.dumps(item, ensure_ascii=False),
-                                evidence=str(where)[:400] if where else None))
+                                evidence=str(where)[:400] if where else None,
+                                grade=g, reason=why or None))
                 counts[entity] += 1
         total = sum(counts.values())
         w["detail"] = ("предложено %d, уже в реестре %d" % (total, skipped)
@@ -374,6 +379,9 @@ def propose_entities(db, case, doc):
         w["artifact"] = {"файл": doc.name, "прочитано частями": res.get("parts"),
                          "учтено правок экономиста": len(hints),
                          "предложено строк": total,
+                         "из них надежных": grades["надежно"],
+                         "проверить": grades["проверить"],
+                         "сомнительных": grades["сомнительно"],
                          "пропущено как уже известные": skipped,
                          "в расчет пойдет": "только после подтверждения"}
         # Обрыв ответа по длине больше не теряет часть документа, но молчать
@@ -388,13 +396,163 @@ def propose_entities(db, case, doc):
     if not total:
         return False
 
+    tail = ""
+    if grades["сомнительно"]:
+        tail = (" %s — сверьте с документом особенно внимательно."
+                % _px(grades["сомнительно"], "строка сомнительная",
+                      "строки сомнительные", "строк сомнительных"))
     say(db, case.id,
         "В «%s» нашлось сверх разобранного: %s. В реестр и в расчет это пока "
         "не пошло — откройте документ в реестре, проверьте строки и "
-        "подтвердите те, что верны. У каждой написано, откуда она взята."
-        % (doc.name, doc.summary), agent="intake")
+        "подтвердите те, что верны. У каждой написано, откуда она взята и "
+        "насколько ей можно верить.%s"
+        % (doc.name, doc.summary, tail), agent="intake")
     db.commit()
     return True
+
+
+#: Обычные пределы оклада, когда справочник пуст. Величина вне их — не
+#: обязательно ошибка, но почти всегда соседняя графа: сумма за год, ФОТ
+#: договора, табельный номер. При заполненном справочнике верхний предел —
+#: два с половиной наибольших оклада из него: годовая сумма его не пройдет.
+_SALARY_RANGE = (10_000, 3_000_000)
+
+
+def _px(n, one, few, many):
+    d, h = n % 10, n % 100
+    word = many if 11 <= h <= 14 else one if d == 1 else few if 2 <= d <= 4 else many
+    return "%d %s" % (n, word)
+
+
+def _num(v):
+    if v in (None, ""):
+        return None
+    try:
+        return float(str(v).replace(" ", "").replace("\xa0", "").replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _money(v):
+    return "{:,.0f}".format(v).replace(",", " ")
+
+
+def _grade_context(db, res):
+    """Что считается известным при оценке строк одного документа.
+
+    Договор из того же документа — известный: структура цены приносит и
+    договор, и его трудоемкость разом, и вторая не должна считаться
+    сомнительной из-за того, что первый еще не подтвержден.
+    """
+    import reference
+    from fot_planner.position_reference import normalize_position
+
+    def low(v):
+        return str(v or "").strip().lower()
+
+    ref = reference.read_rows()
+    positions = {normalize_position(r["pos"]) for r in ref if r.get("pos")}
+    top = max([_num(r.get("sal")) or 0 for r in ref] or [0])
+    salary = (_SALARY_RANGE[0], max(top * 2.5, 300_000) if top else _SALARY_RANGE[1])
+    contracts = {low(c.code) for c in db.query(Contract).all() if c.code}
+    contracts |= {low(c.get("code")) for c in (res.get("contracts") or [])
+                  if c.get("code")}
+    employees = set()
+    for e in db.query(Employee).all():
+        employees |= {low(e.code), low(e.fio)}
+    for e in res.get("employees") or []:
+        employees |= {low(e.get("code")), low(e.get("fio"))}
+    employees.discard("")
+    return {"positions": positions, "contracts": contracts, "employees": employees,
+            "salary": salary, "norm": normalize_position, "low": low}
+
+
+def grade(entity, f, evidence, ctx):
+    """Насколько предложенной строке можно верить — и почему.
+
+    Не самооценка модели: она уверена всегда одинаково. Это проверки, которые
+    экономист сделал бы первыми: обязательные графы на месте, величины в
+    обычных пределах, ссылки ведут на то, что есть в реестре и справочнике,
+    указано, откуда строка взята.
+
+    «надежно» — все сошлось; «проверить» — противоречий нет, но что-то не
+    сошлось или не указано; «сомнительно» — дыра в обязательной графе или
+    противоречие с реестром. Сомнительные строки в карточке не отмечены
+    заранее, остальные отмечены. В реестр все равно попадает только то, что
+    экономист принял: оценка подсказывает, куда смотреть, а не решает.
+    """
+    bad, doubt = [], []
+    low, norm = ctx["low"], ctx["norm"]
+    lo, hi = ctx.get("salary", _SALARY_RANGE)
+
+    def pos_known(name):
+        return not name or norm(str(name).strip()) in ctx["positions"]
+
+    if entity == "сотрудник":
+        for k, name in (("fio", "ФИО"), ("position", "должность"), ("salary", "оклад")):
+            if f.get(k) in (None, ""):
+                bad.append("нет графы «%s»" % name)
+        s = _num(f.get("salary"))
+        if s is not None and not lo <= s <= hi:
+            bad.append("оклад %s вне обычных пределов (до %s)" % (_money(s), _money(hi)))
+        r = _num(f.get("rate"))
+        if r is not None and not 0 < r <= 2:
+            bad.append("ставка %s вне обычных пределов" % r)
+        if not pos_known(f.get("position")):
+            doubt.append("должности «%s» нет в справочнике" % f.get("position"))
+    elif entity == "договор":
+        if not f.get("code"):
+            bad.append("нет шифра договора")
+        fot = _num(f.get("fot"))
+        if fot is not None and fot <= 0:
+            bad.append("ФОТ не положительный")
+        if not f.get("from") or not f.get("to"):
+            doubt.append("нет сроков договора — подставится плановый год")
+        if not f.get("type") and f.get("goz") in (None, ""):
+            doubt.append("не указано, ГОЗ это или нет")
+    elif entity == "трудоемкость":
+        if low(f.get("contract")) not in ctx["contracts"]:
+            bad.append("договора «%s» нет в реестре" % f.get("contract"))
+        pm = _num(f.get("person_months"))
+        if pm is None or pm <= 0:
+            bad.append("нет человеко-месяцев")
+        if not pos_known(f.get("position")):
+            doubt.append("должности «%s» нет в справочнике" % f.get("position"))
+    elif entity == "поступление":
+        if low(f.get("contract")) not in ctx["contracts"]:
+            bad.append("договора «%s» нет в реестре" % f.get("contract"))
+        m = _num(f.get("month"))
+        if m is None or not 1 <= m <= 12:
+            bad.append("месяц %s вне 1–12" % f.get("month"))
+        a = _num(f.get("amount"))
+        if a is None or a <= 0:
+            bad.append("нет суммы")
+        y = _num(f.get("year"))
+        if y is not None and not 2000 <= y <= 2100:
+            doubt.append("год %s выглядит неверно" % f.get("year"))
+    elif entity == "надбавка 120":
+        if low(f.get("employee")) not in ctx["employees"]:
+            bad.append("сотрудника «%s» нет в реестре" % f.get("employee"))
+        if low(f.get("contract")) not in ctx["contracts"]:
+            bad.append("договора «%s» нет в реестре" % f.get("contract"))
+        r = _num(f.get("rate"))
+        if r is None or not 0 < r <= 1:
+            bad.append("доля надбавки %s вне 0–1" % f.get("rate"))
+    elif entity == "правило замещения":
+        for k in ("position", "replaced_by"):
+            for name in str(f.get(k) or "").split(","):
+                if name.strip() and not pos_known(name):
+                    doubt.append("должности «%s» нет в справочнике" % name.strip())
+    elif entity == "должность":
+        s = _num(f.get("salary_for_rate"))
+        if s is not None and not lo <= s <= hi:
+            bad.append("оклад %s вне обычных пределов (до %s)" % (_money(s), _money(hi)))
+        if not f.get("category"):
+            doubt.append("нет категории")
+    if not evidence:
+        doubt.append("не указано, откуда взято")
+    g = "сомнительно" if bad else "проверить" if doubt else "надежно"
+    return g, "; ".join(bad + doubt)
 
 
 def _ask_kind(db, case, doc):

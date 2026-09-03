@@ -192,7 +192,40 @@ def check_verdicts(db, by_name, only, cache):
                 failed += 1
             print("   %-10s %s" % (OK if ok else FAIL, text))
         print()
+    _calibration(rows, only)
     return total, failed
+
+
+def _calibration(rows, only):
+    """Сколько строк каждой оценки экономист принял и отклонил.
+
+    Оценка (intake.grade) обещает: «надежно» — можно принимать не глядя.
+    Приговоры это обещание проверяют. «Надежно», которое отклоняют, — знак,
+    что проверки пропускают ошибку; «сомнительно», которое всегда принимают,
+    — что они слишком строги. Это не случай стенда, а показание прибора:
+    в счет проверок не идет, но печатается каждый прогон.
+    """
+    calib = {}
+    for v in rows:
+        if only and only.lower() not in v.document_name.lower():
+            continue
+        c = calib.setdefault(v.grade or "без оценки", {"принято": 0, "отклонено": 0})
+        c[v.verdict] = c.get(v.verdict, 0) + 1
+    if not calib:
+        return
+    print("── калибровка оценок: принято / отклонено")
+    for g in ("надежно", "проверить", "сомнительно", "без оценки"):
+        if g not in calib:
+            continue
+        c = calib[g]
+        n = c["принято"] + c["отклонено"]
+        note = ""
+        if g == "надежно" and n and c["отклонено"] / n > 0.1:
+            note = "   внимание: надежных отклонено больше десятой части"
+        if g == "сомнительно" and n >= 10 and not c["отклонено"]:
+            note = "   внимание: сомнительные всегда принимают — проверки слишком строги"
+        print("   %-12s %d / %d%s" % (g, c["принято"], c["отклонено"], note))
+    print()
 
 
 def main_():

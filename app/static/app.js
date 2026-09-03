@@ -351,8 +351,8 @@ function diffCard(p) {
            '<td class="n up">' + (c.old ? (d > 0 ? "+" : "") + mo(d) : "новое") + "</td></tr>";
   }).join("");
   return '<div class="card"><div class="ch">' + head + "</div>" +
-         "<table><thead><tr><th>должность</th><th>величина</th><th>сейчас</th>" +
-         "<th>по документу</th><th>изменение</th></tr></thead><tbody>" + rows + "</tbody></table>" +
+         "<table><thead><tr><th>Должность</th><th>Величина</th><th>Сейчас</th>" +
+         "<th>По документу</th><th>Изменение</th></tr></thead><tbody>" + rows + "</tbody></table>" +
          '<div class="foot"><button class="primary" style="width:auto" data-act="applyref">' +
          "Записать в справочник</button>" +
          (p.unknown && p.unknown.length
@@ -1129,7 +1129,7 @@ function removePicked() {
    карточке документа: в реестре нужен статус, а не диагностика. */
 var STATUS = {
   "разобран": { text: "Обработан", cls: "ok" },
-  "ждет подтверждения": { text: "Требует подтверждения", cls: "ask" },
+  "ждет подтверждения": { text: "Ждет подтверждения", cls: "ask" },
   "не распознан": { text: "Данные не извлечены", cls: "warn" },
   "не прочитан": { text: "Файл не прочитан", cls: "bad" },
   "текст нечитаемый": { text: "Текст нечитаемый", cls: "bad" },
@@ -1275,24 +1275,46 @@ function openDocument(id) {
       d.proposals.forEach(function (p) {
         (byEntity[p.entity] = byEntity[p.entity] || []).push(p);
       });
+      // Оценка у каждой строки — куда смотреть в первую очередь. Сомнительные
+      // идут первыми и не отмечены: принять их можно только рукой.
+      var GR = { "сомнительно": 0, "проверить": 1, "надежно": 2 };
+      var gsum = { "надежно": 0, "проверить": 0, "сомнительно": 0 };
+      d.proposals.forEach(function (p) { if (p.grade in gsum) gsum[p.grade]++; });
+      var gline = ["надежно", "проверить", "сомнительно"].filter(function (g) {
+        return gsum[g];
+      }).map(function (g) {
+        return '<span class="gr g' + GR[g] + '">' + g + " " + gsum[g] + "</span>";
+      }).join("");
       prop = '<div class="grp ask"><h4>Ждет подтверждения</h4>' +
         '<p class="hint">Документ не похож ни на одну знакомую форму, поэтому ' +
         'прочитан как есть. В реестр и в расчет эти строки не попадут, пока ' +
-        'вы их не примете.</p>' +
+        'вы их не примете.' +
+        (gsum["сомнительно"] ? " Сомнительные строки не отмечены: у них не " +
+         "сошлось что-то с реестром или справочником." : "") + "</p>" +
+        (gline ? '<div class="gline">' + gline + "</div>" : "") +
         Object.keys(byEntity).map(function (ent) {
+          var rows = byEntity[ent].slice().sort(function (a, b) {
+            return (GR[a.grade] == null ? 2 : GR[a.grade]) -
+                   (GR[b.grade] == null ? 2 : GR[b.grade]);
+          });
           return '<div class="pgrp"><h5>' + esc(ent) + "</h5>" +
-            byEntity[ent].map(function (p) {
+            rows.map(function (p) {
+              var g = p.grade in GR ? p.grade : "надежно";
               return '<label class="prow"><input type="checkbox" data-prop="' +
-                p.id + '" checked><span class="pv">' +
+                p.id + '"' + (g === "сомнительно" ? "" : " checked") +
+                '><span class="pv">' +
                 esc(Object.keys(p.fields)
                       .filter(function (k) { return p.fields[k] != null && p.fields[k] !== ""; })
                       .map(function (k) { return p.fields[k]; }).join(" · ")) +
-                "</span>" +
-                (p.evidence ? '<span class="pw">' + esc(p.evidence) + "</span>" : "") +
+                '<span class="gr g' + GR[g] + '">' + g + "</span></span>" +
+                (p.reason || p.evidence
+                  ? '<span class="pw">' + esc(p.reason || "") +
+                    (p.reason && p.evidence ? " — " : "") + esc(p.evidence || "") + "</span>"
+                  : "") +
                 "</label>";
             }).join("") + "</div>";
         }).join("") +
-        '<div class="pacts"><button type="button" class="take">Принять отмеченные' +
+        '<div class="pacts"><button type="button" class="take">Принять выбранные' +
         '</button><button type="button" class="drop">Отклонить остальные</button>' +
         "</div></div>";
     }
@@ -1317,11 +1339,6 @@ function openDocument(id) {
       '<form class="dask"><input type="text" placeholder="Например: у Петрова оклад ' +
       '90 000, а не 60 000" autocomplete="off">' +
       '<button type="submit">Отправить</button></form></div>';
-
-    if (!got) {
-      got = '<div class="grp"><h4>Что дал</h4><div class="none">' +
-            esc(d.summary || "ничего не извлечено") + "</div></div>";
-    }
 
     back.querySelector(".panel").innerHTML =
       '<header class="dhead"><h3>' + esc(d.name) + "</h3>" +
@@ -1565,7 +1582,7 @@ function renderAgents() {
   // надписью «ничего не ждет» — та же реклама, что и схема со стрелками.
   var need = "";
   if (wait.length) {
-    need = '<div class="grp need"><h4>Требует вас<span class="c">' +
+    need = '<div class="grp need"><h4>Ждет вашего решения<span class="c">' +
       wait.length + "</span></h4>" +
       wait.map(function (w) {
         return '<div class="wrow" ' +

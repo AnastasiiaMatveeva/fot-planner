@@ -710,7 +710,8 @@ def one_document(doc_id: int):
                           .order_by(Message.id).all()][-20:],
             "proposals": [{"id": pr.id, "entity": pr.entity,
                            "fields": json.loads(pr.payload),
-                           "evidence": pr.evidence, "state": pr.state}
+                           "evidence": pr.evidence, "state": pr.state,
+                           "grade": pr.grade, "reason": pr.reason}
                           for pr in db.query(Proposal)
                           .filter_by(document_id=d.id, state="предложено")
                           .order_by(Proposal.id).all()],
@@ -798,7 +799,7 @@ async def decide_proposals(doc_id: int, request: Request):
                 # Приговор — случай для стенда: эта строка была неверной.
                 db.add(Verdict(document_name=doc.name, entity=pr.entity,
                                fields=pr.payload, verdict="отклонено",
-                               agent_version=version))
+                               agent_version=version, grade=pr.grade))
                 # И память агента: в следующий раз он увидит, что так неверно.
                 db.add(Correction(document_name=doc.name, document_kind=doc.kind,
                                   entity=pr.entity, wrong=pr.payload,
@@ -809,7 +810,7 @@ async def decide_proposals(doc_id: int, request: Request):
             f = json.loads(pr.payload)
             db.add(Verdict(document_name=doc.name, entity=pr.entity,
                            fields=pr.payload, verdict="принято",
-                           agent_version=version))
+                           agent_version=version, grade=pr.grade))
             if pr.entity == "сотрудник":
                 db.add(Employee(
                     code=str(f.get("code") or ""), fio=f.get("fio"),
