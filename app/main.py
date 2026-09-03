@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, UploadFile
@@ -244,8 +245,26 @@ def _process(case_id: int, doc_id: int):
         doc = db.get(Document, doc_id)
         if case and doc:
             intake.handle_document(db, case, doc)
+            _prerender_first_sheet(doc)
     finally:
         db.close()
+
+
+def _prerender_first_sheet(doc):
+    """Нарисовать первый лист книги заранее, пока идет разбор документа.
+
+    Открыть книгу РКМ — пять секунд, и на них приходится почти все ожидание
+    первого показа. Здесь эти секунды никому не заметны: экономист еще не
+    открыл карточку.
+    """
+    if os.path.splitext(doc.path)[1].lower() not in WORKBOOK_TYPES:
+        return
+    try:
+        names = _workbook(doc.path).sheetnames
+        if names:
+            _sheet_html(doc, names[0])
+    except Exception:  # noqa: BLE001 — предпросмотр не должен ронять разбор
+        pass
 
 
 def _cyrillic(text):
@@ -414,6 +433,9 @@ def one_document(doc_id: int):
         ctr = db.query(Contract).filter_by(document_id=d.id).order_by(Contract.id).all()
         sub = (db.query(Substitution).filter_by(document_id=d.id)
                .order_by(Substitution.id).all())
+        if os.path.splitext(d.path)[1].lower() in WORKBOOK_TYPES and os.path.exists(d.path):
+            threading.Thread(target=_warm_workbook, args=(d.path,),
+                             daemon=True).start()
         return {
             "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
             "by": d.parsed_by, "summary": d.summary, "size": d.size,
@@ -606,6 +628,60 @@ PREVIEW_DIR = os.path.join(os.path.dirname(UPLOAD_DIR), "previews")
 os.makedirs(PREVIEW_DIR, exist_ok=True)
 
 
+#: Разобранные книги. Открыть книгу РКМ — 5,4 секунды, а нарисовать из нее
+#: лист — три десятых: конвертер открывал книгу заново на каждый лист, и
+#: переключение в карточке стоило пяти секунд на ровном месте. Держим
+#: последние две книги: экономист смотрит один документ, изредка два.
+_BOOKS: "dict[str, tuple]" = {}
+_BOOKS_LOCK = threading.Lock()
+_BOOK_LOCKS: "dict[str, threading.Lock]" = {}
+_BOOKS_KEEP = 2
+
+
+def _workbook(path):
+    """Разобранная книга из памяти, если файл с тех пор не менялся.
+
+    Замок на каждый файл свой: карточка греет книгу заранее, а рамка
+    предпросмотра просит лист почти сразу за ней. Без замка обе разбирали бы
+    одну книгу параллельно — пять секунд работы дважды.
+    """
+    import openpyxl
+
+    stamp = os.path.getmtime(path)
+    with _BOOKS_LOCK:
+        got = _BOOKS.get(path)
+        if got and got[0] == stamp:
+            return got[1]
+        lock = _BOOK_LOCKS.setdefault(path, threading.Lock())
+
+    with lock:
+        with _BOOKS_LOCK:
+            got = _BOOKS.get(path)
+            if got and got[0] == stamp:
+                return got[1]
+        wb = openpyxl.load_workbook(path, data_only=True)
+        with _BOOKS_LOCK:
+            _BOOKS[path] = (stamp, wb)
+            while len(_BOOKS) > _BOOKS_KEEP:
+                gone = next(iter(_BOOKS))
+                _BOOKS.pop(gone)
+                _BOOK_LOCKS.pop(gone, None)
+        return wb
+
+
+def _warm_workbook(path):
+    """Разобрать книгу заранее, пока экономист читает свойства документа.
+
+    Первый лист стоит пяти секунд — столько занимает разбор книги. Если начать
+    его при открытии карточки, к моменту, когда рамка попросит лист, книга уже
+    готова, и ждать нечего.
+    """
+    try:
+        _workbook(path)
+    except Exception:  # noqa: BLE001 — грелка не должна ронять запрос
+        pass
+
+
 def _sheet_html(doc, sheet):
     """Лист книги как HTML — через конвертер, а не своей разметкой.
 
@@ -613,24 +689,25 @@ def _sheet_html(doc, sheet):
     десятку колонок, и таблица, собранная по клеткам, разваливается. Конвертер
     сохраняет объединения, ширины колонок и начертание.
 
-    Результат кладем рядом с файлом: разбор листа занимает секунды, а карточку
+    Результат кладем рядом с файлом: у книги РКМ тридцать листов, и карточку
     открывают не по одному разу. Файл документа не меняется — при повторной
     загрузке заводится новая запись со своим номером, — поэтому кэш можно не
     сбрасывать.
     """
     import hashlib
-    import io
 
-    from xlsx2html import xlsx2html
+    from xlsx2html.core import get_sheet, render_table, worksheet_to_data
 
     key = hashlib.md5(("%d|%s" % (doc.id, sheet or "")).encode("utf-8")).hexdigest()
     cached = os.path.join(PREVIEW_DIR, key + ".html")
     if os.path.exists(cached):
         with open(cached, encoding="utf-8") as f:
             return f.read()
-    out = io.StringIO()
-    xlsx2html(doc.path, out, sheet=sheet if sheet else 0)
-    html = out.getvalue()
+
+    wb = _workbook(doc.path)
+    ws = get_sheet(wb, sheet if sheet else 0)
+    data = worksheet_to_data(ws, locale="ru", default_cell_border="none")
+    html = render_table(data, lambda a, b: True, lambda a, b: True)
     with open(cached, "w", encoding="utf-8") as f:
         f.write(html)
     return html
