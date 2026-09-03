@@ -2395,7 +2395,10 @@ $("tabs").addEventListener("click", function (e) {
 $("newcase").addEventListener("click", newCase);
 
 $("files").addEventListener("change", function () {
-  var list = this.files;
+  // Список файлов у поля живой: как только поле очищено, он пуст. Поэтому
+  // сначала копия, потом очистка — иначе отправлять оказывалось нечего, и
+  // выбор файла заканчивался ничем.
+  var list = Array.prototype.slice.call(this.files);
   this.value = "";
   sendFiles(list);
 });
@@ -2406,7 +2409,9 @@ $("files").addEventListener("change", function () {
    где человек и так находится: кнопкой в шапке реестра или перетаскиванием
    файлов в окно. Отправка одна на оба места. */
 function sendFiles(list) {
-  if (!list || !list.length) return Promise.resolve();
+  // Копия на входе: у поля выбора список живой и обнуляется вместе с полем.
+  list = list ? Array.prototype.slice.call(list) : [];
+  if (!list.length) return Promise.resolve();
   if (!caseId) {
     // Документ общий для организации, но разбирает его агент в рамках плана:
     // без плана некуда писать ленту работ. Заводим и продолжаем.
@@ -2471,7 +2476,7 @@ function armDropZone() {
   // Выбор файла кнопкой в шапке реестра.
   zone.addEventListener("change", function (e) {
     if (!e.target.matches('input[type="file"]')) return;
-    var list = e.target.files;
+    var list = Array.prototype.slice.call(e.target.files);
     e.target.value = "";
     sendFiles(list);
   });
