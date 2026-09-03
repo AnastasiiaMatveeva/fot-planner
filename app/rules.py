@@ -730,14 +730,15 @@ def payroll(input_path, result_path):
     order = sorted({p["contract"] for p in plan})
 
     people = []
-    total_switch = total_mix = total_extra = total_opened = 0
+    total_switch = total_mix = total_extra = total_opened = total_struct = 0
     for e in inp["employees"]:
         rows = [p for p in plan if p["emp"] == e["code"]]
         if not rows:
             continue
         base = (lim.get(norm(e["position"])) or {}).get("оклад")
-        months, prev_ctr, prev_mix = [], None, None
-        switch = mix_change = extra_months = opened = 0
+        months, prev_ctr, prev_mix, prev_oklad, prev_rate = [], None, None, None, None
+        switch = mix_change = extra_months = opened = struct_change = 0
+        rates, oklad_share = [], []
         for m in range(1, 13):
             mr = [p for p in rows if p["month"] == m]
             if not mr:
@@ -779,22 +780,41 @@ def payroll(input_path, result_path):
                 change.append("состав: %s → %s" % (", ".join(prev_mix),
                                                    ", ".join(mix)))
                 mix_change += 1
+            # Набор видов может не меняться, а доли — меняться: открылась
+            # половина ставки, оклад вырос, надбавка ужалась. Экономисту это
+            # такая же смена структуры, и молчать о ней нельзя.
+            oklad = _sum(mr, {"оклад"})
+            if prev_oklad is not None and abs(oklad - prev_oklad) > EPS:
+                change.append("оклад %s → %s ₽ (ставка %s → %s)"
+                              % (_mo(prev_oklad), _mo(oklad),
+                                 _mo(prev_rate), _mo(rate)))
+            if change:
+                struct_change += 1
             if rate > (e["rate"] or 1.0) + 0.01:
                 extra_months += 1
-            months.append({"м": m, "всего": round(_sum(mr), 2), "ставка": round(rate, 2),
+            total_m = _sum(mr)
+            rates.append(rate)
+            if total_m:
+                oklad_share.append(oklad / total_m)
+            months.append({"м": m, "всего": round(total_m, 2), "ставка": round(rate, 2),
                            "договоры": by_ctr, "виды": mix, "изменилось": change})
-            prev_ctr, prev_mix = salary_ctr, mix
+            prev_ctr, prev_mix, prev_oklad, prev_rate = salary_ctr, mix, oklad, rate
         year = _sum(rows)
         total_switch += switch
         total_mix += mix_change
         total_extra += extra_months
         total_opened += opened
+        total_struct += struct_change
         people.append({
             "код": e["code"], "фио": e["fio"], "должность": e["position"],
             "подразделение": e["department"], "ставка": e["rate"],
             "зарплата": e["salary"], "за год": round(year, 2), "месяцы": months,
             "смен договора оклада": switch, "смен состава выплат": mix_change,
-            "открыто ставок": opened,
+            "открыто ставок": opened, "месяцев со сменой структуры": struct_change,
+            "ставка макс": round(max(rates), 2) if rates else None,
+            "доля оклада": ({"мин": round(min(oklad_share), 4),
+                             "макс": round(max(oklad_share), 4)}
+                            if oklad_share else None),
             "месяцев с совместительством": extra_months,
             "договоры": sorted({p["contract"] for p in rows}),
             "доли видов": [{"вид": k, "доля": round(_sum(rows, {k}) / year, 4)}
@@ -808,6 +828,7 @@ def payroll(input_path, result_path):
                   "смен договора оклада": total_switch,
                   "открыто ставок": total_opened,
                   "смен состава выплат": total_mix,
+                  "месяцев со сменой структуры": total_struct,
                   "месяцев с совместительством": total_extra,
                   "за год": round(sum(p["за год"] for p in people), 2)},
         "люди": people,
