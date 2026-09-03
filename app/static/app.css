@@ -362,7 +362,6 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 
 /* ── верхняя полоса: режим и переключатель колонки ─────────── */
 .brandbar .spacer{flex:1}
-.brandbar .mode{font-size:12.5px;color:var(--ink3);white-space:nowrap}
 .iconbtn{width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--line);
          background:var(--s0);color:var(--ink3);border-radius:var(--r2);cursor:pointer}
 .iconbtn:hover{border-color:var(--acc);color:var(--acc)}

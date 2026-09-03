@@ -574,16 +574,8 @@ function renderTabs() {
   });
 }
 
-function renderMode() {
-  var m = state.model;
-  $("mode").textContent = m.provider
-    ? "модель " + m.name + ", " + m.label
-    : "без модели: разбор по заголовкам";
-}
-
 function render() {
   if (!state) return;
-  safely("режим", renderMode);
   safely("вкладки", renderTabs);
   safely("заголовок плана", renderStage);
   if (view === "feed") safely("лента", renderFeed);
