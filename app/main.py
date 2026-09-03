@@ -1527,6 +1527,37 @@ def case_data(case_id: int):
         db.close()
 
 
+#: Разбор правил по прогону: чтение двух книг занимает секунды, а ответ
+#: не меняется, пока прогон не пересчитан.
+_RULES_CACHE: dict = {}
+
+
+@app.get("/api/case/{case_id}/run/{run_id}/rules")
+def run_rules(case_id: int, run_id: int):
+    """Ограничения работы экономиста: соблюдены ли они в этом плане.
+
+    Считаются независимо от решателя — по входному файлу и по плану выплат.
+    Решатель говорит «OPTIMAL» и перечисляет свои показатели; экономисту нужно
+    другое: выполняются ли правила, по которым он живет, и если нет — где.
+    """
+    db = session()
+    try:
+        run = db.get(Run, run_id)
+        if run is None or run.case_id != case_id:
+            raise HTTPException(404, "прогон не найден")
+        src, out = run.input_path, run.result_path
+    finally:
+        db.close()
+    if not src or not out or not os.path.exists(src) or not os.path.exists(out):
+        raise HTTPException(404, "файлы прогона не сохранены")
+    key = (run_id, os.path.getmtime(out))
+    if key not in _RULES_CACHE:
+        import rules as rules_mod
+        _RULES_CACHE.clear()
+        _RULES_CACHE[key] = rules_mod.check(src, out)
+    return {"правила": _RULES_CACHE[key]}
+
+
 @app.get("/api/case/{case_id}/run/{run_id}/result")
 def run_result(case_id: int, run_id: int):
     """Результат прогона: план, освоение, сводка, ограничения.

@@ -697,7 +697,7 @@ function agentCard(key) {
  * Входные данные приходят из базы, результат — из файла, который сохранил
  * решатель: для ГОЗ важно показывать ровно то, на чем построен план.
  */
-var view = "feed", vdata = null, vresult = null, vrun = null;
+var view = "feed", vdata = null, vresult = null, vrun = null, vrules = null;
 
 var MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
               "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -737,7 +737,74 @@ function loadResult() {
     d.status = pick.status;
     d.analysis = (pick.summary && pick.summary["анализ"]) || [];
     vresult = d; vrun = pick.id;
+    // Правила считаются по тем же файлам, но отдельно: решатель о них не
+    // отчитывается, это проверка его работы, а не его слова.
+    return api("/api/case/" + caseId + "/run/" + pick.id + "/rules")
+      .then(function (r) { vrules = r["правила"] || []; })
+      .catch(function () { vrules = null; });
   });
+}
+
+//: Состояние правила: как называется, каким цветом, в каком порядке.
+var RULE_STATE = {
+  "нарушено": { cls: "bad", n: 0 },
+  "внимание": { cls: "warn", n: 1 },
+  "соблюдено": { cls: "ok", n: 2 },
+  "не применялось": { cls: "off", n: 3 },
+};
+
+/* Ограничения работы экономиста: по каждому — соблюдено, нарушено или не
+   применялось в этом плане, и если нарушено, то где именно. Нарушения видны
+   сразу, без раскрытия: ради них список и открывают. Внутри раздела нарушения
+   идут первыми, дальше требующее внимания, соблюденное и неприменимое. */
+function rulesView() {
+  if (!vrules) return "";
+  if (!vrules.length) {
+    return '<div class="grp"><h4>Ограничения</h4>' +
+      '<div class="none">Правила не проверены: файлы прогона не сохранены</div></div>';
+  }
+  var bad = vrules.filter(function (r) { return r["состояние"] === "нарушено"; }).length;
+  var warn = vrules.filter(function (r) { return r["состояние"] === "внимание"; }).length;
+  var ok = vrules.filter(function (r) { return r["состояние"] === "соблюдено"; }).length;
+  var head = bad
+    ? "Нарушено правил: " + bad + " из " + vrules.length
+    : "Все проверенные правила соблюдены" + (warn ? ", есть что посмотреть" : "");
+  var order = [];
+  vrules.forEach(function (r) {
+    if (order.indexOf(r["раздел"]) < 0) order.push(r["раздел"]);
+  });
+  return '<div class="grp"><h4>Ограничения<span class="c ' +
+    (bad ? "bad" : "ok") + '">' + (bad ? bad : ok) + "</span></h4>" +
+    '<div class="vh">' + esc(head) + ". Проверено по плану выплат и входным " +
+    "данным, независимо от решателя.</div>" +
+    order.map(function (section) {
+      var rows = vrules.filter(function (r) { return r["раздел"] === section; })
+        .sort(function (a, b) {
+          return (RULE_STATE[a["состояние"]] || { n: 4 }).n -
+                 (RULE_STATE[b["состояние"]] || { n: 4 }).n;
+        });
+      return '<div class="rsec"><div class="rsh">' + esc(section) + "</div>" +
+        rows.map(ruleRow).join("") + "</div>";
+    }).join("") + "</div>";
+}
+
+function ruleRow(r) {
+  var st = RULE_STATE[r["состояние"]] || { cls: "off" };
+  var more = r["всего нарушений"] - (r["нарушения"] || []).length;
+  return '<div class="rule ' + st.cls + '">' +
+    '<span class="cdot2"></span>' +
+    '<div class="rn">' + esc(r["правило"]) + "</div>" +
+    '<div class="rs">' + esc(r["состояние"]) + "</div>" +
+    '<div class="rm">' + esc(r["смысл"]) + "</div>" +
+    '<div class="rf">' + esc(r["факт"] || "") +
+      (r["где"] ? '<span class="rw">где смотреть: ' + esc(r["где"]) + "</span>" : "") +
+    "</div>" +
+    ((r["нарушения"] || []).length
+      ? '<ul class="rb">' + r["нарушения"].map(function (b) {
+          return "<li>" + esc(b) + "</li>";
+        }).join("") + (more > 0 ? "<li>и еще " + more + "</li>" : "") + "</ul>"
+      : "") +
+    "</div>";
 }
 
 /* Неудачный расчет: плана нет, есть причины и проверки. Плашка одна на все
@@ -1048,9 +1115,13 @@ function renderView() {
   }
 
   if (view === "lim") {
-    // Лист «Итог расчета» решателя — это готовый чеклист ограничений: у каждого
-    // показателя есть статус. Показываем его как чеклист, а не как таблицу
-    // из четырех граф: точка цветом, показатель, значение, комментарий.
+    // Ограничения — это правила работы экономиста, а не показатели решателя.
+    // «OPTIMAL за 2,8 с» не говорит, соблюдено ли, что человек получает всю
+    // зарплату, что деньги не потрачены раньше поступления, что средняя по
+    // ГОЗ в пределах базовой. Поэтому первым идет список правил, и каждое
+    // проверено независимо — по входному файлу и плану выплат. Показатели
+    // решателя остались ниже, свернутыми: они нужны, когда правило нарушено
+    // и надо понять, что делал решатель.
     var sum = vresult.summary || [], warn = vresult.warnings || [];
     var STS = { "Выполнено": "ok", "ОК": "ok", "Предупреждение": "warn",
                 "Ошибка": "bad", "Нарушено": "bad" };
@@ -1092,7 +1163,9 @@ function renderView() {
       }).join("");
     if (!problems) problems = '<div class="grp"><h4>Проблемы</h4>' +
       '<div class="none">Ошибок и предупреждений нет</div></div>';
-    el.innerHTML = failBanner() + checks + problems;
+    el.innerHTML = failBanner() + rulesView() +
+      '<details class="fold2"><summary>Показатели расчета и сообщения решателя' +
+      "</summary>" + checks + problems + "</details>";
   }
 }
 
