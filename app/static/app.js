@@ -587,11 +587,44 @@ function applyRef(btn) {
   }).then(tick);
 }
 
+/* Перед расчетом — намерение: что уйдет в решатель и что сервис примет за
+   экономиста. Раньше кнопка запускала расчет молча, а о допущениях
+   говорилось после — в ленте, когда решение уже искали на них. */
 function solve() {
   $("solve").disabled = true;
-  api("/api/case/" + caseId + "/solve", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
-  }).then(tick);
+  api("/api/case/" + caseId + "/preflight").then(function (pf) {
+    var back = document.createElement("div");
+    back.className = "modal";
+    var rows = pf["строки"].map(function (kv) {
+      return '<div class="pfrow"><span>' + esc(kv[0]) + "</span><b>" + kv[1] + "</b></div>";
+    }).join("");
+    var warn = (pf["допущения"] || []).map(function (w) {
+      return '<div class="pfwarn">' + esc(w) + "</div>";
+    }).join("");
+    back.innerHTML =
+      '<div class="box wide" role="dialog" aria-modal="true">' +
+        "<h4>" + (pf["стоит"] ? "Считать не на чем" : "Что уйдет в расчет") + "</h4>" +
+        '<div class="pfrows">' + rows + "</div>" +
+        (warn ? '<div class="pfh">Допущения сервиса — проверьте</div>' + warn : "") +
+        (pf["стоит"]
+          ? '<p>Нет сотрудников или договоров. Загрузите документы в реестр.</p>' : "") +
+        '<div class="btns">' +
+          '<button type="button" class="no">Отмена</button>' +
+          (pf["стоит"] ? "" :
+           '<button type="button" class="yes">Запустить расчет</button>') +
+        "</div></div>";
+    document.body.appendChild(back);
+    function close() { back.remove(); $("solve").disabled = false; }
+    back.querySelector(".no").onclick = close;
+    back.onclick = function (e) { if (e.target === back) close(); };
+    var yes = back.querySelector(".yes");
+    if (yes) yes.onclick = function () {
+      back.remove();
+      api("/api/case/" + caseId + "/solve", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+      }).then(tick);
+    };
+  }).catch(function () { $("solve").disabled = false; });
 }
 
 
@@ -870,76 +903,131 @@ function renderView() {
   }
 
   if (view === "plan") {
-    var byEmp = {}, names = {};
+    // Строка на человека, месяцы графами — так план и читают: кому сколько в
+    // каком месяце. Раскладка по договорам и видам выплат — по щелчку на
+    // строку: она нужна, когда что-то не сошлось, а не всегда.
+    var byEmp = {}, info = {};
     vresult.plan.forEach(function (p) { (byEmp[p.emp] = byEmp[p.emp] || []).push(p); });
-    vresult.employees.forEach(function (x) { names[x.code] = x.fio || x.code; });
+    vresult.employees.forEach(function (x) { info[x.code] = x; });
     var total = vresult.plan.reduce(function (a, p) { return a + p.sum; }, 0);
-    el.innerHTML = '<div class="vh">План выплат, прогон № ' + vrun + ": <b>" +
-      vresult.plan.length + "</b> " +
-      px(vresult.plan.length, "строка", "строки", "строк") +
-      ", всего <b>" + mo(total) + " ₽</b>.</div>" +
-      Object.keys(byEmp).map(function (code) {
-        var rows = byEmp[code].slice().sort(function (a, b) { return a.m - b.m; });
-        var sum = rows.reduce(function (a, p) { return a + p.sum; }, 0);
-        return '<div class="grp"><h4>' + esc(names[code] || code) + " · " + mo(sum) + " ₽</h4>" +
-               table(["месяц", "договор", "вид", { t: "сумма, ₽" }],
-                 rows.map(function (p) {
-                   return [monthName(p.m), p.ctr, KINDS[p.kind] || p.kind,
-                           { v: mo(p.sum), cls: "n" }];
-                 })) + "</div>";
-      }).join("");
+    var peak = 0;
+    var codes = Object.keys(byEmp).sort();
+    var months = {};
+    codes.forEach(function (code) {
+      var m = months[code] = [];
+      for (var i = 0; i < 12; i++) m.push(0);
+      byEmp[code].forEach(function (p) { if (p.m >= 0) m[p.m] += p.sum; });
+      m.forEach(function (v) { if (v > peak) peak = v; });
+    });
+    el.innerHTML = '<div class="vh">План выплат, прогон № ' + vrun + ": " +
+      codes.length + " " + px(codes.length, "человек", "человека", "человек") +
+      ", всего <b>" + mo(total) + " ₽</b>. Щелчок по строке — раскладка по " +
+      "договорам и видам выплат.</div>" +
+      table([{ v: "Сотрудник", cls: "key" }, "Должность"].concat(
+              MONTHS.map(function (m) { return { t: m }; }), [{ t: "всего, ₽" }]),
+        codes.map(function (code) {
+          var e = info[code] || {}, m = months[code];
+          var sum = m.reduce(function (a, v) { return a + v; }, 0);
+          return [{ v: '<span class="dname" data-emp="' + esc(code) + '">' +
+                       esc(e.fio || code) + "</span>", cls: "key" },
+                  e.pos || null].concat(
+            m.map(function (v) {
+              if (!v) return { v: null, cls: "n" };
+              var share = peak ? Math.max(4, Math.round((v / peak) * 100)) : 0;
+              return { v: '<span class="bar" style="--f:' + share + '%">' + mo(v) +
+                          "</span>", cls: "n" };
+            }), [{ v: mo(sum), cls: "n tot" }]);
+        }), "") +
+      '<div id="plandetail"></div>';
     return;
   }
 
   if (view === "cash") {
-    var codes = Object.keys(vresult.cash || {});
-    el.innerHTML = '<div class="vh">Освоение по договорам: поступления, выплаты ' +
-      "и остаток кассы по месяцам. Остаток не может уходить в минус и переносится " +
-      "только вперед.</div>" +
-      codes.map(function (code) {
-        var c = vresult.cash[code] || {};
-        var keys = Object.keys(c);                 // «Поступление», «Выплаты», «Остаток»
-        var len = keys.length ? (c[keys[0]] || []).length : 0;
-        var rows = [];
-        for (var i = 0; i < len; i++) {
-          var row = [monthName(i)];
-          keys.forEach(function (k) { row.push({ v: mo((c[k] || [])[i] || 0), cls: "n" }); });
-          rows.push(row);
-        }
-        return '<div class="grp"><h4>' + esc(code) + "</h4>" +
-               table(["месяц"].concat(keys.map(function (k) { return { t: k + ", ₽" }; })),
-                     rows) + "</div>";
-      }).join("");
+    // Одна таблица: договор × показатель × месяц. Полоса под числом
+    // показывает профиль года; остаток, ушедший в минус, подсвечен — это
+    // нарушение, которого решатель не допускает, и если оно есть, его надо
+    // увидеть сразу.
+    var ccodes = Object.keys(vresult.cash || {}).sort();
+    var order = ["Поступление", "Выплаты", "Остаток на конец"];
+    var cpeak = 0;
+    ccodes.forEach(function (code) {
+      order.forEach(function (k) {
+        ((vresult.cash[code] || {})[k] || []).forEach(function (v) {
+          if (Math.abs(v) > cpeak) cpeak = Math.abs(v);
+        });
+      });
+    });
+    var crows = [];
+    ccodes.forEach(function (code) {
+      order.forEach(function (k, ki) {
+        var arr = (vresult.cash[code] || {})[k];
+        if (!arr) return;
+        var sum = arr.reduce(function (a, v) { return a + (v || 0); }, 0);
+        crows.push([{ v: ki ? "" : esc(code), cls: "key" }, k].concat(
+          arr.map(function (v) {
+            if (!v) return { v: null, cls: "n" };
+            var share = cpeak ? Math.max(4, Math.round((Math.abs(v) / cpeak) * 100)) : 0;
+            return { v: '<span class="bar' + (v < 0 ? " neg" : "") +
+                        '" style="--f:' + share + '%">' + mo(v) + "</span>", cls: "n" };
+          }),
+          [{ v: k === "Остаток на конец" ? null : mo(sum), cls: "n tot" }]));
+      });
+    });
+    el.innerHTML = '<div class="vh">Освоение по договорам: поступления, выплаты и ' +
+      "остаток кассы по месяцам. Остаток переносится только вперед и не может " +
+      "уходить в минус.</div>" +
+      table([{ v: "Договор", cls: "key" }, "Показатель"].concat(
+              MONTHS.map(function (m) { return { t: m }; }), [{ t: "за год, ₽" }]),
+            crows, "");
     return;
   }
 
   if (view === "lim") {
-    var lim = vresult.limits || [], warn = vresult.warnings || [], sum = vresult.summary || [];
-    el.innerHTML =
-      '<div class="grp"><h4>Итоги расчета</h4>' +
-      table(["показатель", "значение"],
-        sum.map(function (s) {
-          if (!Array.isArray(s)) return [String(s), ""];
-          var v = s.slice(1).filter(function (x) { return x != null && x !== ""; });
-          // Крупные суммы читаются только с разделителями разрядов.
-          return [String(s[0]), v.map(function (x) {
-            return (typeof x === "number" && Math.abs(x) >= 10000) ? mo(x) : String(x);
-          }).join(" · ")];
-        })) + "</div>" +
-      '<div class="grp"><h4>Связывающие ограничения</h4>' +
-      (lim.length
-        ? table(["ограничение", "где", "значение"],
-            lim.map(function (l) {
-              return Array.isArray(l) ? l.map(String) : [String(l), "", ""];
-            }))
-        : '<div class="none">Связывающих ограничений нет</div>') +
-      "</div>" +
-      '<div class="grp"><h4>Предупреждения</h4>' +
-      (warn.length
-        ? table(["сообщение"], warn.map(function (w) {
-            return [Array.isArray(w) ? w.join(" · ") : String(w)];
-          }))
-        : '<div class="none">Предупреждений нет</div>') + "</div>";
+    // Лист «Итог расчета» решателя — это готовый чеклист ограничений: у каждого
+    // показателя есть статус. Показываем его как чеклист, а не как таблицу
+    // из четырех граф: точка цветом, показатель, значение, комментарий.
+    var sum = vresult.summary || [], warn = vresult.warnings || [];
+    var STS = { "Выполнено": "ok", "ОК": "ok", "Предупреждение": "warn",
+                "Ошибка": "bad", "Нарушено": "bad" };
+    var checks = '<div class="grp"><h4>Ограничения</h4><div class="checks">' +
+      sum.map(function (s) {
+        if (!Array.isArray(s)) return "";
+        var name = s[0], value = s[1], status = s[2], note = s[3];
+        var cls = STS[String(status || "").trim()] || "off";
+        var shown = (typeof value === "number" && Math.abs(value) >= 10000) ? mo(value)
+                    : (value == null ? "" : String(value));
+        return '<div class="check ' + cls + '"><span class="cdot2"></span>' +
+          '<span class="cn">' + esc(name) + "</span>" +
+          '<span class="cv">' + esc(shown) + "</span>" +
+          (status ? '<span class="cs">' + esc(status) + "</span>" : "") +
+          (note ? '<div class="cnote">' + esc(note) + "</div>" : "") + "</div>";
+      }).join("") + "</div></div>";
+
+    // Проблемы — ошибки первыми. У каждой — где смотреть и что сделать: это
+    // и есть самое ценное в отчете решателя, а раньше склеивалось в строку.
+    var groups = { "Ошибка": [], "Предупреждение": [] };
+    warn.forEach(function (w) {
+      if (!Array.isArray(w)) return;
+      (groups[w[0]] || (groups[w[0]] = [])).push(w);
+    });
+    var problems = Object.keys(groups).filter(function (k) { return groups[k].length; })
+      .map(function (level) {
+        return '<div class="grp"><h4>' + esc(level) + '<span class="c">' +
+          groups[level].length + "</span></h4>" +
+          groups[level].map(function (w) {
+            var where = [w[1], w[2], w[3]].filter(function (x) {
+              return x != null && x !== "" && x !== "—";
+            }).map(String).join(" · ");
+            return '<div class="prob ' + (level === "Ошибка" ? "bad" : "warn") + '">' +
+              '<div class="pd">' + esc(w[4] || "") + "</div>" +
+              (where ? '<div class="pw">' + esc(where) +
+                       (w[5] ? " · " + esc(String(w[5])) : "") + "</div>" : "") +
+              (w[6] ? '<div class="pr">' + esc(w[6]) + "</div>" : "") + "</div>";
+          }).join("") + "</div>";
+      }).join("");
+    if (!problems) problems = '<div class="grp"><h4>Проблемы</h4>' +
+      '<div class="none">Ошибок и предупреждений нет</div></div>';
+    el.innerHTML = checks + problems;
   }
 }
 
@@ -1987,6 +2075,27 @@ $("agentview").addEventListener("click", function (e) {
   }
   w = e.target.closest("[data-case]");
   if (w) open(+w.getAttribute("data-case"));
+});
+
+$("view").addEventListener("click", function (e) {
+  var who = e.target.closest("[data-emp]");
+  if (!who || !vresult) return;
+  var code = who.getAttribute("data-emp");
+  var rows = vresult.plan.filter(function (p) { return p.emp === code; })
+    .sort(function (a, b) { return a.m - b.m || (a.ctr > b.ctr ? 1 : -1); });
+  var box = $("plandetail");
+  if (!box) return;
+  if (box.getAttribute("data-for") === code) {
+    box.innerHTML = ""; box.removeAttribute("data-for"); return;
+  }
+  box.setAttribute("data-for", code);
+  box.innerHTML = '<div class="grp"><h4>' + esc(who.textContent) +
+    " — по договорам и видам выплат</h4>" +
+    table(["Месяц", "Договор", "Вид выплаты", { t: "сумма, ₽" }],
+      rows.map(function (p) {
+        return [monthName(p.m), p.ctr, KINDS[p.kind] || p.kind, { v: mo(p.sum), cls: "n" }];
+      }), "") + "</div>";
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
 
 $("regview").addEventListener("keydown", function (e) {

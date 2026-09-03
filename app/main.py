@@ -393,21 +393,10 @@ def _progress(db, case):
 
     # 3. Данные для расчета — тот же сборщик, что перед расчетом, только
     # в никуда: его предупреждения и есть список допущений.
-    data = _registry_data(db, case)
-    warn = []
-    try:
-        tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
-        tmp.close()
-        build_input.build(reference.TEMPLATE, tmp.name, data, warn)
-        os.remove(tmp.name)
-    except Exception as e:  # noqa: BLE001 — сборка не должна ронять сводку
-        warn.append("Сборка входного файла не удалась: %s" % str(e)[:200])
-    counts = [("сотрудников", len(data["employees"])), ("договоров", len(data["contracts"])),
-              ("поступлений", len(data["inflows"])), ("строк трудоемкости", len(data["labor"])),
-              ("надбавок 120", len(data["secret"])), ("правил замещения", len(data["substitutions"]))]
+    pf = _preflight(db, case)
+    warn, counts, blocked = pf["допущения"], pf["строки"], pf["стоит"]
     rows = [{"текст": "%s: %d" % (k, v)} for k, v in counts]
     rows += [{"текст": w, "внимание": True} for w in warn]
-    blocked = not data["employees"] or not data["contracts"]
     stages.append({
         "имя": "Данные для расчета",
         "состояние": "стоит" if blocked else ("внимание" if warn else "готово"),
@@ -462,6 +451,46 @@ def _progress(db, case):
             "этапы": stages,
             "мешает": blocker["итог"] if blocker else None,
             "мешает_этап": blocker["имя"] if blocker else None}
+
+
+def _preflight(db, case):
+    """Что уйдет в расчет и какие допущения сервис примет за экономиста.
+
+    Считается тем же сборщиком, что и перед запуском, только в никуда. Одно и
+    то же показывается на этапе «данные для расчета» и в окне перед кнопкой
+    «Запустить»: для необратимого и денежного действия показ намерения — не
+    любезность, а обязательное условие.
+    """
+    import tempfile
+
+    data = _registry_data(db, case)
+    warn = []
+    try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        tmp.close()
+        build_input.build(reference.TEMPLATE, tmp.name, data, warn)
+        os.remove(tmp.name)
+    except Exception as e:  # noqa: BLE001 — сборка не должна ронять сводку
+        warn.append("Сборка входного файла не удалась: %s" % str(e)[:200])
+    counts = [("сотрудников", len(data["employees"])), ("договоров", len(data["contracts"])),
+              ("поступлений", len(data["inflows"])), ("строк трудоемкости", len(data["labor"])),
+              ("надбавок 120", len(data["secret"])),
+              ("правил замещения", len(data["substitutions"]))]
+    return {"строки": counts, "допущения": warn,
+            "стоит": not data["employees"] or not data["contracts"],
+            "год": case.year}
+
+
+@app.get("/api/case/{case_id}/preflight")
+def preflight(case_id: int):
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        return _preflight(db, case)
+    finally:
+        db.close()
 
 
 def _px(n, one, few, many):

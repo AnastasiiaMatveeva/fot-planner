@@ -814,3 +814,46 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .fold.open .fh::before{transform:rotate(90deg)}
 .fold .fh:hover{color:var(--ink)}
 .fold > .grp{margin-top:10px}
+
+
+/* ── результат расчета ─────────────────────────────────────── */
+/* Чеклист ограничений: точка цветом, показатель, значение, статус. Статус
+   решателя виден до чтения цифр. */
+.checks{display:flex;flex-direction:column;gap:6px}
+.check{display:grid;grid-template-columns:10px 1fr auto auto;gap:6px 12px;align-items:center;
+       padding:9px 13px;border:1px solid var(--line2);border-radius:var(--r2);
+       background:var(--s0);font-size:13px}
+.check .cdot2{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.check.ok .cdot2{background:var(--ok)}
+.check.warn .cdot2{background:var(--warn)}
+.check.bad .cdot2{background:var(--bad)}
+.check .cn{color:var(--ink)}
+.check .cv{color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.check .cs{font-size:11.5px;color:var(--ink3);white-space:nowrap}
+.check.bad .cs{color:var(--bad)}
+.check.warn .cs{color:var(--warn)}
+.check .cnote{grid-column:2/-1;font-size:12px;color:var(--ink2);line-height:1.45}
+/* Проблема: что не так, где смотреть, что сделать — три строки, три веса. */
+.prob{padding:10px 13px;border-radius:var(--r2);margin-bottom:8px;
+      border:1px solid var(--line2);background:var(--s0);border-left-width:3px}
+.prob.bad{border-left-color:var(--bad)}
+.prob.warn{border-left-color:var(--warn)}
+.prob .pd{font-size:13px;color:var(--ink);line-height:1.45}
+.prob .pw{margin-top:3px;font-size:11.5px;color:var(--ink3)}
+.prob .pr{margin-top:6px;font-size:12.5px;color:var(--ink2);padding-left:10px;
+          border-left:2px solid var(--line)}
+.view td.n .bar.neg{background:linear-gradient(to right,var(--badbg) var(--f,0%),
+                    transparent var(--f,0%));color:var(--bad)}
+.view .dname[data-emp]{cursor:pointer}
+
+
+/* ── намерение перед расчетом ─────────────────────────────── */
+.modal .box.wide{max-width:520px;width:calc(100% - 48px)}
+.pfrows{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin:6px 0 4px}
+.pfrow{display:flex;justify-content:space-between;gap:10px;font-size:13px;
+       color:var(--ink2);padding:4px 0;border-bottom:1px solid var(--line2)}
+.pfrow b{color:var(--ink);font-variant-numeric:tabular-nums}
+.pfh{margin:14px 0 6px;font:600 11.5px var(--f);letter-spacing:.05em;
+     text-transform:uppercase;color:var(--warn)}
+.pfwarn{font-size:12.5px;color:var(--ink2);line-height:1.5;padding:7px 10px;
+        border-radius:var(--r3);background:var(--warnbg);margin-bottom:6px}

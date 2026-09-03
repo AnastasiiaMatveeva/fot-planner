@@ -199,14 +199,40 @@ def fill_inflows(ws, rows, contracts, warn, year=None):
                     % ", ".join(sorted(lost)))
 
 
+def _put(ws, values):
+    """Дописать строку, раскладывая значения по именам граф шаблона.
+
+    Строка по порядку граф ломается при первом же расхождении с шаблоном:
+    трудоемкость встала на место должности, и решатель упал на «Специалист».
+    Имена граф — контракт входного файла, порядок — нет.
+    """
+    hdr = _headers(ws)
+    row = [None] * len(hdr)
+    for names, value in values:
+        for name in names:
+            if name in hdr:
+                row[hdr.index(name)] = value
+                break
+    ws.append(row)
+
+
 def fill_labor(ws, rows, warn):
     """Лист «трудоемкость_по_договорам» — план в чел.-мес. и стоимость."""
     if not rows:
         return
     _clear(ws)
     for r in rows:
-        ws.append([r.contract_code, r.year, r.position or "", r.salary_page or "",
-                   r.salary_group, r.position_level, r.person_months, r.avg_cost])
+        _put(ws, [
+            (("договор", "проект"), r.contract_code),
+            (("год",), r.year),
+            (("должность",), r.position or ""),
+            (("страница",), r.salary_page or ""),
+            (("номер группы",), r.salary_group),
+            (("номер уровня", "уровень"), r.position_level),
+            (("трудоемкость", "трудоёмкость", "чел-мес"), r.person_months),
+            (("средняя стоимость выполнения работ в месяц", "средняя зарплата",
+              "стоимость 1 чел-мес", "стоимость чел мес"), r.avg_cost),
+        ])
 
 
 def fill_secret(ws, rows, warn):
@@ -215,7 +241,9 @@ def fill_secret(ws, rows, warn):
         return
     _clear(ws)
     for r in rows:
-        ws.append([r.employee_code, r.secret_contract_code or "", r.rate])
+        _put(ws, [(("сотрудник",), r.employee_code),
+                  (("договор секретности",), r.secret_contract_code or ""),
+                  (("ставка 120",), r.rate)])
 
 
 def fill_substitutions(wb, pairs):
