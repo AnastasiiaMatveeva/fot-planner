@@ -210,6 +210,13 @@ class Document(Base):
     state: Mapped[str] = mapped_column(String(30), default="ожидает")
     parsed_by: Mapped[str | None] = mapped_column(String(120), default=None)
     summary: Mapped[str | None] = mapped_column(Text, default=None)
+    # Версии. Тот же файл загружают снова — исправленный, дополненный, за
+    # новый год. Раньше это давало вторую запись рядом с первой, и обе
+    # кормили расчет. Теперь новая запись заменяет прежнюю: та получает
+    # состояние «заменен», ее строки уходят из реестра, файл остается для
+    # истории. Цепочка версий — по supersedes_id.
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    supersedes_id: Mapped[int | None] = mapped_column(Integer, default=None)
 
     case: Mapped[Case] = relationship(back_populates="documents")
 
@@ -439,6 +446,7 @@ _ADDED_COLUMNS = {
     # Переписка по документу живет в тех же сообщениях, что и лента плана,
     # только с ссылкой на документ вместо плана.
     "messages": [("document_id", "INTEGER")],
+    "documents": [("version", "INTEGER"), ("supersedes_id", "INTEGER")],
     "employees": [
         ("department", "VARCHAR(200)"),
         ("employment_type", "VARCHAR(40)"),

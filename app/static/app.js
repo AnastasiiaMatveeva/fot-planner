@@ -1133,6 +1133,7 @@ var STATUS = {
   "не распознан": { text: "Данные не извлечены", cls: "warn" },
   "не прочитан": { text: "Файл не прочитан", cls: "bad" },
   "текст нечитаемый": { text: "Текст нечитаемый", cls: "bad" },
+  "заменен": { text: "Заменен новой версией", cls: "wait" },
   "ожидает": { text: "В обработке", cls: "wait" },
 };
 
@@ -1329,6 +1330,9 @@ function openDocument(id) {
         '<button type="button" class="x" aria-label="Закрыть">×</button></header>' +
       '<div class="dbody">' +
         meta([["Вид", d.kind], ["Статус", docStatus(d.state).text],
+              ["Версия", d["версия"] > 1
+                 ? d["версия"] + (d["заменяет"] ? ", прежняя от " + d["заменяет"] : "")
+                 : null],
               ["Формат", d["формат"]], ["Размер", bytes(d.size)],
               ["Загружен", d.uploaded]]) +
         (d.exists

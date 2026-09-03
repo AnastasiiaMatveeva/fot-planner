@@ -81,7 +81,8 @@ def _dt(v):
 def case_state(db, case):
     # Документы общие для организации: договор на три года обслуживает три
     # плана, и перезагружать его в каждый незачем.
-    docs = db.query(Document).order_by(Document.id).all()
+    docs = (db.query(Document).filter(Document.state != "заменен")
+            .order_by(Document.id).all())
     msgs = db.query(Message).filter_by(case_id=case.id).order_by(Message.id).all()
     acts = (db.query(Activity).filter_by(case_id=case.id)
             .order_by(Activity.id.desc()).limit(40).all())
@@ -318,9 +319,17 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
             # Повторная загрузка того же файла — это исправленная редакция,
             # а не второй документ. Прежнюю запись и все извлеченное из нее
             # убираем, иначе реестр зарастает дублями.
-            for old_doc in db.query(Document).filter_by(name=name).all():
-                _forget_document(db, old_doc)
             doc = Document(case_id=case_id, name=name, path=path, size=len(data))
+            # Тот же файл уже есть — это новая версия, а не сосед. Прежняя
+            # остается для истории, но ее строки уходят из реестра: кормить
+            # расчет двумя редакциями одного документа нельзя.
+            prev = (db.query(Document).filter_by(name=name)
+                    .filter(Document.state != "заменен")
+                    .order_by(Document.id.desc()).first())
+            if prev is not None:
+                _retire_document(db, prev)
+                doc.version = (prev.version or 1) + 1
+                doc.supersedes_id = prev.id
             db.add(doc)
             db.commit()
             added.append(doc.id)
@@ -638,9 +647,11 @@ def all_documents():
     db = session()
     try:
         out = []
-        for d in db.query(Document).order_by(Document.id.desc()).all():
+        for d in (db.query(Document).filter(Document.state != "заменен")
+                  .order_by(Document.id.desc()).all()):
             out.append({
                 "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
+                "version": d.version or 1,
                 "by": d.parsed_by, "summary": d.summary, "size": d.size,
                 "uploaded": _dt(d.uploaded), "case_id": d.case_id,
                 "produced": {
@@ -679,6 +690,9 @@ def one_document(doc_id: int):
             "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
             "by": d.parsed_by, "summary": d.summary, "size": d.size,
             "формат": os.path.splitext(d.path)[1].lower() or "без расширения",
+            "версия": d.version or 1,
+            "заменяет": (lambda p: _dt(p.uploaded) if p else None)(
+                db.get(Document, d.supersedes_id) if d.supersedes_id else None),
             "uploaded": _dt(d.uploaded), "case_id": d.case_id,
             "exists": os.path.exists(d.path),
             "employees": [{"code": e.code, "fio": e.fio, "position": e.position,
@@ -1161,6 +1175,15 @@ def _registry_data(db, case):
         "substitutions": [(s.position, s.replaced_by) for s in
                           db.query(Substitution).order_by(Substitution.id).all()],
     }
+
+
+def _retire_document(db, doc):
+    """Прежняя версия документа: строки из реестра убрать, файл и запись оставить."""
+    for model in (Employee, Contract, LaborRow, Inflow, SecretAllowance, Substitution):
+        db.query(model).filter_by(document_id=doc.id).delete()
+    db.query(Proposal).filter_by(document_id=doc.id, state="предложено").delete()
+    doc.state = "заменен"
+    db.commit()
 
 
 def _forget_document(db, doc):
