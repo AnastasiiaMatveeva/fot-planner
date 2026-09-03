@@ -779,8 +779,13 @@ _FF_KEY = {"employees": ("code", "fio"), "contracts": ("code", "num"),
            "secret": ("employee", "contract")}
 
 
-def freeform(path, filename="", max_chunks=8):
-    """Достать сущности из документа любой формы. ok=False — не получилось."""
+def freeform(path, filename="", max_chunks=8, hints=None):
+    """Достать сущности из документа любой формы. ok=False — не получилось.
+
+    ``hints`` — правки экономиста по документам этого вида, строками. Они
+    подмешиваются в подсказку: агент учится не переобучением модели, а тем,
+    что видит свои прошлые ошибки перед новым разбором.
+    """
     name, model, why = provider()
     if name is None:
         return {"ok": False, "unavailable": True, "error": why}
@@ -801,7 +806,7 @@ def freeform(path, filename="", max_chunks=8):
     while queue:
         part = queue.pop(0)
         try:
-            raw = _ask_freeform(name, model, part, filename)
+            raw = _ask_freeform(name, model, part, filename, hints)
         except Truncated as e:
             # Часть оказалась слишком плотной: ответ не поместился в бюджет.
             # Спасенное берем, а саму часть переспрашиваем половинами — так
@@ -838,27 +843,36 @@ def freeform(path, filename="", max_chunks=8):
             "обрезано частей": cut, **found}
 
 
-def _ask_freeform(name, model, text, filename):
+def _hinted(system, hints):
+    if not hints:
+        return system
+    return (system + "\n\nЭкономист уже поправлял разбор документов такого вида. "
+            "Учитывай эти правки, они важнее общих правил:\n" +
+            "\n".join("- " + h for h in hints[:8]))
+
+
+def _ask_freeform(name, model, text, filename, hints=None):
     if name == "anthropic":
-        return _freeform_anthropic(text, filename, model)
+        return _freeform_anthropic(text, filename, model, hints)
     url = (os.environ["FOT_LLM_BASE_URL"].strip().rstrip("/") + "/chat/completions"
            if name == "local" else DEEPSEEK_URL)
     return _call_openai_compatible(
         text, filename, model, url, api_key=_key(name), schema=_use_schema(name),
         no_thinking=_no_thinking(name),
         insecure=_truthy(os.environ.get("FOT_LLM_INSECURE_TLS")),
-        system=FREEFORM_SYSTEM, shape=FREEFORM_SHAPE,
+        system=_hinted(FREEFORM_SYSTEM, hints), shape=FREEFORM_SHAPE,
         json_schema=FREEFORM_SCHEMA, schema_name="freeform_entities",
         # Семь сущностей и шесть десятков полей: на плотной части документа
         # ответ длиннее прежних восьми тысяч токенов, и его обрывало.
         max_tokens=16000)
 
 
-def _freeform_anthropic(text, filename, model):
+def _freeform_anthropic(text, filename, model, hints=None):
     import anthropic
 
     msg = anthropic.Anthropic().messages.create(
-        model=model, max_tokens=8000, system=FREEFORM_SYSTEM + "\n\n" + FREEFORM_SHAPE,
+        model=model, max_tokens=8000,
+        system=_hinted(FREEFORM_SYSTEM, hints) + "\n\n" + FREEFORM_SHAPE,
         messages=[{"role": "user",
                    "content": "Документ «%s»:\n\n%s" % (filename, text)}])
     return _clean("".join(b.text for b in msg.content if b.type == "text"))

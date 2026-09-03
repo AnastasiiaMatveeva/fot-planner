@@ -36,8 +36,8 @@ import intake            # noqa: E402
 import llm               # noqa: E402
 import reference         # noqa: E402
 from db import (         # noqa: E402
-    Activity, Case, Contract, Document, Employee, Inflow, LaborRow, Message,
-    Proposal, Question, Run, SecretAllowance, Substitution, Verdict,
+    Activity, Case, Contract, Correction, Document, Employee, Inflow, LaborRow,
+    Message, Proposal, Question, Run, SecretAllowance, Substitution, Verdict,
     RESULT_DIR, UPLOAD_DIR, init_db, now, session,
 )
 
@@ -691,6 +691,9 @@ def one_document(doc_id: int):
             "substitutions": [{"position": s.position, "replaced_by": s.replaced_by}
                               for s in sub],
             "предпросмотр": _preview(d),
+            "переписка": [{"кто": m.who, "текст": m.text, "когда": _dt(m.created)}
+                          for m in db.query(Message).filter_by(document_id=d.id)
+                          .order_by(Message.id).all()][-20:],
             "proposals": [{"id": pr.id, "entity": pr.entity,
                            "fields": json.loads(pr.payload),
                            "evidence": pr.evidence, "state": pr.state}
@@ -782,6 +785,10 @@ async def decide_proposals(doc_id: int, request: Request):
                 db.add(Verdict(document_name=doc.name, entity=pr.entity,
                                fields=pr.payload, verdict="отклонено",
                                agent_version=version))
+                # И память агента: в следующий раз он увидит, что так неверно.
+                db.add(Correction(document_name=doc.name, document_kind=doc.kind,
+                                  entity=pr.entity, wrong=pr.payload,
+                                  note="отклонено экономистом", agent_version=version))
                 continue
             if pr.id not in take:
                 continue
@@ -1001,6 +1008,82 @@ INLINE_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
 }
+
+
+@app.post("/api/document/{doc_id}/message")
+async def document_message(doc_id: int, background: BackgroundTasks, request: Request):
+    """Разговор о документе: «тут ошибка» — прямо в карточке.
+
+    Раньше неправильно разобранный документ было не исправить: реестр
+    показывал, но не слушал. Теперь реплика уходит агенту вместе с состоянием
+    документа; правка ложится в реестр, в память агента и в приговор для
+    стенда; подсказанный вид — в переразбор.
+    """
+    body = await request.json()
+    text = (body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "пустое сообщение")
+    db = session()
+    try:
+        doc = db.get(Document, doc_id)
+        if doc is None:
+            raise HTTPException(404, "документ не найден")
+        # Документ принадлежит организации, а сообщение по схеме — плану:
+        # у сообщения case_id обязателен. Разговор о документе привязываем к
+        # плану, из которого документ пришел, а если тот удален — к любому
+        # живому: разговор здесь о документе, план только формальность.
+        case = db.get(Case, doc.case_id) if doc.case_id else None
+        if case is None:
+            case = db.query(Case).order_by(Case.updated.desc()).first()
+        if case is None:
+            raise HTTPException(400, "сначала создайте план: разговор хранится при плане")
+        cid = case.id
+        db.add(Message(case_id=cid, document_id=doc.id, who="экономист", text=text))
+        db.commit()
+
+        res = chat.reply_doc(db, doc, text)
+        if not res.get("ok"):
+            db.add(Message(case_id=cid, document_id=doc.id, who="агент",
+                           agent="intake", text="Не могу ответить: %s" % res.get("error")))
+            db.commit()
+            return {"ok": True}
+        db.add(Message(case_id=cid, document_id=doc.id, who="агент",
+                       agent="intake", text=res["reply"]))
+        db.commit()
+
+        version = agents.version_of("intake")
+        action = res.get("action")
+        if action == "заполнить поле" and res.get("edits"):
+            lines = chat.apply_edits(db, None, res["edits"])
+            for entity, key, field, was, val in getattr(chat.apply_edits, "last_changes", []):
+                db.add(Correction(
+                    document_name=doc.name, document_kind=doc.kind, entity=entity,
+                    wrong=json.dumps({key: was, "поле": field}, ensure_ascii=False),
+                    right=json.dumps({key: val, "поле": field}, ensure_ascii=False),
+                    note=text[:300], agent_version=version))
+            db.add(Message(case_id=cid, document_id=doc.id, who="агент",
+                           agent="intake", text="\n".join(lines) or "Не разобрал, что записать."))
+            db.commit()
+        elif action == "переразобрать документ" and res.get("as_kind"):
+            kind = res["as_kind"]
+            owner = intake.OWNER.get(kind)
+            if case is not None:
+                db.add(Correction(document_name=doc.name, document_kind=doc.kind,
+                                  entity="вид документа", wrong=doc.kind, right=kind,
+                                  note=text[:300], agent_version=version))
+                db.commit()
+                background.add_task(_reprocess, case.id, doc.id, owner, kind)
+        else:
+            # Слова экономиста без готовой правки — тоже память: «это неверно»
+            # уже отсекает вариант при следующем разборе.
+            low = text.lower()
+            if any(w in low for w in ("неверн", "ошибк", "не так", "неправильн")):
+                db.add(Correction(document_name=doc.name, document_kind=doc.kind,
+                                  note=text[:300], agent_version=version))
+                db.commit()
+        return {"ok": True, "action": action}
+    finally:
+        db.close()
 
 
 @app.get("/api/document/{doc_id}/preview")

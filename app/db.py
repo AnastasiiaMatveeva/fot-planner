@@ -265,6 +265,7 @@ class Message(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     case_id: Mapped[int] = mapped_column(ForeignKey("cases.id"))
+    document_id: Mapped[int | None] = mapped_column(Integer, default=None)
     who: Mapped[str] = mapped_column(String(20))        # агент | экономист | система
     agent: Mapped[str | None] = mapped_column(String(40), default=None)
     # Кому передано: у передач между агентами есть и отправитель, и получатель.
@@ -357,6 +358,29 @@ class SecretAllowance(Base):
         ForeignKey("documents.id", ondelete="CASCADE"), default=None)
 
 
+class Correction(Base):
+    """Правка экономиста: что агент прочитал неверно и как верно.
+
+    Это память агента. Перед разбором документа того же вида последние правки
+    подмешиваются в подсказку — «в таких документах оклад стоит в графе
+    „Должностной оклад с учетом ПК“, а не „Базовый оклад“», — и агент не
+    повторяет ошибку, пока не сменится подсказка. Одновременно правка — случай
+    для стенда через приговор.
+    """
+
+    __tablename__ = "corrections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_name: Mapped[str] = mapped_column(String(300))
+    document_kind: Mapped[str | None] = mapped_column(String(120), default=None)
+    entity: Mapped[str | None] = mapped_column(String(40), default=None)
+    wrong: Mapped[str | None] = mapped_column(Text, default=None)   # JSON или текст
+    right: Mapped[str | None] = mapped_column(Text, default=None)   # JSON или текст
+    note: Mapped[str | None] = mapped_column(Text, default=None)    # словами экономиста
+    agent_version: Mapped[str | None] = mapped_column(String(20), default=None)
+    created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+
+
 class Verdict(Base):
     """Приговор экономиста предложенной строке: принята или отклонена.
 
@@ -412,6 +436,9 @@ class Proposal(Base):
 #: недостающие таблицы, но не колонки, а базу с делами экономиста мы не
 #: пересоздаем. SQLite умеет ADD COLUMN, этого достаточно.
 _ADDED_COLUMNS = {
+    # Переписка по документу живет в тех же сообщениях, что и лента плана,
+    # только с ссылкой на документ вместо плана.
+    "messages": [("document_id", "INTEGER")],
     "employees": [
         ("department", "VARCHAR(200)"),
         ("employment_type", "VARCHAR(40)"),

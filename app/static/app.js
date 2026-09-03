@@ -1007,8 +1007,8 @@ function renderView() {
     // и есть самое ценное в отчете решателя, а раньше склеивалось в строку.
     var groups = { "Ошибка": [], "Предупреждение": [] };
     warn.forEach(function (w) {
-      if (!Array.isArray(w)) return;
-      (groups[w[0]] || (groups[w[0]] = [])).push(w);
+      if (!Array.isArray(w) || !groups[w[0]]) return;
+      groups[w[0]].push(w);
     });
     var problems = Object.keys(groups).filter(function (k) { return groups[k].length; })
       .map(function (level) {
@@ -1302,6 +1302,21 @@ function openDocument(id) {
     // подробности работы остаются в ленте агентов.
     got += preview(d);
 
+    // Разговор о документе. «Тут ошибка» говорят там, где ошибку видят, —
+    // в карточке, а не в ленте плана. Правка уходит в реестр, в память агента
+    // и в стенд.
+    var talk = d["переписка"] || [];
+    got += '<div class="grp"><h4>Разговор о документе</h4>' +
+      '<div class="dtalk">' + (talk.length ? talk.map(function (m) {
+        return '<div class="dm ' + (m["кто"] === "экономист" ? "me" : "ag") + '">' +
+               '<div class="dmt">' + esc(m["текст"]) + "</div>" +
+               '<div class="dmw">' + esc(m["когда"] || "") + "</div></div>";
+      }).join("") : '<div class="none">Скажите, что разобрано неверно — агент ' +
+                    "поправит и запомнит.</div>") + "</div>" +
+      '<form class="dask"><input type="text" placeholder="Например: у Петрова оклад ' +
+      '90 000, а не 60 000" autocomplete="off">' +
+      '<button type="submit">Отправить</button></form></div>';
+
     if (!got) {
       got = '<div class="grp"><h4>Что дал</h4><div class="none">' +
             esc(d.summary || "ничего не извлечено") + "</div></div>";
@@ -1326,6 +1341,21 @@ function openDocument(id) {
       "</footer>";
 
     back.querySelector(".x").onclick = close;
+
+    var form = back.querySelector(".dask");
+    if (form) form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var inp = form.querySelector("input"), text = inp.value.trim();
+      if (!text) return;
+      form.querySelector("button").disabled = true;
+      api("/api/document/" + d.id + "/message", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      }).then(function () {
+        openDocument(d.id);            // карточка перерисуется с ответом
+        loadRegistry();
+      }).catch(function () { form.querySelector("button").disabled = false; });
+    });
 
     back.addEventListener("click", function (e) {
       var t = e.target.closest("[data-rtab2]");

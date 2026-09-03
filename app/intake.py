@@ -28,8 +28,8 @@ import extract          # noqa: E402
 import llm              # noqa: E402
 from agents import handoff, say, working  # noqa: E402
 from db import (  # noqa: E402
-    Contract, Document, Employee, Inflow, LaborRow, Proposal, Question,
-    SecretAllowance, Substitution, now,
+    Contract, Correction, Document, Employee, Inflow, LaborRow, Proposal,
+    Question, SecretAllowance, Substitution, now,
 )
 
 # Слова, по которым книга опознается как нормативный документ, а не как
@@ -301,6 +301,32 @@ def _known(db, entity, f):
                              for s in db.query(Substitution).all())
 
 
+def correction_hints(db, kind, limit=8):
+    """Правки экономиста по документам этого вида — строками для подсказки.
+
+    Последние важнее: если экономист поправлял одно и то же дважды, второй
+    раз он был точнее. Правка без верного значения тоже полезна — «это
+    неверно» уже отсекает вариант.
+    """
+    q = db.query(Correction)
+    if kind:
+        q = q.filter(Correction.document_kind == kind)
+    rows = q.order_by(Correction.id.desc()).limit(limit).all()
+    out = []
+    for c in rows:
+        what = c.entity or "строка"
+        if c.right and c.wrong:
+            out.append("%s: было %s — верно %s%s" % (
+                what, c.wrong[:160], c.right[:160],
+                (" (%s)" % c.note[:120]) if c.note else ""))
+        elif c.wrong:
+            out.append("%s: %s — неверно%s" % (
+                what, c.wrong[:160], (", %s" % c.note[:120]) if c.note else ""))
+        elif c.note:
+            out.append("%s: %s" % (what, c.note[:200]))
+    return out
+
+
 def propose_entities(db, case, doc):
     """Прочитать документ без шаблона и предложить найденное экономисту.
 
@@ -314,7 +340,8 @@ def propose_entities(db, case, doc):
     Возвращает True, если что-то предложено.
     """
     with working(db, case.id, "intake", "перечитывает «%s» без шаблона" % doc.name) as w:
-        res = llm.freeform(doc.path, doc.name)
+        hints = correction_hints(db, doc.kind)
+        res = llm.freeform(doc.path, doc.name, hints=hints)
         db.query(Proposal).filter_by(document_id=doc.id, state="предложено").delete()
 
         if not res.get("ok"):
@@ -345,6 +372,7 @@ def propose_entities(db, case, doc):
         w["detail"] = ("предложено %d, уже в реестре %d" % (total, skipped)
                        if total or skipped else "сверх разобранного ничего")
         w["artifact"] = {"файл": doc.name, "прочитано частями": res.get("parts"),
+                         "учтено правок экономиста": len(hints),
                          "предложено строк": total,
                          "пропущено как уже известные": skipped,
                          "в расчет пойдет": "только после подтверждения"}

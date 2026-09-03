@@ -180,6 +180,78 @@ def history(db, case, limit=12):
     return "\n".join(out)
 
 
+DOC_NOTE = """Сейчас разговор идет не о плане, а об одном документе из реестра:
+экономист смотрит, что из него извлечено, и поправляет. Если он говорит, что
+величина или строка неверна, — выбери «заполнить поле» с верными значениями,
+если он их назвал; если не назвал — спроси, как верно, коротко. Если он
+говорит, что документ не того вида, — «переразобрать документ». Расчет из
+этого разговора не запускается."""
+
+
+def doc_context(db, doc):
+    """Состояние документа словами: что извлечено, что ждет подтверждения."""
+    from db import Contract, Employee, Inflow, LaborRow, Proposal, Substitution
+
+    lines = ["Документ «%s», вид: %s, состояние: %s." % (doc.name, doc.kind or "не определен",
+                                                         doc.state)]
+    emp = db.query(Employee).filter_by(document_id=doc.id).all()
+    ctr = db.query(Contract).filter_by(document_id=doc.id).all()
+    if emp:
+        lines.append("Сотрудники из документа: " + "; ".join(
+            "%s %s, %s, ставка %s, зарплата %s" % (e.code, e.fio, e.position, e.rate, e.salary)
+            for e in emp[:20]))
+    if ctr:
+        lines.append("Договоры из документа: " + "; ".join(
+            "%s %s, фонд %s, ГОЗ %s, виды выплат %s" % (c.code, c.name, c.fund, c.goz, c.kinds)
+            for c in ctr[:20]))
+    n_lab = db.query(LaborRow).filter_by(document_id=doc.id).count()
+    n_inf = db.query(Inflow).filter_by(document_id=doc.id).count()
+    n_sub = db.query(Substitution).filter_by(document_id=doc.id).count()
+    lines.append("Еще из документа: строк трудоемкости %d, поступлений %d, правил "
+                 "замещения %d." % (n_lab, n_inf, n_sub))
+    pend = db.query(Proposal).filter_by(document_id=doc.id, state="предложено").count()
+    if pend:
+        lines.append("Ждут подтверждения экономиста: %d строк." % pend)
+    return "\n".join(lines)
+
+
+def doc_history(db, doc, limit=10):
+    from db import Message
+    msgs = (db.query(Message).filter_by(document_id=doc.id)
+            .order_by(Message.id.desc()).limit(limit).all())
+    return "\n".join("%s: %s" % ("Экономист" if m.who == "экономист" else "Агент", m.text)
+                      for m in reversed(msgs))
+
+
+def reply_doc(db, doc, text):
+    """Ответ агента в разговоре о документе. ok=False — модель недоступна."""
+    name, model, why = llm.provider()
+    if name is None:
+        return {"ok": False, "error": why}
+    user = ("Состояние документа:\n%s\n\nПоследние реплики:\n%s\n\n"
+            "Новая реплика экономиста: %s" % (doc_context(db, doc), doc_history(db, doc), text))
+    try:
+        if name == "anthropic":
+            raw = _ask_anthropic(user, model, SYSTEM + "\n\n" + DOC_NOTE)
+        else:
+            raw = llm._call_openai_compatible(
+                user, doc.name, model, llm._endpoint(name), api_key=llm._key(name),
+                schema=llm._use_schema(name), no_thinking=llm._no_thinking(name),
+                insecure=llm._truthy(__import__("os").environ.get("FOT_LLM_INSECURE_TLS")),
+                system=SYSTEM + "\n\n" + DOC_NOTE, shape=SHAPE, json_schema=SCHEMA,
+                schema_name="chat_reply")
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)}
+    if not raw or not raw.get("reply"):
+        return {"ok": False, "error": "модель вернула пустой ответ"}
+    action = raw.get("action")
+    edits = raw.get("edits")
+    return {"ok": True, "reply": raw["reply"].strip(),
+            "action": action if action in ACTIONS else "ничего",
+            "as_kind": raw.get("as_kind") or None,
+            "edits": edits if isinstance(edits, list) else []}
+
+
 def reply(db, case, text):
     """Ответ на реплику. Возвращает dict; ok=False — модель недоступна."""
     name, model, why = llm.provider()
@@ -212,7 +284,7 @@ def reply(db, case, text):
             "edits": edits if isinstance(edits, list) else []}
 
 
-def _ask_anthropic(user, model):
+def _ask_anthropic(user, model, system=None):
     from typing import Literal, Optional
 
     import anthropic
@@ -227,7 +299,7 @@ def _ask_anthropic(user, model):
         answer: Optional[str] = None
 
     msg = anthropic.Anthropic().messages.parse(
-        model=model, max_tokens=1500, system=SYSTEM,
+        model=model, max_tokens=1500, system=system or SYSTEM,
         messages=[{"role": "user", "content": user}], output_format=Reply)
     return msg.parsed_output.model_dump() if msg.parsed_output else None
 
@@ -339,9 +411,11 @@ def apply_edits(db, case, edits):
 
     from db import now
 
-    passport = _json.loads(case.passport) if case.passport else None
+    passport = _json.loads(case.passport) if case and case.passport else None
+    case_id = case.id if case else None
     mark = "правка экономиста %s" % dt.datetime.now().strftime("%d.%m.%Y")
     out, touched = [], False
+    changes = []          # (сущность, ключ, поле, было, стало) — для памяти
 
     for ed in edits or []:
         entity = (ed.get("entity") or "").strip()
@@ -364,7 +438,7 @@ def apply_edits(db, case, edits):
 
         column, pkey = table[field]
         if entity == "договор":
-            row = _find_contract(db, case.id, key)
+            row = _find_contract(db, case_id, key)
             if row is None:
                 # Договора нет ни в одном документе: заводим строку реестра —
                 # именно этого и не хватало, когда форма пришла не по шаблону.
@@ -377,7 +451,7 @@ def apply_edits(db, case, edits):
             bag = (passport or {}).get("contracts") or []
             ident = ("code", row.code)
         else:
-            row = _find_employee(db, case.id, key)
+            row = _find_employee(db, case_id, key)
             if row is None:
                 out.append("Сотрудника «%s» в штатном расписании нет. "
                            "Заводить людей через чат не берусь: строка штатки "
@@ -390,6 +464,7 @@ def apply_edits(db, case, edits):
         setattr(row, column, val)
         row.source = mark
         touched = True
+        changes.append((entity, key, field, was, val))
 
         # То же значение в паспорт: вход решателя собирается из него, и без
         # этого правка осталась бы только в таблице.
@@ -403,8 +478,10 @@ def apply_edits(db, case, edits):
                       "" if was in (None, "") else " (было %s)" % _shown(was)))
 
     if touched:
-        if passport is not None:
+        if case is not None and passport is not None:
             case.passport = _json.dumps(passport, ensure_ascii=False)
-        case.updated = now()
+        if case is not None:
+            case.updated = now()
         db.commit()
+    apply_edits.last_changes = changes
     return out
