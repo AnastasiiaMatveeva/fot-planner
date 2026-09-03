@@ -1082,12 +1082,22 @@ function preview(d) {
         '<span class="c">' + names.length + " " +
         px(names.length, "лист", "листа", "листов") + "</span></label>"
       : "";
-    return head + pick + '<iframe class="sheetview" src="/api/document/' +
-           d.id + "/preview?sheet=" + encodeURIComponent(names[0] || "") +
-           '" title="Предпросмотр листа"></iframe></div>';
+    return head + pick +
+           '<div class="sheetbox loading"><div class="sload">Готовлю лист…</div>' +
+           '<iframe class="sheetview" src="/api/document/' + d.id +
+           "/preview?sheet=" + encodeURIComponent(names[0] || "") +
+           '" title="Предпросмотр листа"></iframe></div></div>';
   }
   if (p["вид"] === "текст") {
-    return head + '<pre class="ptext">' + esc(p["текст"]) + "</pre>" +
+    // Абзацами и обычным шрифтом, а не моноширинным полотном: приказ и
+    // положение об оплате труда — это проза, ее читают, а не разбирают по
+    // колонкам. Пустые строки схлопываем: в вордовских файлах их подряд
+    // бывает по нескольку.
+    var paras = p["текст"].split("\n").map(function (s) { return s.trim(); })
+      .filter(Boolean);
+    return head + '<div class="ptext">' +
+           paras.map(function (s) { return "<p>" + esc(s) + "</p>"; }).join("") +
+           "</div>" +
            (p["обрезано"] ? '<div class="more">показано начало документа</div>' : "") +
            "</div>";
   }
@@ -1210,8 +1220,8 @@ function openDocument(id) {
         '<button type="button" class="x" aria-label="Закрыть">×</button></header>' +
       '<div class="dbody">' +
         meta([["Вид", d.kind], ["Статус", docStatus(d.state).text],
-              ["Разбор", d.by], ["Размер", bytes(d.size)],
-              ["Загружен", d.uploaded]]) +
+              ["Разбор", d.by], ["Формат", d["формат"]],
+              ["Размер", bytes(d.size)], ["Загружен", d.uploaded]]) +
         (d.exists
           ? '<a class="dfile" href="/api/document/' + d.id +
             '/file" target="_blank" rel="noopener">Открыть файл</a>'
@@ -1236,12 +1246,20 @@ function openDocument(id) {
     }
 
     // Лист переключаем перезагрузкой рамки: разметку собирает сервер.
+    var frame = back.querySelector(".sheetview");
+    if (frame) {
+      frame.addEventListener("load", function () {
+        var box = frame.closest(".sheetbox");
+        if (box) box.classList.remove("loading");
+      });
+    }
     var pickEl = back.querySelector("#sheetpick");
     if (pickEl) {
       pickEl.onchange = function () {
-        back.querySelector(".sheetview").src =
-          "/api/document/" + d.id + "/preview?sheet=" +
-          encodeURIComponent(this.value);
+        var box = frame.closest(".sheetbox");
+        if (box) box.classList.add("loading");
+        frame.src = "/api/document/" + d.id + "/preview?sheet=" +
+                    encodeURIComponent(this.value);
       };
     }
 

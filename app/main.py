@@ -417,6 +417,7 @@ def one_document(doc_id: int):
         return {
             "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
             "by": d.parsed_by, "summary": d.summary, "size": d.size,
+            "формат": os.path.splitext(d.path)[1].lower() or "без расширения",
             "uploaded": _dt(d.uploaded), "case_id": d.case_id,
             "exists": os.path.exists(d.path),
             "employees": [{"code": e.code, "fio": e.fio, "position": e.position,

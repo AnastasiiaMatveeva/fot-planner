@@ -632,11 +632,13 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
               padding:5px 7px;font:500 12.5px var(--f);cursor:pointer}
 .spick select:hover{border-color:var(--acc)}
 .spick .c{color:var(--ink3);white-space:nowrap;font-variant-numeric:tabular-nums}
-.dbody .ptext{margin:0;padding:12px 13px;border:1px solid var(--line2);
-              border-radius:var(--r2);background:var(--s1);color:var(--ink2);
-              font:12px/1.55 ui-monospace,"Cascadia Mono",Consolas,monospace;
-              white-space:pre-wrap;word-break:break-word;
-              max-height:420px;overflow:auto}
+/* Проза читается абзацами обычным шрифтом. Моноширинное полотно годится для
+   выгрузки таблицы, но приказ в нем нечитаем. */
+.dbody .ptext{padding:14px 16px;border:1px solid var(--line2);
+              border-radius:var(--r2);background:var(--s1);color:var(--ink);
+              font-size:13px;line-height:1.6;max-height:460px;overflow:auto}
+.dbody .ptext p{margin:0 0 9px}
+.dbody .ptext p:last-child{margin-bottom:0}
 .dbody .more{margin-top:6px;font-size:11.5px;color:var(--ink3)}
 
 /* ── страница агентов ──────────────────────────────────────── */
@@ -709,3 +711,13 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 /* Край липкой части обозначаем тенью, иначе прокрученный текст наезжает
    на нее без границы. */
 .view .hscroll td.key,.view .hscroll th.key{box-shadow:1px 0 0 var(--line2)}
+
+/* Первый показ листа занимает несколько секунд: конвертер разбирает книгу и
+   кладет результат в кэш. Пустая белая рамка все это время читается как
+   сломанная — говорим, что лист готовится. */
+.dbody .sheetbox{position:relative}
+.dbody .sload{display:none;position:absolute;inset:0;place-items:center;
+              border:1px solid var(--line2);border-radius:var(--r2);
+              background:var(--s1);color:var(--ink3);font-size:13px;z-index:1}
+.dbody .sheetbox.loading .sload{display:grid}
+.dbody .sheetbox.loading .sheetview{opacity:0}
