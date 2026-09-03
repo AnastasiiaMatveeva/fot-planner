@@ -1839,9 +1839,12 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
             run.input_path = src
             sources = _run_sources(db)
             run.sources = json.dumps(sources, ensure_ascii=False)
-            w["detail"] = "; ".join(warn) or "вход собран"
+            # В строке работы — коротко; сами допущения уходят в ленту
+            # сообщениями и лежат в артефакте, а не растягивают колонку.
+            w["detail"] = "вход собран" + (", допущений %d" % len(warn) if warn else "")
             w["artifact"] = {"документов в основании": len(sources["документы"]),
-                             "версии агентов": sources["агенты"]}
+                             "версии агентов": sources["агенты"],
+                             "допущения": warn}
             db.commit()
         for line in warn:
             agents.say(db, case_id, line, agent="intake")

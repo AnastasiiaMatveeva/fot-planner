@@ -366,7 +366,11 @@ function runCard(p) {
          "</div></div>";
 }
 
-function renderAgents() {
+/* Список агентов в боковой колонке: кто сейчас работает. Раньше функция
+   называлась так же, как отрисовка «Хода работы», и вторая молча подменяла
+   первую: колонка оставалась пустой, а каждая перерисовка ленты падала на
+   незагруженных данных «Хода работы». */
+function renderRoster() {
   var last = {};
   state.activities.forEach(function (a) { last[a.agent] = a; });
   $("agents").innerHTML = state.agents.map(function (a) {
@@ -583,7 +587,7 @@ function render() {
   safely("вкладки", renderTabs);
   safely("заголовок плана", renderStage);
   if (view === "feed") safely("лента", renderFeed);
-  safely("агенты", renderAgents);
+  safely("агенты", renderRoster);
   safely("документы", renderDocs);
   safely("расчеты", renderRuns);
   safely("вопрос", renderAsk);
@@ -1638,6 +1642,7 @@ function planCard(p) {
 
 function renderAgents() {
   var d = agentData;
+  if (!d) return;                       // еще не загружено или сервер недоступен
   var wait = d["ждет"] || [];
 
   var head = '<div class="vh">Где каждый план сейчас и что мешает ему дойти до ' +
