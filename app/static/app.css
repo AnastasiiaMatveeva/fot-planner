@@ -197,9 +197,11 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .view[hidden]{display:none}
 .view .vh{font-size:13px;color:var(--ink2);margin-bottom:12px}
 .view .vh b{color:var(--ink)}
-.view table{border-collapse:collapse;width:100%;background:var(--s0);
-            border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden;
-            font-size:13px}
+/* Границы раздельные, а не схлопнутые: с border-collapse браузер не держит
+   position:sticky на ячейках, и при прокрутке вбок строка теряла шифр. Вид не
+   меняется — границы у ячеек только нижние, дублироваться нечему. */
+.view table{border-collapse:separate;border-spacing:0;width:100%;
+            background:var(--s0);font-size:13px}
 /* Шапка сливалась с телом таблицы: серый #F7F9FB против белого почти
    неразличим. Даем более плотную заливку и заметную нижнюю границу —
    при прокрутке шапка липнет к верху и должна читаться поверх строк. */
@@ -674,3 +676,36 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
               color:var(--ink3);font:600 11px var(--f)}
 .arow .adet{margin-top:4px;font-size:12px;color:var(--ink2);line-height:1.45}
 .arow .meta{margin:10px 0 2px}
+
+
+/* ── широкая таблица ───────────────────────────────────────── */
+/* У договора четырнадцать граф контракта, и в ширину панели они не лезут.
+   Прокрутка своя, у самой таблицы: полоса прокрутки страницы уезжала вниз, и
+   недостающие колонки выглядели пропавшими. Тень справа говорит, что дальше
+   есть еще. */
+.view .hscroll{position:relative;overflow-x:auto;border-radius:var(--r2);
+               border:1px solid var(--line2);background:var(--s0)}
+.view .hscroll table{margin:0}
+.view .hscroll::-webkit-scrollbar{height:9px}
+.view .hscroll::-webkit-scrollbar-thumb{background:var(--line);border-radius:999px}
+.view .hscroll::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
+.view .hscroll::-webkit-scrollbar-track{background:transparent}
+/* Первые графы держим на месте: без шифра договора прокрученная строка
+   перестает быть чьей-то. */
+/* Номер и следом шифр держатся при прокрутке вбок: без них прокрученная
+   строка перестает быть чьей-то. Смещение шифра задано числом, потому что
+   ширина номера тоже задана числом. */
+.view td.num,.view th.num{width:38px;min-width:38px;max-width:38px}
+.view .hscroll td.num,.view .hscroll th.num,
+.view .hscroll td.pick,.view .hscroll th.pick{position:sticky;left:0;z-index:2}
+.view .hscroll td.key,.view .hscroll th.key{position:sticky;left:38px;z-index:2}
+.view .hscroll td.num,.view .hscroll td.key,
+.view .hscroll td.pick{background:var(--s0)}
+.view .hscroll thead th.num,.view .hscroll thead th.key,
+.view .hscroll thead th.pick{background:var(--s2)}
+.view .hscroll tr:hover td.num,.view .hscroll tr:hover td.key,
+.view .hscroll tr:hover td.pick{background:var(--s1)}
+.view .hscroll tr.sel td.num,.view .hscroll tr.sel td.key{background:var(--accbg)}
+/* Край липкой части обозначаем тенью, иначе прокрученный текст наезжает
+   на нее без границы. */
+.view .hscroll td.key,.view .hscroll th.key{box-shadow:1px 0 0 var(--line2)}

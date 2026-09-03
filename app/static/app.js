@@ -751,7 +751,10 @@ function table(head, rows, note, opts) {
   var num = !(opts && opts.plain);
   var h = note ? '<div class="vh">' + note + "</div>" : "";
   if (!rows.length) return h + '<div class="none">Пусто</div>';
-  h += "<table><thead" + (opts && opts.headCls ? ' class="' + opts.headCls + '"' : "") +
+  // Таблица прокручивается в своей полосе, а не вместе со всей страницей: у
+  // договора четырнадцать граф, они не помещаются в ширину, а полоса
+  // прокрутки страницы уезжает вниз — колонки выглядели пропавшими.
+  h += '<div class="hscroll"><table><thead' + (opts && opts.headCls ? ' class="' + opts.headCls + '"' : "") +
        "><tr>" + (num ? '<th class="num">№</th>' : "") +
        head.map(function (c) {
          // Заголовок бывает строкой, числовой колонкой {t} или готовой
@@ -773,7 +776,7 @@ function table(head, rows, note, opts) {
           : "<td>" + (c == null || c === "" ? "—" : esc(c)) + "</td>";
       }).join("") + "</tr>";
   }).join("");
-  return h + "</tbody></table>";
+  return h + "</tbody></table></div>";
 }
 
 function renderView() {
@@ -1283,6 +1286,24 @@ function openDocument(id) {
   });
 }
 
+/* Правая колонка показывает документы и агентов открытого плана. На реестре
+   и на странице агентов плана нет, а ширина нужна: у договора четырнадцать
+   граф. Прячем на время и возвращаем, как было, при возврате к плану. */
+var sideWasOpen = null;
+
+function wideScreen(on) {
+  var shell = document.querySelector(".shell");
+  if (on) {
+    if (sideWasOpen === null) sideWasOpen = !shell.classList.contains("noside");
+    shell.classList.add("noside");
+    $("toggleside").classList.add("off");
+  } else if (sideWasOpen !== null) {
+    shell.classList.toggle("noside", !sideWasOpen);
+    $("toggleside").classList.toggle("off", !sideWasOpen);
+    sideWasOpen = null;
+  }
+}
+
 /* ── страница агентов ─────────────────────────────────────────
  * Схему из семи коробок со стрелками рисовать незачем: это картинка замысла,
  * а не состояния, и половина коробок в этой сборке не существует. Страница
@@ -1300,6 +1321,7 @@ var inAgents = false, agentData = null, openWork = {};
 function openAgents() {
   inAgents = true;
   leaveRegistry();
+  wideScreen(true);
   setView("feed");
   $("feed").hidden = true;
   $("view").hidden = true;
@@ -1326,6 +1348,7 @@ function openAgents() {
 function leaveAgents() {
   if (!inAgents) return;
   inAgents = false;
+  wideScreen(false);
   $("agentview").hidden = true;
   document.querySelector(".tabs").hidden = false;
   document.querySelector(".phead").hidden = false;
@@ -1429,6 +1452,9 @@ var REG_TABS = [
 function openRegistry() {
   leaveAgents();
   inRegistry = true;
+  // Правая колонка — контекст плана: на реестре она не к месту и забирает
+  // 320 пикселей ширины, которых таблицам как раз не хватает.
+  wideScreen(true);
   setView("feed");
   $("feed").hidden = true;
   $("view").hidden = true;
@@ -1446,6 +1472,7 @@ function openRegistry() {
 function leaveRegistry() {
   if (!inRegistry) return;
   inRegistry = false;
+  wideScreen(false);
   picked = {};
   refreshPickBar();
   $("regview").hidden = true;
@@ -1516,12 +1543,13 @@ function renderRegistry() {
     // Графы те же, что во входном файле решателя: счет решает, можно ли
     // платить 120 без оклада, приоритет — на каком договоре держать оклад,
     // а основное место и совместительство — можно ли открыть ставку.
-    body = table(["шифр", "наименование", "номер", "вид", "счет", "ГОЗ",
+    body = table([{ v: "шифр", cls: "key" }, "наименование", "номер", "вид",
+                  "счет", "ГОЗ",
                   { t: "фонд, ₽" }, "срок", "разрешенные выплаты", "приоритет",
                   "основное", "совмест.", "оклад до", "надбавки до"],
       pgc.rows.map(function (x) {
         var term = [x.from, x.to].filter(Boolean).join(" — ");
-        return [x.code, x.name, x.number, x.kind, x.account,
+        return [{ v: esc(x.code), cls: "key" }, x.name, x.number, x.kind, x.account,
                 { v: x.goz ? '<span class="tag goz">' + esc(x.goz) + "</span>" : null },
                 { v: x.fund == null ? null : mo(x.fund), cls: "n" },
                 term, x.kinds, x.priority, x.allow_main, x.allow_part,
@@ -1533,12 +1561,13 @@ function renderRegistry() {
     // Тип и категория занятости решают, можно ли открыть вторую ставку и до
     // какого предела: у студента и аспиранта он свой. Раньше их не было
     // видно, потому что в расчет уходило жестко «основное» и «основной».
-    body = table(["табельный", "ФИО", "должность", "подразделение",
+    body = table([{ v: "табельный", cls: "key" }, "ФИО", "должность",
+                  "подразделение",
                   { t: "ставка" }, "занятость", "категория", { t: "зарплата, ₽" },
                   "срок", "разрешены", "запрещены"],
       pge.rows.map(function (x) {
         var term = [x.from, x.to].filter(Boolean).join(" — ");
-        return [x.code, x.fio, x.position, x.department,
+        return [{ v: esc(x.code), cls: "key" }, x.fio, x.position, x.department,
                 { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
                 x.employment, x.category,
                 { v: x.salary == null ? null : mo(x.salary), cls: "n" },
