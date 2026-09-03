@@ -65,6 +65,47 @@ SOLVER = {"key": "solver", "name": "Оптимизатор",
           "does": "ищет план: MIP, решатель HiGHS"}
 
 
+# ── версии агентов ──────────────────────────────────────────────
+#
+# Агент здесь — не модель, а ее подсказка и схема ответа: поменялась
+# подсказка — поменялось поведение, и это другая версия. Версия — отпечаток
+# текстов, из которых агент собран. Ее пишем в каждую работу: тогда по журналу
+# видно, какая версия что прочитала, а стенд может сказать «версия a1b2c3
+# прошла 30 проверок из 30, версия d4e5f6 — 26». Без этого сравнивать
+# версии нечем, и «агент стал лучше» остается ощущением.
+
+def _prompt_texts(agent):
+    """Тексты, из которых собран агент. Пусто — у агента нет модели."""
+    import chat
+    import llm
+
+    if agent == "intake":
+        return [llm.CLASSIFY_SYSTEM, llm.CLASSIFY_SHAPE, json.dumps(llm.CLASSIFY_SCHEMA),
+                llm.FREEFORM_SYSTEM, llm.FREEFORM_SHAPE, json.dumps(llm.FREEFORM_SCHEMA),
+                chat.SYSTEM, chat.SHAPE, json.dumps(chat.SCHEMA)]
+    if agent == "norms":
+        return [llm.SYSTEM, llm.JSON_SHAPE, json.dumps(llm.RESPONSE_SCHEMA)]
+    return []
+
+
+_VERSIONS: dict = {}
+
+
+def version_of(agent):
+    """Короткий отпечаток версии агента; «—» для агентов без модели."""
+    if agent in _VERSIONS:
+        return _VERSIONS[agent]
+    import hashlib
+
+    texts = _prompt_texts(agent)
+    if not texts:
+        _VERSIONS[agent] = "—"
+    else:
+        digest = hashlib.sha1("\n".join(texts).encode("utf-8")).hexdigest()
+        _VERSIONS[agent] = digest[:7]
+    return _VERSIONS[agent]
+
+
 def agent_list():
     return [dict(key=k, **v) for k, v in sorted(AGENTS.items(), key=lambda kv: kv[1]["n"])]
 
@@ -112,8 +153,12 @@ def working(db, case_id, agent, title):
         raise
     act.state = "готово"
     act.detail = holder["detail"]
-    if holder.get("artifact"):
-        act.artifact = json.dumps(holder["artifact"], ensure_ascii=False)
+    version = version_of(agent)
+    if holder.get("artifact") or version != "—":
+        artifact = dict(holder.get("artifact") or {})
+        if version != "—":
+            artifact["версия агента"] = version
+        act.artifact = json.dumps(artifact, ensure_ascii=False)
     act.finished = now()
     act.seconds = round(time.time() - t0, 1)
     db.commit()

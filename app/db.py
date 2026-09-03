@@ -357,6 +357,28 @@ class SecretAllowance(Base):
         ForeignKey("documents.id", ondelete="CASCADE"), default=None)
 
 
+class Verdict(Base):
+    """Приговор экономиста предложенной строке: принята или отклонена.
+
+    Это и есть самообучение в честном виде. Модель не переучивается — но
+    каждый приговор становится случаем стенда: принятая строка обязана
+    извлекаться из этого документа и впредь, отклоненная — не должна
+    повториться слово в слово. Меняется подсказка агента — стенд прогоняет
+    все накопленные приговоры и говорит, что сломалось. Чем дольше сервисом
+    пользуются, тем строже он себя проверяет.
+    """
+
+    __tablename__ = "verdicts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_name: Mapped[str] = mapped_column(String(300))
+    entity: Mapped[str] = mapped_column(String(40))
+    fields: Mapped[str] = mapped_column(Text)          # JSON строки предложения
+    verdict: Mapped[str] = mapped_column(String(20))   # принято | отклонено
+    agent_version: Mapped[str | None] = mapped_column(String(20), default=None)
+    created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+
+
 class Proposal(Base):
     """Строка, вычитанная моделью из документа неизвестной формы, — до
     подтверждения экономистом.

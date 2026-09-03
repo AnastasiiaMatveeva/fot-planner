@@ -37,7 +37,7 @@ import llm               # noqa: E402
 import reference         # noqa: E402
 from db import (         # noqa: E402
     Activity, Case, Contract, Document, Employee, Inflow, LaborRow, Message,
-    Proposal, Question, Run, SecretAllowance, Substitution,
+    Proposal, Question, Run, SecretAllowance, Substitution, Verdict,
     RESULT_DIR, UPLOAD_DIR, init_db, now, session,
 )
 
@@ -334,6 +334,22 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
         db.close()
 
 
+#: Название шага по глаголу из заголовка работы — коротко и существительным.
+_STEPS = (("определяет вид", "определение вида"),
+          ("сверяет", "сверка со справочником"),
+          ("разбирает", "разбор"),
+          ("перечитывает", "чтение без шаблона"),
+          ("читает правила замещения", "чтение правил замещения"),
+          ("вносит правку", "правка из чата"))
+
+
+def _step_name(title):
+    for verb, noun in _STEPS:
+        if title.startswith(verb):
+            return noun
+    return title.split("«")[0].strip() or title
+
+
 @app.get("/api/agents")
 def agents_page(limit: int = 60):
     """Все, что делали агенты, по всем планам — одной страницей.
@@ -379,6 +395,46 @@ def agents_page(limit: int = 60):
                              if v not in (None, "", [], {})],
             })
 
+        # Верхний уровень — след по документу: одна строка на документ, что с
+        # ним произошло от загрузки до итога, и в нее можно провалиться до
+        # каждой работы и ее артефакта. Следить за всем общением агентов
+        # подряд тяжело и незачем; экономисту нужно «что стало с моим
+        # документом», а не лента.
+        docs = {d.name: d for d in db.query(Document).all()}
+        traces: dict = {}
+        for w in reversed(work):                 # в хронологическом порядке
+            art = dict(w["артефакт"])
+            name = art.get("файл")
+            if not name:
+                continue
+            t = traces.setdefault(name, {"документ": name, "шаги": [],
+                                         "document_id": None, "статус": None,
+                                         "план": w["план"]})
+            t["шаги"].append({"id": w["id"], "что": _step_name(w["что"]),
+                              "агент": w["агент"], "состояние": w["состояние"],
+                              "секунд": w["секунд"],
+                              "подробность": w["подробность"],
+                              "артефакт": [[k, v] for k, v in art.items()
+                                           if k != "файл"]})
+        for name, t in traces.items():
+            d = docs.get(name)
+            if d is not None:
+                t["document_id"] = d.id
+                t["статус"] = d.state
+                t["внесено"] = {
+                    "сотрудников": db.query(Employee).filter_by(document_id=d.id).count(),
+                    "договоров": db.query(Contract).filter_by(document_id=d.id).count(),
+                    "правил замещения": db.query(Substitution)
+                                          .filter_by(document_id=d.id).count(),
+                    "строк трудоемкости": db.query(LaborRow)
+                                            .filter_by(document_id=d.id).count(),
+                    "поступлений": db.query(Inflow).filter_by(document_id=d.id).count(),
+                }
+                t["ждет"] = (db.query(Proposal)
+                             .filter_by(document_id=d.id, state="предложено").count())
+        trace_list = sorted(traces.values(),
+                            key=lambda t: -max(s["id"] for s in t["шаги"]))
+
         counts = {}
         for a in db.query(Activity).all():
             counts[a.agent] = counts.get(a.agent, 0) + 1
@@ -386,9 +442,10 @@ def agents_page(limit: int = 60):
         for one in agents.agent_list():
             roster.append({"номер": one["n"], "имя": one["name"],
                            "делает": one["does"], "работает": one["real"],
-                           "работ": counts.get(one["key"], 0)})
-        return {"ждет": waiting, "работы": work, "агенты": roster,
-                "решатель": agents.SOLVER}
+                           "работ": counts.get(one["key"], 0),
+                           "версия": agents.version_of(one["key"])})
+        return {"ждет": waiting, "работы": work, "следы": trace_list,
+                "агенты": roster, "решатель": agents.SOLVER}
     finally:
         db.close()
 
@@ -535,13 +592,21 @@ async def decide_proposals(doc_id: int, request: Request):
                  "поступление": 0, "надбавка 120": 0, "правило замещения": 0,
                  "должность": 0}
         ref_log = []
+        version = agents.version_of("intake")
         for pr in rows:
             if pr.id in drop:
                 pr.state = "отклонено"
+                # Приговор — случай для стенда: эта строка была неверной.
+                db.add(Verdict(document_name=doc.name, entity=pr.entity,
+                               fields=pr.payload, verdict="отклонено",
+                               agent_version=version))
                 continue
             if pr.id not in take:
                 continue
             f = json.loads(pr.payload)
+            db.add(Verdict(document_name=doc.name, entity=pr.entity,
+                           fields=pr.payload, verdict="принято",
+                           agent_version=version))
             if pr.entity == "сотрудник":
                 db.add(Employee(
                     code=str(f.get("code") or ""), fio=f.get("fio"),

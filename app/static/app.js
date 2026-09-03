@@ -1415,8 +1415,61 @@ function renderAgents() {
       }).join("") + "</div>";
   }
 
+  // Верхний уровень — след по документу. В строке: документ, сколько шагов,
+  // чем кончилось, что внесено. Провалиться можно в шаги, из шага — в
+  // артефакт. Все общение агентов подряд экономисту не нужно: нужно «что
+  // стало с моим документом».
+  var traces = d["следы"] || [];
+  var trail = '<div class="grp"><h4>По документам</h4>' +
+    (traces.length ? traces.map(function (t) {
+      var open = openWork["t:" + t["документ"]];
+      var forms = {
+        "сотрудников": ["сотрудник", "сотрудника", "сотрудников"],
+        "договоров": ["договор", "договора", "договоров"],
+        "правил замещения": ["правило замещения", "правила замещения", "правил замещения"],
+        "строк трудоемкости": ["строка трудоемкости", "строки трудоемкости", "строк трудоемкости"],
+        "поступлений": ["поступление", "поступления", "поступлений"],
+      };
+      var made = Object.keys(t["внесено"] || {}).filter(function (k) {
+        return t["внесено"][k];
+      }).map(function (k) {
+        var n = t["внесено"][k], f = forms[k];
+        return n + " " + (f ? px(n, f[0], f[1], f[2]) : k);
+      }).join(" · ");
+      var st = docStatus(t["статус"]);
+      var bad = t["шаги"].some(function (s) { return s["состояние"] === "ошибка"; });
+      return '<div class="trace' + (open ? " open" : "") + '" data-trace="' +
+        esc(t["документ"]) + '">' +
+        '<div class="th"><span class="st ' + (bad ? "bad" : st.cls) + '">' +
+        esc(bad ? "Ошибка" : st.text) + "</span>" +
+        '<span class="tn">' + esc(t["документ"]) + "</span>" +
+        '<span class="td">' + t["шаги"].length + " " +
+        px(t["шаги"].length, "шаг", "шага", "шагов") +
+        (made ? " · " + esc(made) : "") +
+        (t["ждет"] ? ' · <b>ждет подтверждения ' + t["ждет"] + "</b>" : "") +
+        "</span></div>" +
+        (open ? '<div class="steps">' + t["шаги"].map(function (s) {
+          var so = openWork[s.id];
+          return '<div class="step' + (so ? " open" : "") + '" data-step="' + s.id + '">' +
+            '<div class="sh"><span class="sdot ' +
+            (s["состояние"] === "ошибка" ? "bad" : s["состояние"] === "готово" ? "ok" : "wait") +
+            '"></span><span class="sn">' + esc(s["что"]) + "</span>" +
+            '<span class="sd">' + esc(s["агент"]) +
+            (s["секунд"] ? " · " + s["секунд"] + " с" : "") + "</span></div>" +
+            (s["подробность"] ? '<div class="sdet">' + esc(s["подробность"]) + "</div>" : "") +
+            (so && s["артефакт"].length
+              ? meta(s["артефакт"].map(function (kv) {
+                  var v = kv[1];
+                  return [kv[0], Array.isArray(v) ? v.join(", ")
+                               : (typeof v === "boolean" ? (v ? "да" : "нет") : v)];
+                }))
+              : "") + "</div>";
+        }).join("") + "</div>" : "") +
+        "</div>";
+    }).join("") : '<div class="none">Документов еще не было</div>') + "</div>";
+
   var work = d["работы"] || [];
-  var journal = '<div class="grp"><h4>Что сделано</h4>' +
+  var journal = '<div class="grp"><h4>Все работы подряд</h4>' +
     (work.length
       ? work.map(function (w) {
           var open = openWork[w.id];
@@ -1456,7 +1509,7 @@ function renderAgents() {
       }).join("") + "</div>"
     : "";
 
-  $("agentview").innerHTML = head + need + journal + missing;
+  $("agentview").innerHTML = head + need + trail + journal + missing;
 }
 
 /* ── реестр организации ───────────────────────────────────────
@@ -1817,6 +1870,22 @@ $("regview").addEventListener("change", function (e) {
 });
 
 $("agentview").addEventListener("click", function (e) {
+  // Провал: документ → шаги → артефакт. Щелчок по шагу не должен сворачивать
+  // документ, поэтому шаг проверяется первым.
+  var step = e.target.closest("[data-step]");
+  if (step) {
+    var sid = +step.getAttribute("data-step");
+    openWork[sid] = !openWork[sid];
+    renderAgents();
+    return;
+  }
+  var tr = e.target.closest("[data-trace]");
+  if (tr) {
+    var key = "t:" + tr.getAttribute("data-trace");
+    openWork[key] = !openWork[key];
+    renderAgents();
+    return;
+  }
   var row = e.target.closest("[data-work]");
   if (row) {
     var id = +row.getAttribute("data-work");
