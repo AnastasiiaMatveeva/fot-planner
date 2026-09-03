@@ -902,3 +902,27 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .failban li{margin-bottom:4px}
 .failban .mt{color:var(--ink3);font-size:12px}
 .run .why{color:var(--ink2);white-space:normal}
+
+/* ── загрузка документов из реестра ──────────────────────────── */
+#regview{position:relative}
+.reghead{display:flex;align-items:flex-start;gap:16px;margin-bottom:16px}
+.reghead .rtabs{margin-bottom:0;flex:1 1 auto}
+.regup{flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;cursor:pointer;
+       padding:7px 14px;border-radius:var(--r3);border:1px solid var(--acc);
+       background:var(--acc);color:#fff;font:600 12.5px var(--f);white-space:nowrap}
+.regup:hover{background:var(--acc2);border-color:var(--acc2)}
+.regup::before{content:"+";font-size:15px;line-height:1;margin-top:-1px}
+.regup.busy{opacity:.6;pointer-events:none}
+.regup input{display:none}
+#regview.dropping::after{content:"Отпустите — документы уйдут в разбор";
+  position:absolute;inset:10px;z-index:5;display:grid;place-items:center;
+  border:2px dashed var(--acc);border-radius:var(--r2);
+  /* Полупрозрачная подсветка: реестр должен просвечивать, иначе непонятно,
+     куда именно бросаешь файл. */
+  background:var(--accbg);
+  background:color-mix(in srgb, var(--accbg) 78%, transparent);
+  color:var(--acc);font:600 15px var(--f);pointer-events:none}
+.empty2{padding:34px 26px;border:1px dashed var(--line);border-radius:var(--r2);
+        background:var(--s0);text-align:center}
+.empty2 b{display:block;font-size:15px;margin-bottom:6px}
+.empty2 p{margin:0 auto;max-width:56ch;font-size:13px;line-height:1.55;color:var(--ink2)}

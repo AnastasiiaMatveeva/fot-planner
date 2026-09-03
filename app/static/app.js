@@ -1789,6 +1789,11 @@ function renderAgents() {
  */
 var inRegistry = false, regTab = "docs", regData = null;
 
+//: Что принимаем на загрузку — ровно то, что читает docread. Один список на
+//: скрепку в ленте и на кнопку в реестре: расходиться им незачем, а обещать
+//: формат, который потом «не прочитан», — тем более.
+var UPLOAD_ACCEPT = ".xlsx,.xlsm,.xls,.pdf,.doc,.docx";
+
 //: Короткие имена месяцев для графика поступлений.
 var MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
               "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -1837,8 +1842,10 @@ function leaveRegistry() {
   $("openreg").classList.remove("on");
 }
 
-function loadRegistry() {
-  $("regview").innerHTML = '<div class="none">Загружаю…</div>';
+function loadRegistry(quiet) {
+  // Обновление на месте (пока разбирается загруженный файл) не должно
+  // мигать «Загружаю…» на весь экран: таблица просто перерисуется.
+  if (!quiet) $("regview").innerHTML = '<div class="none">Загружаю…</div>';
   Promise.all([api("/api/documents"), api("/api/case/" + (caseId || 0) + "/data")
                  .catch(function () { return {}; })])
     .then(function (r) { regData = { documents: r[0], data: r[1] }; renderRegistry(); })
@@ -1893,6 +1900,13 @@ function renderRegistry() {
         { plain: true, headCls: nPick ? "picking" : "",
           rowCls: function (i) { return picked[pg.rows[i].id] ? "sel" : ""; } }) +
         pager("docs", pg);
+    if (!docs.length) {
+      body = '<div class="empty2"><b>Документов пока нет</b>' +
+        "<p>Перетащите сюда файлы или нажмите «Загрузить документы». " +
+        "Подойдет любой документ: штатное расписание, договор, расчетно-" +
+        "калькуляционные материалы, приказ, положение. Агент прочитает и " +
+        "разложит по реестру, а спорное покажет на подтверждение.</p></div>";
+    }
   } else if (regTab === "ctr") {
     var pgc = paged("ctr", d.contracts || []);
     // Графы те же, что во входном файле решателя: счет решает, можно ли
@@ -2027,7 +2041,7 @@ function renderRegistry() {
   }
 
   var tabsRow =
-    '<div class="rtabs">' + REG_TABS.map(function (t) {
+    '<div class="reghead"><div class="rtabs">' + REG_TABS.map(function (t) {
       var n = { docs: docs.length, ctr: (d.contracts || []).length,
                 emp: (d.employees || []).length, labor: (d.labor || []).length,
                 inflow: new Set((d.inflows || []).map(function (x) {
@@ -2039,7 +2053,10 @@ function renderRegistry() {
       return '<button type="button" data-rtab="' + t.key + '"' +
              (regTab === t.key ? ' class="on"' : "") + ">" + esc(t.title) +
              (n ? '<span class="c"> ' + n + "</span>" : "") + "</button>";
-    }).join("") + "</div>";
+    }).join("") + "</div>" +
+    '<label class="regup" title="Или перетащите файлы в окно">' +
+      '<input type="file" multiple accept="' + UPLOAD_ACCEPT + '" hidden>' +
+      "<span>Загрузить документы</span></label></div>";
 
   $("regview").innerHTML = tabsRow + body;
   // Промежуточное состояние: отмечена часть строк.
@@ -2068,6 +2085,10 @@ function tick() {
       render();
       // Перерисовка ленты не должна выбрасывать из открытого раздела.
       if (inRegistry) {
+        // Состав документов или их состояние изменились — реестр открыт и
+        // должен это показать, иначе загруженный файл появится в нем только
+        // после повторного входа.
+        loadRegistry(true);
         $("feed").hidden = true; $("view").hidden = true; $("regview").hidden = false;
         document.querySelector(".tabs").hidden = true;
         document.querySelector(".phead").hidden = true;
@@ -2322,12 +2343,85 @@ $("tabs").addEventListener("click", function (e) {
 $("newcase").addEventListener("click", newCase);
 
 $("files").addEventListener("change", function () {
-  if (!this.files.length || !caseId) return;
-  var fd = new FormData();
-  Array.prototype.forEach.call(this.files, function (f) { fd.append("files", f); });
+  var list = this.files;
   this.value = "";
-  api("/api/case/" + caseId + "/upload", { method: "POST", body: fd }).then(tick);
+  sendFiles(list);
 });
+
+/* Документы кладут в реестр — там они и живут. Раньше файлы принимала
+   только лента плана: чтобы добавить документ, из реестра приходилось выйти
+   в план и найти скрепку у поля сообщения. Теперь то же самое делается там,
+   где человек и так находится: кнопкой в шапке реестра или перетаскиванием
+   файлов в окно. Отправка одна на оба места. */
+function sendFiles(list) {
+  if (!list || !list.length) return Promise.resolve();
+  if (!caseId) {
+    // Документ общий для организации, но разбирает его агент в рамках плана:
+    // без плана некуда писать ленту работ. Заводим и продолжаем.
+    return newCase().then(function () { return sendFiles(list); });
+  }
+  var fd = new FormData();
+  Array.prototype.forEach.call(list, function (f) { fd.append("files", f); });
+  var box = document.querySelector("#regview .regup");
+  if (box) box.classList.add("busy");
+  return api("/api/case/" + caseId + "/upload", { method: "POST", body: fd })
+    .then(function () {
+      if (inRegistry) loadRegistry(true);
+      return tick();
+    })
+    .catch(function (e) {
+      if (box) box.classList.remove("busy");
+      alert("Не удалось загрузить: " + (e.message || "ошибка сети"));
+    });
+}
+
+/* Перетаскивание файлов в реестр. Считаем вложенность: dragleave приходит и
+   при переходе на дочерний элемент, без счетчика подсветка мигает. */
+var dragDepth = 0;
+
+function armDropZone() {
+  var zone = $("regview");
+  zone.addEventListener("dragenter", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth++;
+    zone.classList.add("dropping");
+  });
+  zone.addEventListener("dragover", function (e) {
+    if (hasFiles(e)) e.preventDefault();
+  });
+  zone.addEventListener("dragleave", function () {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) zone.classList.remove("dropping");
+  });
+  zone.addEventListener("drop", function (e) {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    zone.classList.remove("dropping");
+    sendFiles(e.dataTransfer.files);
+  });
+  // Файл, брошенный мимо реестра, браузер откроет вместо страницы — и
+  // несохраненное состояние пропадет. Гасим это на всем окне.
+  ["dragover", "drop"].forEach(function (name) {
+    document.addEventListener(name, function (e) {
+      if (hasFiles(e) && !$("regview").contains(e.target)) e.preventDefault();
+    });
+  });
+  // Выбор файла кнопкой в шапке реестра.
+  zone.addEventListener("change", function (e) {
+    if (!e.target.matches('input[type="file"]')) return;
+    var list = e.target.files;
+    e.target.value = "";
+    sendFiles(list);
+  });
+}
+
+function hasFiles(e) {
+  var t = e.dataTransfer && e.dataTransfer.types;
+  return !!t && Array.prototype.indexOf.call(t, "Files") >= 0;
+}
+armDropZone();
 
 $("composer").addEventListener("submit", function (e) {
   e.preventDefault();
