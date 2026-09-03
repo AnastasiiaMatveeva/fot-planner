@@ -711,6 +711,67 @@ def summary(input_path, result_path):
     }
 
 
+def _why_rates(inp, people, plan):
+    """Зачем на договоре открыты ставки — счетом, а не догадкой.
+
+    Человеко-месяцы РКМ закрывает только открытая ставка сотрудника на этом
+    договоре: надбавки их не создают. Поэтому под трудоемкость нового
+    договора сервис открывает ставки. Здесь это показано арифметикой: кто,
+    по какой ставке, в какие месяцы и сколько человеко-месяцев вышло.
+    """
+    norm = inp["norm"]
+    out = []
+    for lp in inp["labor"]:
+        if not lp["person_months"]:
+            continue
+        code = lp["contract"]
+        want = norm(lp["position"]) if lp["position"] else None
+        groups = {}
+        for person in people:
+            if want and norm(person["должность"]) != want:
+                continue
+            for m in person["месяцы"]:
+                if not m:
+                    continue
+                for c in m["договоры"]:
+                    if c["код"] == code and c["ставка"]:
+                        groups.setdefault(c["ставка"], {}).setdefault(
+                            person["фио"], []).append(m["м"])
+        if not groups:
+            out.append("Договор %s: трудоемкость %s чел.-мес. по должности «%s» "
+                       "не закрыта — ставок на этом договоре не открыто."
+                       % (code, _mo(lp["person_months"]), lp["position"] or "любая"))
+            continue
+        parts, total = [], 0.0
+        for rate in sorted(groups, reverse=True):
+            who = groups[rate]
+            months = sorted({m for ms in who.values() for m in ms})
+            span = ("%s—%s" % (SHORT[months[0] - 1], SHORT[months[-1] - 1])
+                    if len(months) > 1 else SHORT[months[0] - 1])
+            got = sum(rate * len(ms) for ms in who.values())
+            total += got
+            parts.append("%d %s по %s ставки, %s (%s × %s мес. × %s = %s чел.-мес.)"
+                         % (len(who), _px(len(who), "человек", "человека", "человек"),
+                            _mo(rate), span, len(who), len(months), _mo(rate), _mo(got)))
+        out.append("Договор %s: трудоемкость %s чел.-мес. по должности «%s». "
+                   "Человеко-месяцы закрывает только открытая ставка на этом "
+                   "договоре, поэтому открыты ставки: %s. Итого %s чел.-мес."
+                   % (code, _mo(lp["person_months"]), lp["position"] or "любая",
+                      "; ".join(parts), _mo(total)))
+    return out
+
+
+def _px(n, one, few, many):
+    d, hh = n % 10, n % 100
+    if 11 <= hh <= 14:
+        return many
+    if d == 1:
+        return one
+    if 2 <= d <= 4:
+        return few
+    return many
+
+
 # ── из чего складывается зарплата ────────────────────────────────────
 def payroll(input_path, result_path):
     """Состав зарплаты по месяцам: договоры, ставки, виды выплат и смены схемы.
@@ -824,6 +885,7 @@ def payroll(input_path, result_path):
     return {
         "договоры": [{"код": c, "название": (ctr.get(c) or {}).get("name", ""),
                       "ГОЗ": bool((ctr.get(c) or {}).get("goz"))} for c in order],
+        "почему": _why_rates(inp, people, plan),
         "итого": {"человек": len(people),
                   "смен договора оклада": total_switch,
                   "открыто ставок": total_opened,

@@ -699,6 +699,15 @@ function agentCard(key) {
  */
 var view = "feed", vdata = null, vresult = null, vrun = null, vrules = null,
     vsum = null, vpay = null;
+//: Сколько реплик пришло, пока лента не на виду.
+var unseen = 0, lastMsgCount = null;
+
+function markFeedTab() {
+  var tab = document.querySelector('.tabs .tab[data-view="feed"]');
+  if (!tab) return;
+  tab.classList.toggle("hasnew", unseen > 0);
+  tab.setAttribute("title", unseen ? "Новых реплик: " + unseen : "");
+}
 
 var MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
               "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -708,6 +717,10 @@ function monthName(m) { return MONTHS[m] || MONTHS[m - 1] || m; }
 
 function setView(v) {
   view = v;
+  // Ответ агента приходит в ленту. Если экономист смотрит план или сводку,
+  // он о нем не узнает: раньше вопрос выглядел оставленным без ответа.
+  if (v === "feed") unseen = 0;
+  markFeedTab();
   Array.prototype.forEach.call(document.querySelectorAll(".tabs .tab"), function (b) {
     b.classList.toggle("on", b.getAttribute("data-view") === v);
   });
@@ -765,6 +778,10 @@ function bar(share, cls) {
   var w = Math.max(0, Math.min(1, share || 0));
   return '<span class="gauge ' + (cls || "") + '"><i style="width:' +
          (w * 100).toFixed(1) + '%"></i></span>';
+}
+
+function num(v) {
+  return v == null ? "—" : String(v).replace(".", ",");
 }
 
 function pct(v) {
@@ -897,22 +914,35 @@ function ctrClass(code) {
   return "c1";
 }
 
-/* Полоса года: двенадцать клеток, в каждой доли договоров по ставке.
-   Смена схемы отмечена засечкой — так видно, ровно ли идет год. */
-function yearStrip(person) {
-  return '<span class="strip">' + person["месяцы"].map(function (m, i) {
-    if (!m) return '<i class="off" title="' + MONTHS[i] + ': выплат нет"></i>';
-    var total = m["договоры"].reduce(function (a, c) { return a + c["сумма"]; }, 0);
-    var seg = m["договоры"].map(function (c) {
-      return '<u class="' + ctrClass(c["код"]) + '" style="flex:' +
-             (total ? c["сумма"] / total : 1) + '"></u>';
-    }).join("");
-    return '<i class="' + (m["изменилось"].length ? "chg" : "") + '" title="' +
-      esc(MONTHS[i] + ": " + m["договоры"].map(function (c) {
-        return c["код"] + (c["ставка"] ? " " + c["ставка"] : "");
-      }).join(" + ") + (m["изменилось"].length ? " — " + m["изменилось"].join("; ") : "")) +
-      '">' + seg + "</i>";
-  }).join("") + "</span>";
+/* Полоса года: клетка на месяц. Высота — открытая ставка, доли внутри —
+   договоры, которые ее держат. Пунктир — штатная ставка. Засечка сверху —
+   месяц, где схема сменилась.
+
+   Так ставка читается при любом числе смен: «1 → 1,5» текстом ложилось в
+   одну ячейку и рассыпалось бы, если ставка меняется дважды за год. */
+function yearStrip(person, maxRate) {
+  var base = person["ставка"] || 1;
+  return '<span class="strip" style="--base:' +
+    (maxRate ? (base / maxRate * 100).toFixed(1) : 100) + '%">' +
+    person["месяцы"].map(function (m, i) {
+      if (!m) {
+        return '<i class="off" title="' + MONTHS[i] + ': выплат нет"></i>';
+      }
+      var rate = m["ставка"] || 0;
+      var h = maxRate ? Math.max(8, rate / maxRate * 100) : 100;
+      var seg = m["договоры"].map(function (c) {
+        var f = rate ? (c["ставка"] || 0) / rate : 1;
+        return '<u class="' + ctrClass(c["код"]) + '" style="flex:' +
+               (f || 0.001) + '"></u>';
+      }).join("");
+      var tip = MONTHS[i] + ": ставка " + (rate || "—") + " = " +
+        m["договоры"].map(function (c) {
+          return c["код"] + " " + (c["ставка"] || 0) + " (" + mo(c["сумма"]) + " ₽)";
+        }).join(" + ") +
+        (m["изменилось"].length ? " — " + m["изменилось"].join("; ") : "");
+      return '<i class="' + (m["изменилось"].length ? "chg" : "") + '" title="' +
+        esc(tip) + '"><b style="height:' + h.toFixed(1) + '%">' + seg + "</b></i>";
+    }).join("") + "</span>";
 }
 
 //: Цвет вида выплаты: один на все места, где виды показаны рядом.
@@ -932,8 +962,9 @@ function payrollView() {
     return '<span class="' + ctrClass(c["код"]) + '">' + esc(c["код"]) +
            (c["ГОЗ"] ? " (ГОЗ)" : "") + "</span>";
   }).join("") + '<span class="chgk">смена схемы</span>' +
-    '<span class="note">полоса — год с января по декабрь, доли договоров по ' +
-    "сумме; наведите на месяц</span></div>";
+    '<span class="basek">штатная ставка</span>' +
+    '<span class="note">полоса — год с января по декабрь: высота клетки — ' +
+    "открытая ставка, доли внутри — договоры; наведите на месяц</span></div>";
   var head = '<div class="vh">Прогон № ' + vrun + ": " + t["человек"] + " " +
     px(t["человек"], "человек", "человека", "человек") + ", всего <b>" +
     mo(t["за год"]) + " ₽</b>. Сумма за месяц у каждого равна его зарплате — " +
@@ -954,10 +985,26 @@ function payrollView() {
         '<div class="kn">' + esc(c[2]) + "</div></div>";
     }).join("") + "</div>";
 
+  // Зачем открыты ставки — счетом. Это первый вопрос к плану, где у людей
+  // появилось совместительство, и отвечать на него должен сервис, а не
+  // экономист, разбирая таблицу.
+  var why = (vpay["почему"] || []).length
+    ? '<div class="whybox"><div class="fh">Почему открыты ставки</div>' +
+      vpay["почему"].map(function (t) {
+        return "<p>" + esc(t) + "</p>";
+      }).join("") + "</div>"
+    : "";
   var pg = paged("payroll", vpay["люди"]);
+  // Шкала полос общая на всю страницу: иначе полторы ставки у одного и одна
+  // у другого рисуются одинаково высокими.
+  var maxRate = 1;
+  vpay["люди"].forEach(function (p) {
+    if (p["ставка макс"] > maxRate) maxRate = p["ставка макс"];
+    if (p["ставка"] > maxRate) maxRate = p["ставка"];
+  });
   var body = table(
-    [{ v: "Сотрудник", cls: "key" }, "Должность", "Ставка",
-     { t: "зарплата, ₽" }, "Год по месяцам", "Финансируется",
+    [{ v: "Сотрудник", cls: "key" }, "Должность", { t: "ставка" },
+     { t: "зарплата, ₽" }, "Ставки и договоры по месяцам", "Финансируется",
      "Из чего складывается", { t: "смен" }, { t: "за год, ₽" }],
     pg.rows.map(function (p) {
       // Доли видов за год плюс то, как они менялись: набор надбавок мог не
@@ -972,21 +1019,20 @@ function payrollView() {
                  Math.round(sh["мин"] * 100) + "–" + Math.round(sh["макс"] * 100) +
                  " %</span>";
       }
-      // Ставка: штатная и наибольшая за год. «1» в строке против «1,5» в
-      // раскладке выглядело ошибкой — это разные вещи, и обе нужны.
-      var rate = String(p["ставка"]);
+      // Ставка числом — только границы за год: штатная и наибольшая. Как она
+      // менялась, показывает полоса, а не текст в ячейке.
+      var rate = num(p["ставка"]);
       if (p["ставка макс"] && p["ставка макс"] > p["ставка"] + 0.01) {
-        rate += ' <span class="upto">→ ' + String(p["ставка макс"]).replace(".", ",") +
-                "</span>";
+        rate += "–" + num(p["ставка макс"]);
       }
       var sw = p["месяцев со сменой структуры"];
       return [
         { v: '<span class="dname" data-emp="' + esc(p["код"]) + '">' +
              esc(p["фио"]) + "</span>", cls: "key" },
         p["должность"] || null,
-        { v: rate },
+        { v: rate, cls: "n" },
         { v: mo(p["зарплата"]), cls: "n" },
-        { v: yearStrip(p) },
+        { v: yearStrip(p, maxRate) },
         { v: p["договоры"].map(function (c) {
             return '<span class="ctag ' + ctrClass(c) + '">' + esc(c) + "</span>";
           }).join("") },
@@ -995,7 +1041,7 @@ function payrollView() {
         { v: mo(p["за год"]), cls: "n tot" },
       ];
     }), "", { startNum: pg.from }) + pager("payroll", pg);
-  return head + legend + body;
+  return head + why + legend + body;
 }
 
 /* Месяц за месяцем по одному человеку: договоры со ставками, виды выплат
@@ -2520,6 +2566,13 @@ function tick() {
                               s.activities.map(function (a) { return [a.id, a.state]; }),
                               s.questions.map(function (q) { return [q.id, !!q.answer]; }),
                               s.runs.map(function (r) { return [r.id, r.status]; })]);
+    // Новые реплики, пока лента закрыта, отмечаем точкой на вкладке.
+    if (lastMsgCount !== null && s.messages.length > lastMsgCount &&
+        (view !== "feed" || inRegistry || inAgents)) {
+      unseen += s.messages.length - lastMsgCount;
+    }
+    lastMsgCount = s.messages.length;
+    markFeedTab();
     if (sig !== lastSig) {
       lastSig = sig;
       render();

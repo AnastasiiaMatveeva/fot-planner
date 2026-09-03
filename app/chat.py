@@ -64,7 +64,35 @@ SYSTEM = """Ты — агент сервиса планирования фонд
   состоянии «не прочитан» от указания вида читаемым не станет: тут надо
   попросить приложить его в текстовом виде или ввести величины вручную;
 - если данных для расчета не хватает, скажи, каких именно и откуда их взять;
-- не обещай того, чего сервис не делает.
+- не обещай того, чего сервис не делает;
+- на вопрос «почему так вышло» ищи в состоянии плана строки «Почему так:» —
+  там причина уже посчитана сервисом, с арифметикой. Перескажи именно ее,
+  коротко и своими словами, назвав числа. Не отвечай «так не делалось», если
+  в строках «Почему так» или в профиле ставок написано обратное: профиль
+  «в плане 1 (янв—май), 1,5 (июн—дек)» означает, что ставка выросла до 1,5,
+  даже если штатная осталась единицей.
+
+Правила, по которым считается план, — на них и опирайся, объясняя решения:
+- каждому сотруднику в каждом активном месяце выплачивается вся месячная
+  зарплата из штатного расписания: окладом и надбавками. Недоплата возможна
+  только если в настройках разрешен дефицит;
+- оклад на договоре равен окладу должности, умноженному на ставку, открытую
+  на этом договоре. Шаг ставки — четверть;
+- штатная ставка сохраняется; сверх нее сервис может открыть совместительство
+  до 0,5, в сумме не больше 1,5 ставки. Открывать ставку на договоре можно,
+  только если там разрешен оклад и должность подходит по правилам замещения;
+- трудоемкость договора (человеко-месяцы из РКМ) закрывается только открытой
+  ставкой сотрудника на этом договоре в этом месяце. Надбавки человеко-месяцев
+  не создают. Поэтому, чтобы закрыть трудоемкость нового договора, сервис
+  открывает на нем ставки — обычно по 0,5 нескольким подходящим людям;
+- деньги договора нельзя потратить раньше, чем они поступили; остаток
+  переносится только вперед; выплаты за год не больше ФОТ договора;
+- 122 платится с того же договора, где оклад. Виды выплат ограничены
+  договором;
+- лимиты по должности: П2556 на оклад и 122, БЭП как средняя по ГОЗ-договору
+  за месяц, П4 при надбавке 124;
+- перевод оклада на другой договор и смена набора надбавок штрафуются: сервис
+  старается не дергать схему без нужды.
 
 Форма бывает не по шаблону, и тогда часть величин из нее не извлеклась. Если
 экономист сам называет величину — «договор 1234 ГОЗ», «по 0421 фонд 3 млн»,
@@ -123,16 +151,171 @@ SCHEMA = {
 }
 
 
+def _why_lines(db, case):
+    """Посчитанные причины — в начало состояния: их читают чаще всего."""
+    import os
+
+    from db import Run
+
+    run = (db.query(Run).filter_by(case_id=case.id, status="OPTIMAL")
+           .order_by(Run.id.desc()).first())
+    if run is None or not run.input_path or not run.result_path:
+        return []
+    if not (os.path.exists(run.input_path) and os.path.exists(run.result_path)):
+        return []
+    try:
+        import rules
+
+        why = rules.payroll(run.input_path, run.result_path).get("почему") or []
+    except Exception:  # noqa: BLE001
+        return []
+    return ["Почему так: " + w for w in why]
+
+
+def _registry_lines(db):
+    """Что в реестре организации — тем же взглядом, каким его видит расчет."""
+    from db import (Contract, Employee, Inflow, LaborRow, SecretAllowance,
+                    Substitution)
+
+    emp = db.query(Employee).order_by(Employee.id).all()
+    ctr = db.query(Contract).order_by(Contract.id).all()
+    labor = db.query(LaborRow).order_by(LaborRow.id).all()
+    lines = ["Реестр организации: сотрудников %d, договоров %d, строк "
+             "трудоемкости %d, поступлений %d, надбавок 120 %d, правил "
+             "замещения %d."
+             % (len(emp), len(ctr), len(labor), db.query(Inflow).count(),
+                db.query(SecretAllowance).count(), db.query(Substitution).count())]
+    for c in ctr[:8]:
+        lines.append("- договор %s «%s»: ФОТ %s, ГОЗ %s, срок %s—%s, "
+                     "разрешенные выплаты: %s"
+                     % (c.code, (c.name or "")[:40], _n(c.fund), c.goz or "не указано",
+                        c.date_from or "не указан", c.date_to or "не указан",
+                        c.kinds or "не ограничены"))
+    for r in labor[:6]:
+        lines.append("- трудоемкость %s: должность «%s», %s чел.-мес., средняя "
+                     "стоимость %s" % (r.contract_code, r.position or "любая",
+                                       _n(r.person_months), _n(r.avg_cost)))
+    for e in emp[:8]:
+        lines.append("- сотрудник %s %s: должность «%s», ставка %s, зарплата %s, "
+                     "срок %s—%s" % (e.code, e.fio or "", e.position or "",
+                                     _n(e.rate), _n(e.salary),
+                                     e.date_from or "не указан", e.date_to or "не указан"))
+    if len(emp) > 8:
+        lines.append("- и еще сотрудников: %d" % (len(emp) - 8))
+    return lines
+
+
+def _result_lines(db, case):
+    """Что вышло в последнем удачном расчете — числами, а не «посчитано».
+
+    Без этого агент не может ответить на вопрос об уже посчитанном плане:
+    почему открыли ставку, где план подошел к пределу, что не освоено.
+    """
+    import os
+
+    from db import Run
+
+    run = (db.query(Run).filter_by(case_id=case.id, status="OPTIMAL")
+           .order_by(Run.id.desc()).first())
+    if run is None or not run.input_path or not run.result_path:
+        return ["Удачного расчета пока нет."]
+    if not (os.path.exists(run.input_path) and os.path.exists(run.result_path)):
+        return ["Файлы последнего расчета не сохранились."]
+    lines = []
+    try:
+        import rules
+
+        s = rules.summary(run.input_path, run.result_path)
+        t = s["итого"]
+        lines.append("Последний расчет №%d: ФОТ договоров %s, распределено %s, "
+                     "не распределено %s, сотрудников %d."
+                     % (run.id, _n(t["ФОТ договоров"]), _n(t["распределено планом"]),
+                        _n(t["не распределено"]), t["сотрудников"]))
+        lines.append("Виды выплат в плане: " + ", ".join(
+            "%s %d %%" % (k["вид"], round(k["доля"] * 100)) for k in s["виды выплат"]))
+        pay = rules.payroll(run.input_path, run.result_path)
+        p = pay["итого"]
+        lines.append("Схема выплат: переводов оклада %d, открыто ставок %d, "
+                     "месяцев со сменой структуры %d, месяцев с совместительством %d."
+                     % (p["смен договора оклада"], p["открыто ставок"],
+                        p["месяцев со сменой структуры"], p["месяцев с совместительством"]))
+        for why in pay.get("почему") or []:
+            lines.append("Почему так: " + why)
+        for person in pay["люди"][:6]:
+            # Штатная ставка и то, что вышло в плане, — разные числа. Без
+            # профиля агент читал «ставка 1» из реестра и отвечал, что ставку
+            # не расширяли, хотя с июня у человека полторы.
+            line = "- %s: штатная ставка %s, в плане %s" % (
+                person["фио"], _n(person["ставка"]), _rate_profile(person, rules.SHORT))
+            months = [m for m in person["месяцы"] if m and m["изменилось"]]
+            if months:
+                line += ". Смены: " + "; ".join(
+                    "%s — %s" % (rules.SHORT[m["м"] - 1], ", ".join(m["изменилось"]))
+                    for m in months[:3])
+            lines.append(line)
+        checks = rules.check(run.input_path, run.result_path)
+        broken = [c for c in checks if c["состояние"] == "нарушено"]
+        if broken:
+            lines.append("Нарушенные условия: " + "; ".join(
+                "%s (%s)" % (c["правило"], c["факт"]) for c in broken[:4]))
+        else:
+            lines.append("Все проверенные условия соблюдены.")
+        tight = [c for c in checks if (c.get("использовано") or 0) >= 0.95
+                 and c["тип"] == "нарушать нельзя"]
+        if tight:
+            lines.append("Условия на пределе: " + "; ".join(
+                "%s — %s" % (c["правило"], c["факт"]) for c in tight[:4]))
+    except Exception as exc:  # noqa: BLE001 — разбор результата не должен ронять ответ
+        lines.append("Разобрать результат расчета не удалось: %s" % str(exc)[:120])
+    return lines
+
+
+def _rate_profile(person, short):
+    """Ставка по месяцам одной строкой: «1 (янв—май), 1,5 (июн—дек)»."""
+    runs = []
+    for m in person["месяцы"]:
+        if not m:
+            continue
+        rate = m["ставка"]
+        who = " + ".join("%s %s" % (c["код"], _n(c["ставка"]))
+                         for c in m["договоры"] if c["ставка"])
+        if runs and runs[-1][0] == rate and runs[-1][3] == who:
+            runs[-1][2] = m["м"]
+        else:
+            runs.append([rate, m["м"], m["м"], who])
+    return ", ".join(
+        "%s (%s%s%s)" % (_n(r[0]), short[r[1] - 1],
+                         "—" + short[r[2] - 1] if r[2] != r[1] else "",
+                         ": " + r[3] if r[3] else "")
+        for r in runs)
+
+
+def _n(v):
+    if v in (None, ""):
+        return "не указано"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if abs(f - round(f)) < 0.005:
+        return "{:,.0f}".format(round(f)).replace(",", "\u202f")
+    return ("%.2f" % f).rstrip("0").rstrip(".").replace(".", ",")
+
+
 def context(db, case):
     """Состояние плана словами — то, на что модель может опереться."""
     from db import Contract, Document, Employee, Question, Run, Substitution
 
     lines = ["План: %s, год %s, этап: %s." % (case.title, case.year, case.stage)]
+    lines += _why_lines(db, case)
 
-    docs = db.query(Document).filter_by(case_id=case.id).order_by(Document.id).all()
+    # Документы, как и реестр, общие: план считает по всему, что загружено, а
+    # не по тому, что пришло именно в этот план. Замененные версии молчат.
+    docs = (db.query(Document).filter(Document.state != "заменен")
+            .order_by(Document.id).all())
     if docs:
         lines.append("Загруженные документы:")
-        for d in docs:
+        for d in docs[:12]:
             lines.append("- «%s»: %s%s%s" % (
                 d.name, d.state,
                 ", вид: %s" % d.kind if d.kind else "",
@@ -140,11 +323,12 @@ def context(db, case):
     else:
         lines.append("Документов пока нет.")
 
-    emp = db.query(Employee).filter_by(case_id=case.id).count()
-    ctr = db.query(Contract).filter_by(case_id=case.id).count()
-    sub = db.query(Substitution).filter_by(case_id=case.id).count()
-    lines.append("Собрано: сотрудников %d, договоров %d, правил замещения %d."
-                 % (emp, ctr, sub))
+    # Реестр общий для организации: договор живет несколько лет, штатка
+    # меняется приказами. Считать его по привязке к плану — значит не видеть
+    # ничего: агент отвечал «сотрудников и договоров пока нет», когда в
+    # реестре стояли три человека и два договора.
+    lines += _registry_lines(db)
+    lines += _result_lines(db, case)
 
     open_q = (db.query(Question).filter_by(case_id=case.id, answer=None)
               .order_by(Question.id).all())
