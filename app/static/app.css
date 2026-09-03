@@ -932,8 +932,11 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .view table.fixed td{overflow-wrap:anywhere}
 
 /* ── только что загруженные документы ────────────────────────── */
-.fresh{margin:0 0 16px;padding:12px 14px 10px;border:1px solid var(--acc);
-       border-radius:var(--r2);background:var(--accbg)}
+.fresh{margin:0 0 16px;padding:12px 14px 10px;border:1px solid var(--line);
+       border-radius:var(--r2);background:var(--s0)}
+/* Требование к человеку выделено цветом; сообщение о ходе работы — нет. */
+.fresh.act{border-color:var(--warn);background:var(--warnbg)}
+.fresh.act .fh{color:var(--warn)}
 .fresh .fh{display:flex;align-items:center;gap:10px;margin-bottom:8px;
            font:600 12px var(--f);letter-spacing:.04em;text-transform:uppercase;
            color:var(--acc2)}

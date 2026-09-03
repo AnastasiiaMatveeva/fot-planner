@@ -1807,29 +1807,45 @@ var fresh = [];
    что он взял и что просит подтвердить, с переходом в карточку документа.
    Разбираться с документом надо там, где он открыт: в карточке и предпросмотр,
    и извлеченные строки, и разговор с агентом о правках. */
+//: Состояния, при которых документ ждет человека, а не агента.
+var FRESH_ACT = {
+  "ждет подтверждения": "Проверить строки",
+  "не прочитан": "Посмотреть",
+  "текст нечитаемый": "Посмотреть",
+  "не распознан": "Посмотреть",
+};
+
 function freshStrip(docs) {
   if (!fresh.length) return "";
   var rows = fresh.map(function (id) {
     return docs.filter(function (d) { return d.id === id; })[0];
   }).filter(Boolean);
+  var busy = rows.filter(function (d) { return d.state === "ожидает"; });
+  var need = rows.filter(function (d) { return FRESH_ACT[d.state]; });
+  // Разобранное без вопросов уходит из полосы само. Плашка о законченной
+  // работе, которую надо закрывать рукой, читается как невыполненное
+  // требование: человек ищет, что от него хотят, а хотеть уже нечего.
+  // Остается только то, что еще читается или ждет решения.
+  rows = busy.concat(need);
+  fresh = rows.map(function (d) { return d.id; });
   if (!rows.length) return "";
-  var busy = rows.filter(function (d) { return d.state === "ожидает"; }).length;
-  return '<div class="fresh"><div class="fh">' +
-    (busy ? "Агент читает загруженное" : "Загруженные документы прочитаны") +
+  return '<div class="fresh' + (need.length ? " act" : "") + '"><div class="fh">' +
+    (busy.length ? "Агент читает загруженное" : "Требует вашего решения") +
     '<button type="button" class="fx" id="freshclose">Скрыть</button></div>' +
     rows.map(function (d) {
       var s = docStatus(d.state);
-      var wait = d.state === "ждет подтверждения";
+      var act = FRESH_ACT[d.state];
       return '<div class="frow"><span class="fn">' + esc(d.name) + "</span>" +
         '<span class="st ' + s.cls + '">' + esc(s.text) + "</span>" +
-        '<span class="fp">' + (produced(d.produced) || (d.state === "ожидает" ? "" : "—")) + "</span>" +
-        '<button type="button" class="fopen' + (wait ? " go" : "") +
-        '" data-fresh="' + d.id + '">' +
-        (wait ? "Проверить строки" : "Открыть") + "</button></div>";
+        '<span class="fp">' + (produced(d.produced) || "") + "</span>" +
+        '<button type="button" class="fopen' + (act ? " go" : "") +
+        '" data-fresh="' + d.id + '">' + (act || "Открыть") + "</button></div>";
     }).join("") +
-    '<div class="fnote">В карточке документа видно, что из него взято, и есть ' +
-    "разговор с агентом: напишите, если разобрано неверно, — он поправит " +
-    "реестр и запомнит правку.</div></div>";
+    (need.length
+      ? '<div class="fnote">Откройте документ: там видно, что из него взято, ' +
+        "и есть разговор с агентом — напишите, если разобрано неверно, он " +
+        "поправит реестр и запомнит правку.</div>"
+      : "") + "</div>";
 }
 
 //: Короткие имена месяцев для графика поступлений.
