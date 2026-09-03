@@ -1419,6 +1419,9 @@ var REG_TABS = [
   { key: "docs", title: "Документы" },
   { key: "ctr", title: "Договоры" },
   { key: "emp", title: "Штатное расписание" },
+  { key: "labor", title: "Трудоемкость" },
+  { key: "inflow", title: "Поступления" },
+  { key: "secret", title: "Надбавка 120" },
   { key: "ref", title: "Справочник должностей" },
   { key: "sub", title: "Правила замещения" },
 ];
@@ -1510,28 +1513,78 @@ function renderRegistry() {
         pager("docs", pg);
   } else if (regTab === "ctr") {
     var pgc = paged("ctr", d.contracts || []);
-    body = table(["шифр", "наименование", "ГОЗ", { t: "фонд, ₽" },
-                  "срок", "разрешенные выплаты"],
+    // Графы те же, что во входном файле решателя: счет решает, можно ли
+    // платить 120 без оклада, приоритет — на каком договоре держать оклад,
+    // а основное место и совместительство — можно ли открыть ставку.
+    body = table(["шифр", "наименование", "номер", "вид", "счет", "ГОЗ",
+                  { t: "фонд, ₽" }, "срок", "разрешенные выплаты", "приоритет",
+                  "основное", "совмест.", "оклад до", "надбавки до"],
       pgc.rows.map(function (x) {
         var term = [x.from, x.to].filter(Boolean).join(" — ");
-        return [x.code, x.name,
+        return [x.code, x.name, x.number, x.kind, x.account,
                 { v: x.goz ? '<span class="tag goz">' + esc(x.goz) + "</span>" : null },
                 { v: x.fund == null ? null : mo(x.fund), cls: "n" },
-                term, x.kinds];
+                term, x.kinds, x.priority, x.allow_main, x.allow_part,
+                x.salary_deadline, x.allowance_deadline];
       }),
       "", { startNum: pgc.from }) + pager("ctr", pgc);
   } else if (regTab === "emp") {
     var pge = paged("emp", d.employees || []);
-    body = table(["табельный", "ФИО", "должность", { t: "ставка" }, { t: "оклад, ₽" },
-                  "срок"],
+    // Тип и категория занятости решают, можно ли открыть вторую ставку и до
+    // какого предела: у студента и аспиранта он свой. Раньше их не было
+    // видно, потому что в расчет уходило жестко «основное» и «основной».
+    body = table(["табельный", "ФИО", "должность", "подразделение",
+                  { t: "ставка" }, "занятость", "категория", { t: "зарплата, ₽" },
+                  "срок", "разрешены", "запрещены"],
       pge.rows.map(function (x) {
         var term = [x.from, x.to].filter(Boolean).join(" — ");
-        return [x.code, x.fio, x.position,
+        return [x.code, x.fio, x.position, x.department,
                 { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
+                x.employment, x.category,
                 { v: x.salary == null ? null : mo(x.salary), cls: "n" },
-                term];
+                term, x.allowed, x.forbidden];
       }),
       "", { startNum: pge.from }) + pager("emp", pge);
+  } else if (regTab === "labor") {
+    var pgl = paged("labor", d.labor || []);
+    body = table(["договор", { t: "год" }, "должность", "окладная группа",
+                  { t: "чел.-мес." }, { t: "средняя стоимость, ₽" }],
+      pgl.rows.map(function (x) {
+        var grp = [x.page, x.group, x.level].filter(function (v) {
+          return v != null && v !== "";
+        }).join(" · ");
+        return [x.contract, { v: x.year == null ? null : String(x.year), cls: "n" },
+                x.position, grp || null,
+                { v: x.person_months == null ? null
+                     : String(x.person_months).replace(".", ","), cls: "n" },
+                { v: x.avg_cost == null ? null : mo(x.avg_cost), cls: "n" }];
+      }),
+      "План договора в человеко-месяцах и стоимость одного месяца. Главное " +
+      "содержание расчетно-калькуляционных материалов и Формы 9д.",
+      { startNum: pgl.from }) + pager("labor", pgl);
+  } else if (regTab === "inflow") {
+    var pgi = paged("inflow", d.inflows || []);
+    body = table(["договор", { t: "год" }, { t: "месяц" }, { t: "поступление, ₽" }],
+      pgi.rows.map(function (x) {
+        return [x.contract, { v: x.year == null ? null : String(x.year), cls: "n" },
+                { v: x.month == null ? null : String(x.month), cls: "n" },
+                { v: x.amount == null ? null : mo(x.amount), cls: "n" }];
+      }),
+      "Когда деньги приходят на договор. Решатель не может потратить их " +
+      "раньше поступления; без графика фонд раскладывается ровно по месяцам " +
+      "действия, и об этом говорится перед расчетом.",
+      { startNum: pgi.from }) + pager("inflow", pgi);
+  } else if (regTab === "secret") {
+    var pgs2 = paged("secret", d.secret || []);
+    body = table(["сотрудник", "договор секретности", { t: "ставка 120" }],
+      pgs2.rows.map(function (x) {
+        return [x.employee, x.contract,
+                { v: x.rate == null ? null : String(x.rate).replace(".", ","),
+                  cls: "n" }];
+      }),
+      "Кому платится 120 и какой договор задает период секретности. Сумма " +
+      "считается процентом от оклада.",
+      { startNum: pgs2.from }) + pager("secret", pgs2);
   } else if (regTab === "ref") {
     var pgr = paged("ref", d.reference || []);
     // Окладной группы здесь нет: взаимозаменяемость задают правила замещения,
@@ -1562,7 +1615,9 @@ function renderRegistry() {
   var tabsRow =
     '<div class="rtabs">' + REG_TABS.map(function (t) {
       var n = { docs: docs.length, ctr: (d.contracts || []).length,
-                emp: (d.employees || []).length, ref: (d.reference || []).length,
+                emp: (d.employees || []).length, labor: (d.labor || []).length,
+                inflow: (d.inflows || []).length, secret: (d.secret || []).length,
+                ref: (d.reference || []).length,
                 sub: (d.substitutions || []).length }[t.key];
       return '<button type="button" data-rtab="' + t.key + '"' +
              (regTab === t.key ? ' class="on"' : "") + ">" + esc(t.title) +

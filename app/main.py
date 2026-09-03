@@ -1014,14 +1014,42 @@ def case_data(case_id: int):
         emps = db.query(Employee).order_by(Employee.code).all()
         ctrs = db.query(Contract).order_by(Contract.code).all()
         return {
+            # Поля отдаются все, какие есть в контракте входного файла: то, что
+            # уходит в расчет, экономист должен видеть и проверить.
             "employees": [{"code": e.code, "fio": e.fio, "position": e.position,
-                           "rate": e.rate, "salary": e.salary,
+                           "department": e.department, "rate": e.rate,
+                           "employment": e.employment_type,
+                           "category": e.employment_category,
+                           "salary": e.salary,
+                           "allowed": e.allowed_contracts,
+                           "forbidden": e.forbidden_contracts,
                            "from": e.date_from, "to": e.date_to,
                            "source": e.source} for e in emps],
             "contracts": [{"code": c.code, "name": c.name, "number": c.number,
-                           "kind": c.kind, "goz": c.goz, "fund": c.fund,
-                           "kinds": c.kinds, "source": c.source,
+                           "kind": c.kind, "account": c.account, "goz": c.goz,
+                           "fund": c.fund, "kinds": c.kinds,
+                           "priority": c.priority, "allow_main": c.allow_main,
+                           "allow_part": c.allow_part_time,
+                           "salary_deadline": c.salary_deadline,
+                           "allowance_deadline": c.allowance_deadline,
+                           "source": c.source,
                            "from": c.date_from, "to": c.date_to} for c in ctrs],
+            "labor": [{"contract": r.contract_code, "year": r.year,
+                       "position": r.position, "page": r.salary_page,
+                       "group": r.salary_group, "level": r.position_level,
+                       "person_months": r.person_months, "avg_cost": r.avg_cost,
+                       "source": r.source}
+                      for r in db.query(LaborRow).order_by(LaborRow.id).all()],
+            "inflows": [{"contract": r.contract_code, "year": r.year,
+                         "month": r.month, "amount": r.amount,
+                         "source": r.source}
+                        for r in db.query(Inflow)
+                        .order_by(Inflow.contract_code, Inflow.month).all()],
+            "secret": [{"employee": r.employee_code,
+                        "contract": r.secret_contract_code, "rate": r.rate,
+                        "source": r.source}
+                       for r in db.query(SecretAllowance)
+                       .order_by(SecretAllowance.id).all()],
             # Нормативная база общая: правила и справочник не привязаны к делу.
             "substitutions": [{"position": s.position, "replaced_by": s.replaced_by,
                                "source": s.source} for s in
