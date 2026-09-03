@@ -926,3 +926,8 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
         background:var(--s0);text-align:center}
 .empty2 b{display:block;font-size:15px;margin-bottom:6px}
 .empty2 p{margin:0 auto;max-width:56ch;font-size:13px;line-height:1.55;color:var(--ink2)}
+
+/* Таблица с заданными ширинами граф: раскладка не зависит от содержимого
+   шапки, поэтому панель действий над выбранными строками ее не двигает. */
+.view table.fixed{table-layout:fixed;min-width:660px}
+.view table.fixed td{overflow-wrap:anywhere}

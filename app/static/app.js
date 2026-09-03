@@ -854,7 +854,19 @@ function table(head, rows, note, opts) {
   // Таблица прокручивается в своей полосе, а не вместе со всей страницей: у
   // договора четырнадцать граф, они не помещаются в ширину, а полоса
   // прокрутки страницы уезжает вниз — колонки выглядели пропавшими.
-  h += '<div class="hscroll"><table><thead' + (opts && opts.headCls ? ' class="' + opts.headCls + '"' : "") +
+  // Ширины граф заданы заранее — тогда они не зависят от того, что стоит в
+  // шапке. Без этого панель действий над выбранными строками (одна ячейка
+  // на пять граф) заставляла браузер пересчитывать раскладку, и таблица
+  // прыгала при первом же поставленном флажке.
+  var widths = opts && opts.widths;
+  var cols = widths
+    ? "<colgroup>" + (num ? '<col style="width:44px">' : "") +
+      widths.map(function (w) {
+        return "<col" + (w ? ' style="width:' + w + '"' : "") + ">";
+      }).join("") + "</colgroup>"
+    : "";
+  h += '<div class="hscroll"><table' + (cols ? ' class="fixed"' : "") + ">" + cols +
+       "<thead" + (opts && opts.headCls ? ' class="' + opts.headCls + '"' : "") +
        "><tr>" + (num ? '<th class="num">№</th>' : "") +
        head.map(function (c) {
          // Заголовок бывает строкой, числовой колонкой {t} или готовой
@@ -1898,6 +1910,8 @@ function renderRegistry() {
             { v: rowMenu("data-docmenu", x.id), cls: "act" }];
         }), "",
         { plain: true, headCls: nPick ? "picking" : "",
+          // Имя документа тянется, остальное — по содержимому.
+          widths: ["46px", "", "118px", "152px", "178px", "44px"],
           rowCls: function (i) { return picked[pg.rows[i].id] ? "sel" : ""; } }) +
         pager("docs", pg);
     if (!docs.length) {
