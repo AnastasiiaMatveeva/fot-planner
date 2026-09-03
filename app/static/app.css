@@ -721,3 +721,12 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
               background:var(--s1);color:var(--ink3);font-size:13px;z-index:1}
 .dbody .sheetbox.loading .sload{display:grid}
 .dbody .sheetbox.loading .sheetview{opacity:0}
+
+
+/* Что документ внес в реестр — счетчиками со ссылкой на свою вкладку, а не
+   вторым экземпляром тех же таблиц. */
+.dbody .made{display:flex;flex-wrap:wrap;gap:8px}
+.dbody .mtag{padding:6px 13px;border:1px solid var(--line);border-radius:999px;
+             background:var(--s0);color:var(--ink2);cursor:pointer;
+             font:500 12.5px var(--f)}
+.dbody .mtag:hover{border-color:var(--acc);background:var(--accbg);color:var(--acc2)}

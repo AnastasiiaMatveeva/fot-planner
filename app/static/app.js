@@ -967,7 +967,7 @@ function pk(input, label) {
 
 function pickCell(n) {
   return '<div class="pickrow"><span class="picked">' + n + " " +
-         px(n, "документ отмечен", "документа отмечено", "документов отмечено") +
+         px(n, "документ выбран", "документа выбрано", "документов выбрано") +
          "</span>" +
          '<button type="button" id="pickdel">Удалить</button>' +
          '<button type="button" class="x" id="pickclear">Отмена</button></div>';
@@ -1147,30 +1147,28 @@ function openDocument(id) {
   back.querySelector(".scrim").onclick = close;
 
   api("/api/document/" + id).then(function (d) {
-    var got = "";
-    if (d.employees.length) {
-      got += '<div class="grp"><h4>Сотрудники</h4>' + table(
-        ["табельный", "ФИО", "должность", { t: "ставка" }, { t: "оклад, ₽" }],
-        d.employees.map(function (x) {
-          return [x.code, x.fio, x.position,
-                  { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
-                  { v: x.salary == null ? null : mo(x.salary), cls: "n" }];
-        }), "") + "</div>";
-    }
-    if (d.contracts.length) {
-      got += '<div class="grp"><h4>Договоры</h4>' + table(
-        ["шифр", "наименование", "ГОЗ", { t: "фонд, ₽" }],
-        d.contracts.map(function (x) {
-          return [x.code, x.name, x.goz,
-                  { v: x.fund == null ? null : mo(x.fund), cls: "n" }];
-        }), "") + "</div>";
-    }
-    if (d.substitutions.length) {
-      got += '<div class="grp"><h4>Правила замещения</h4>' + table(
-        ["должность", "может быть замещена"],
-        d.substitutions.map(function (x) { return [x.position, x.replaced_by]; }),
-        "") + "</div>";
-    }
+    // Карточка одинакова у всех документов: свойства, что внесено в реестр,
+    // предпросмотр. Раньше у договорных документов сюда же дорисовывались
+    // таблицы сотрудников и договоров — те же самые строки, что и в реестре,
+    // только вторым экземпляром: и разнобой, и дублирование. Сколько строк
+    // документ дал, видно здесь, а сами строки — на своей вкладке реестра.
+    var made = [];
+    if (d.employees.length) made.push([d.employees.length, "сотрудник",
+                                       "сотрудника", "сотрудников", "emp"]);
+    if (d.contracts.length) made.push([d.contracts.length, "договор",
+                                       "договора", "договоров", "ctr"]);
+    if (d.substitutions.length) made.push([d.substitutions.length,
+                                           "правило замещения",
+                                           "правила замещения",
+                                           "правил замещения", "sub"]);
+    var got = '<div class="grp"><h4>Внесено в реестр</h4>' +
+      (made.length
+        ? '<div class="made">' + made.map(function (m) {
+            return '<button type="button" class="mtag" data-rtab2="' + m[4] + '">' +
+                   m[0] + " " + px(m[0], m[1], m[2], m[3]) + "</button>";
+          }).join("") + "</div>"
+        : '<div class="none">' + esc(d.summary || "строк реестра нет") + "</div>") +
+      "</div>";
     // Предложения — до подтверждения, поэтому идут первыми и отдельно от
     // того, что уже в реестре: смешать их значило бы стереть разницу между
     // «проверено» и «модель так прочитала».
@@ -1220,8 +1218,8 @@ function openDocument(id) {
         '<button type="button" class="x" aria-label="Закрыть">×</button></header>' +
       '<div class="dbody">' +
         meta([["Вид", d.kind], ["Статус", docStatus(d.state).text],
-              ["Разбор", d.by], ["Формат", d["формат"]],
-              ["Размер", bytes(d.size)], ["Загружен", d.uploaded]]) +
+              ["Формат", d["формат"]], ["Размер", bytes(d.size)],
+              ["Загружен", d.uploaded]]) +
         (d.exists
           ? '<a class="dfile" href="/api/document/' + d.id +
             '/file" target="_blank" rel="noopener">Открыть файл</a>'
@@ -1232,6 +1230,14 @@ function openDocument(id) {
       "</footer>";
 
     back.querySelector(".x").onclick = close;
+
+    back.addEventListener("click", function (e) {
+      var t = e.target.closest("[data-rtab2]");
+      if (!t) return;
+      close();
+      regTab = t.getAttribute("data-rtab2");
+      if (!inRegistry) openRegistry(); else renderRegistry();
+    });
 
     var wider = back.querySelector(".wider");
     wider.onclick = function () {
