@@ -295,8 +295,13 @@ def build(template_path, out_path, data, warn):
                 ws.cell(2, col).value = value
                 taken.append("%s: %s" % (name, value))
         if taken:
-            warn.append("Настройки расчета взяты из загруженного шаблона — %s."
-                        % "; ".join(taken))
+            # В ленту — только то, что решает исход: дефицит и допуск. Полный
+            # перечень штрафов есть на листе «настройки» входного файла.
+            key = [t for t in taken if t.split(":")[0] in ("разрешить дефицит", "допуск трудоёмкости")]
+            rest = len(taken) - len(key)
+            warn.append("Настройки расчета взяты из загруженного шаблона: %s%s."
+                        % ("; ".join(key) or "%d параметров" % len(taken),
+                           (" и еще %d" % rest) if key and rest else ""))
 
     wb.save(out_path)
     return out_path

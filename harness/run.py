@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -228,11 +229,70 @@ def _calibration(rows, only):
     print()
 
 
+def check_roundtrip(case, doc):
+    """Документ по шаблону: реестр → вход решателя → план сходится.
+
+    Реестр берется чистый, в памяти: стенд не должен трогать базу сервиса.
+    Документ читается загрузчиком решателя, раскладывается по реестру тем же
+    кодом, что в приложении, собирается обратно тем же сборщиком и решается
+    тем же исполняемым файлом. Сравнение с решением самого файла — прямое:
+    оба обязаны сойтись.
+    """
+    import subprocess
+    import tempfile
+    import types
+
+    import build_input
+    import intake
+    import main as app_main
+    import reference
+    from db import Base
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    exe = app_main.EXE
+    if not os.path.exists(exe):
+        return SKIP, "решателя нет: %s" % exe
+    ctx = intake._solver_context(doc.path)
+    if ctx is None:
+        return FAIL, "загрузчик решателя не прочитал документ как шаблон"
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(engine)
+    scratch = sessionmaker(bind=engine, autoflush=False, future=True)()
+    passport = {}
+    try:
+        import extract
+        passport = extract.extract(doc.path).get("passport") or {}
+    except Exception:  # noqa: BLE001 — настройки не обязательны
+        pass
+    counts = intake._store_context(scratch, ctx, types.SimpleNamespace(id=doc.id, name=doc.name))
+    fake_case = types.SimpleNamespace(year=ctx.year, passport=json.dumps(passport, ensure_ascii=False))
+    data = app_main._registry_data(scratch, fake_case)
+    tmp = tempfile.mkdtemp(prefix="fot_rt_")
+    src = os.path.join(tmp, "input.xlsx")
+    warn = []
+    build_input.build(reference.TEMPLATE, src, data, warn)
+    out = os.path.join(tmp, "out.xlsx")
+    p = subprocess.run([exe, "solve", "-i", src, "-o", out], capture_output=True,
+                       text=True, timeout=600, cwd=ROOT)
+    orig = subprocess.run([exe, "solve", "-i", doc.path, "-o", os.path.join(tmp, "orig.xlsx")],
+                          capture_output=True, text=True, timeout=600, cwd=ROOT)
+    what = ", ".join("%s %d" % (k, v) for k, v in counts.items() if v)
+    if orig.returncode != 0:
+        return SKIP, "сам файл не решается — сравнивать не с чем (%s)" % what
+    if p.returncode != 0:
+        tail = (p.stderr or p.stdout or "").strip().splitlines()[-1:] or ["—"]
+        return FAIL, "из реестра не решается, хотя сам файл решается: %s (%s)" % (tail[0][:160], what)
+    return OK, "из реестра решается, как и сам файл (%s)" % what
+
+
 def main_():
     ap = argparse.ArgumentParser(description="стенд разбора документов")
     ap.add_argument("--only", help="прогнать только случаи, в имени которых есть подстрока")
     ap.add_argument("--no-verdicts", action="store_true",
                     help="не проверять приговоры экономиста, только случаи из cases.py")
+    ap.add_argument("--no-solve", action="store_true",
+                    help="не гонять решатель на сквозных случаях (solves)")
     args = ap.parse_args()
 
     name, model, why = llm.provider()
@@ -260,6 +320,13 @@ def main_():
             checks = run_case(case, doc, cache)
         except Exception as e:  # noqa: BLE001 — стенд должен дойти до конца
             checks = [(FAIL, "ошибка стенда: %s" % e)]
+        if case.get("solves") and not args.no_solve:
+            doc = by_name.get(case["doc"])
+            if doc is not None and os.path.exists(doc.path):
+                try:
+                    checks.append(check_roundtrip(case, doc))
+                except Exception as exc:  # noqa: BLE001 — сбой стенда тоже результат
+                    checks.append((FAIL, "сквозная проверка упала: %s" % str(exc)[:200]))
         for verdict, text in checks:
             total += 1
             if verdict == FAIL:
