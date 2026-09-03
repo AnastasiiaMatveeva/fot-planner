@@ -511,8 +511,6 @@ function runSources(s) {
     "</summary><ul>" + docs.map(function (d) {
       return "<li>" + esc(d["имя"]) +
         (d["версия"] > 1 ? " · версия " + d["версия"] : "") +
-        (d["отпечаток"] ? ' · <span class="mono" title="SHA-256 ' + esc(d["отпечаток"]) +
-                          '">' + esc(d["отпечаток"].slice(0, 10)) + "…</span>" : "") +
         '<div class="mt">' + esc(Object.keys(d["строк"] || {}).map(function (k) {
           return k + " " + d["строк"][k];
         }).join(", ")) + "</div></li>";
@@ -1420,11 +1418,7 @@ function openDocument(id) {
                  ? d["версия"] + (d["заменяет"] ? ", прежняя от " + d["заменяет"] : "")
                  : null],
               ["Формат", d["формат"]], ["Размер", bytes(d.size)],
-              ["Загружен", d.uploaded],
-              ["Отпечаток", d["отпечаток"]
-                 ? { v: '<span class="mono" title="SHA-256 ' + esc(d["отпечаток"]) +
-                        '">' + esc(d["отпечаток"].slice(0, 16)) + "…</span>" }
-                 : null]]) +
+              ["Загружен", d.uploaded]]) +
         (d.exists
           ? '<a class="dfile" href="/api/document/' + d.id +
             '/file" target="_blank" rel="noopener">Открыть файл</a>'

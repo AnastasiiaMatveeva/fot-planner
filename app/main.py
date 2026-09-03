@@ -717,7 +717,6 @@ def one_document(doc_id: int):
             "by": d.parsed_by, "summary": d.summary, "size": d.size,
             "формат": os.path.splitext(d.path)[1].lower() or "без расширения",
             "версия": d.version or 1,
-            "отпечаток": d.sha256,
             "заменяет": (lambda p: _dt(p.uploaded) if p else None)(
                 db.get(Document, d.supersedes_id) if d.supersedes_id else None),
             "uploaded": _dt(d.uploaded), "case_id": d.case_id,
@@ -1794,8 +1793,9 @@ def _run_sources(db):
     """Что легло в основание расчета: документы и версии агентов.
 
     Документ попадает сюда, если хоть одна строка реестра ссылается на него.
-    У каждого — версия и отпечаток содержимого: по ним через год можно
-    проверить, что план построен на этом файле, а не на исправленном.
+    У каждого — имя, версия и что он дал реестру. Отпечаток содержимого тоже
+    сохраняется в записи прогона, но нигде не показывается: экономисту он
+    ничего не говорит, а служебную сверку сервис делает сам при загрузке.
     """
     rows = {}
     for model, what in ((Employee, "сотрудников"), (Contract, "договоров"),
@@ -1830,9 +1830,9 @@ def _write_sources_sheet(path, sources):
         if "источники" in wb.sheetnames:
             del wb["источники"]
         ws = wb.create_sheet("источники")
-        ws.append(["документ", "версия", "загружен", "отпечаток SHA-256", "строк в реестре"])
+        ws.append(["документ", "версия", "загружен", "строк в реестре"])
         for d in sources["документы"]:
-            ws.append([d["имя"], d["версия"], d["загружен"], d["отпечаток"],
+            ws.append([d["имя"], d["версия"], d["загружен"],
                        ", ".join("%s %d" % (k, v) for k, v in d["строк"].items())])
         ws.append([])
         for a, v in sources["агенты"].items():
