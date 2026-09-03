@@ -1540,22 +1540,41 @@ def run_rules(case_id: int, run_id: int):
     Решатель говорит «OPTIMAL» и перечисляет свои показатели; экономисту нужно
     другое: выполняются ли правила, по которым он живет, и если нет — где.
     """
+    src, out = _run_files(db_run(case_id, run_id))
+    key = (run_id, os.path.getmtime(out))
+    if key not in _RULES_CACHE:
+        import rules as rules_mod
+        _RULES_CACHE[key] = rules_mod.check(src, out)
+    return {"правила": _RULES_CACHE[key]}
+
+
+@app.get("/api/case/{case_id}/run/{run_id}/summary")
+def run_summary(case_id: int, run_id: int):
+    """План года цифрами: бюджет, освоение по месяцам, структура выплат, люди."""
+    src, out = _run_files(db_run(case_id, run_id))
+    key = ("сводка", run_id, os.path.getmtime(out))
+    if key not in _RULES_CACHE:
+        import rules as rules_mod
+        _RULES_CACHE[key] = rules_mod.summary(src, out)
+    return _RULES_CACHE[key]
+
+
+def db_run(case_id: int, run_id: int):
     db = session()
     try:
         run = db.get(Run, run_id)
         if run is None or run.case_id != case_id:
             raise HTTPException(404, "прогон не найден")
-        src, out = run.input_path, run.result_path
+        return run.input_path, run.result_path
     finally:
         db.close()
+
+
+def _run_files(pair):
+    src, out = pair
     if not src or not out or not os.path.exists(src) or not os.path.exists(out):
         raise HTTPException(404, "файлы прогона не сохранены")
-    key = (run_id, os.path.getmtime(out))
-    if key not in _RULES_CACHE:
-        import rules as rules_mod
-        _RULES_CACHE.clear()
-        _RULES_CACHE[key] = rules_mod.check(src, out)
-    return {"правила": _RULES_CACHE[key]}
+    return src, out
 
 
 @app.get("/api/case/{case_id}/run/{run_id}/result")

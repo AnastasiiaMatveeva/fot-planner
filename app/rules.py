@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Ограничения работы экономиста: соблюдены ли они в посчитанном плане.
+"""Ограничения работы экономиста: числа, а не формулировки.
 
-Это не диагностика решателя. Это правила, по которым живет планирование ФОТ,
-записанные словами экономиста, и ответ по каждому: соблюдено, нарушено или
-не применялось в этом плане. Считается независимо — по входному файлу и по
-готовому плану выплат, а не со слов решателя. Если правило нарушено, названы
-строки, где именно.
+По каждому условию считается, насколько план к нему подошел: факт, предел,
+запас и доля предела. Экономисту нужно не «соблюдено», а «использовано 92 %
+предела, узкое место — Иванов, июнь: осталось 13 000 ₽». Тогда видно не
+только то, что план допустим, но и где он держится на волоске.
 
-Порядок разделов повторяет порядок, в котором экономист проверяет план:
-сначала люди получили свое, потом деньги договоров сошлись, потом лимиты,
-потом ставки и трудоемкость.
+Считается независимо от решателя: по входному файлу и по готовому плану
+выплат. Условия «нарушать нельзя» — жесткие: нарушение такого условия значит
+ошибку в данных или в сервисе, а не выбор между вариантами.
 """
 from __future__ import annotations
 
@@ -36,11 +35,15 @@ MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май"
 RU_MONTH = {m: i + 1 for i, m in enumerate(MONTHS)}
 SHORT = ["янв", "фев", "мар", "апр", "май", "июн",
          "июл", "авг", "сен", "окт", "ноя", "дек"]
+
+#: Тип условия. «Нарушать нельзя» — жесткое правило. «С допуском» —
+#: отклонение возможно и штрафуется целевой функцией. «Показатель» — не
+#: условие, а цифра, на которую смотрят.
+HARD, SOFT, INFO = "нарушать нельзя", "с допуском", "показатель"
 #: С точностью до рубля: копейки в плане ФОТ ничего не решают.
 EPS = 1.0
-#: Сколько нарушений показывать: список нужен, чтобы пойти и посмотреть, а не
-#: чтобы прокручивать его целиком.
-SHOW = 12
+#: Сколько строк показывать в таблице узких мест.
+SHOW = 8
 
 
 def _num(v):
@@ -76,7 +79,6 @@ def _month(v):
 
 
 def _kind_of(raw):
-    """Вид выплаты по названию из плана."""
     s = str(raw or "").strip().lower()
     if s.startswith("оклад"):
         return "оклад"
@@ -88,7 +90,7 @@ def _kind_of(raw):
     return None
 
 
-def _rows(ws):
+def _rows_of(ws):
     hdr = [str(ws.cell(1, c).value or "").strip() for c in range(1, ws.max_column + 1)]
     for r in range(2, ws.max_row + 1):
         row = {hdr[c - 1]: ws.cell(r, c).value for c in range(1, ws.max_column + 1)
@@ -103,20 +105,21 @@ def _read_input(path):
 
     wb = load_workbook(path, data_only=True)
     data = {"employees": [], "contracts": {}, "limits": {}, "inflow": {},
-            "labor": [], "secret": [], "settings": {}}
-    for row in _rows(wb["сотрудники"]):
+            "labor": [], "settings": {}, "year": None}
+    for row in _rows_of(wb["сотрудники"]):
         code = row.get("код строки")
         if not code:
             continue
         data["employees"].append({
             "code": str(code), "fio": row.get("фио") or str(code),
             "position": str(row.get("должность") or ""),
+            "department": str(row.get("подразделение") or ""),
             "rate": _num(row.get("ставка")) or 1.0,
             "salary": _num(row.get("зарплата")) or 0.0,
             "from": _month(row.get("дата начала")) or 1,
             "to": _month(row.get("дата окончания")) or 12,
         })
-    for row in _rows(wb["договоры"]):
+    for row in _rows_of(wb["договоры"]):
         code = row.get("код")
         if not code:
             continue
@@ -128,14 +131,13 @@ def _read_input(path):
             "kinds": {k: _yes(row.get(col)) for k, col in KINDS.items()},
         }
     if "лимиты_по_должностям" in wb.sheetnames:
-        for row in _rows(wb["лимиты_по_должностям"]):
+        for row in _rows_of(wb["лимиты_по_должностям"]):
             pos = row.get("должность")
-            if not pos:
-                continue
-            data["limits"][normalize_position(str(pos))] = {
-                "оклад": _num(row.get("оклад")), "П2556": _num(row.get("П2556")),
-                "П4": _num(row.get("П4")), "БЭП": _num(row.get("БЭП")),
-            }
+            if pos:
+                data["limits"][normalize_position(str(pos))] = {
+                    "оклад": _num(row.get("оклад")), "П2556": _num(row.get("П2556")),
+                    "П4": _num(row.get("П4")), "БЭП": _num(row.get("БЭП")),
+                }
     ws = wb["фот_по_месяцам"]
     for r in range(2, ws.max_row + 1):
         code = ws.cell(r, 1).value
@@ -143,7 +145,7 @@ def _read_input(path):
             data["inflow"][str(code)] = [_num(ws.cell(r, c).value) or 0.0
                                          for c in range(2, 14)]
     if "трудоемкость_по_договорам" in wb.sheetnames:
-        for row in _rows(wb["трудоемкость_по_договорам"]):
+        for row in _rows_of(wb["трудоемкость_по_договорам"]):
             if row.get("договор"):
                 data["labor"].append({
                     "contract": str(row["договор"]),
@@ -151,13 +153,10 @@ def _read_input(path):
                     "person_months": _num(row.get("трудоемкость")),
                     "avg": _num(row.get("средняя стоимость выполнения работ в месяц")),
                 })
-    if "120_надбавка" in wb.sheetnames:
-        for row in _rows(wb["120_надбавка"]):
-            if row.get("сотрудник"):
-                data["secret"].append(str(row["сотрудник"]))
     if "настройки" in wb.sheetnames:
-        for row in _rows(wb["настройки"]):
-            data["settings"] = {k: v for k, v in row.items()}
+        for row in _rows_of(wb["настройки"]):
+            data["settings"] = dict(row)
+            data["year"] = _num(row.get("год"))
             break
     data["norm"] = normalize_position
     return data
@@ -167,8 +166,8 @@ def _read_result(path):
     from openpyxl import load_workbook
 
     wb = load_workbook(path, data_only=True)
-    out = {"plan": [], "cash": {}, "labor_control": []}
-    for row in _rows(wb["План выплат"]):
+    out = {"plan": [], "labor_control": []}
+    for row in _rows_of(wb["План выплат"]):
         code = row.get("код строки")
         month = RU_MONTH.get(str(row.get("месяц") or "").strip())
         amount = _num(row.get("сумма"))
@@ -180,29 +179,13 @@ def _read_result(path):
             "month": month, "contract": str(row.get("договор") or ""),
             "kind": _kind_of(row.get("вид выплаты")), "amount": amount,
         })
-    if "ФОТ по договорам" in wb.sheetnames:
-        for row in _rows(wb["ФОТ по договорам"]):
-            metric = str(row.get("показатель") or "")
-            code = row.get("договор")
-            if not code or metric not in ("Поступление", "Выплаты", "Остаток на конец"):
-                continue
-            out["cash"].setdefault(str(code), {})[metric] = [
-                _num(row.get(m)) or 0.0 for m in
-                ["Янв", "Фев", "Мар", "Апр", "Май", "Июн",
-                 "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]]
     if "Контроль трудоёмкости" in wb.sheetnames:
-        # Лист устроен блоками: строка «ДОГОВОР: …», шапка «Строка / группа»,
-        # затем строки трудоемкости, затем помесячная развертка под шапкой
-        # «Показатель». Правила — только те строки, что идут сразу под первой
-        # шапкой: помесячная развертка это те же числа в разрезе месяцев.
         ws = wb["Контроль трудоёмкости"]
         current, in_rules = None, False
         for r in range(1, ws.max_row + 1):
-            first = ws.cell(r, 1).value
-            text = str(first or "").strip()
+            text = str(ws.cell(r, 1).value or "").strip()
             if text.startswith("ДОГОВОР:"):
-                current = text.replace("ДОГОВОР:", "").strip()
-                in_rules = False
+                current, in_rules = text.replace("ДОГОВОР:", "").strip(), False
                 continue
             if text == "Строка / группа":
                 in_rules = True
@@ -210,16 +193,14 @@ def _read_result(path):
             if text == "Показатель" or not text:
                 in_rules = False
                 continue
-            if not in_rules:
-                continue
-            marks = [str(ws.cell(r, c).value or "").strip() for c in (11, 12, 13)]
-            out["labor_control"].append({
-                "contract": current or "", "row": text,
-                "plan_pm": _num(ws.cell(r, 2).value), "fact_pm": _num(ws.cell(r, 3).value),
-                "plan_sum": _num(ws.cell(r, 5).value), "fact_sum": _num(ws.cell(r, 6).value),
-                "marks": marks, "status": str(ws.cell(r, 14).value or ""),
-                "note": str(ws.cell(r, 15).value or ""),
-            })
+            if in_rules:
+                out["labor_control"].append({
+                    "contract": current or "", "row": text,
+                    "plan_pm": _num(ws.cell(r, 2).value),
+                    "fact_pm": _num(ws.cell(r, 3).value),
+                    "plan_sum": _num(ws.cell(r, 5).value),
+                    "fact_sum": _num(ws.cell(r, 6).value),
+                })
     return out
 
 
@@ -234,338 +215,497 @@ def _sum(rows, kinds=None):
     return sum(p["amount"] for p in rows if kinds is None or p["kind"] in kinds)
 
 
-def _rule(name, meaning, where, state="соблюдено", fact="", broken=None):
-    return {"правило": name, "смысл": meaning, "где": where, "состояние": state,
-            "факт": fact, "нарушения": (broken or [])[:SHOW],
-            "всего нарушений": len(broken or [])}
+def _mo(v):
+    if v is None:
+        return "—"
+    v = float(v)
+    if abs(v) < 100 and abs(v - round(v)) > 0.001:
+        s = ("%.2f" % abs(v)).rstrip("0").rstrip(".").replace(".", ",")
+    else:
+        s = "{:,.0f}".format(round(abs(v))).replace(",", " ")
+    return ("−" if v < -0.0001 else "") + s
 
 
 def _mark(out, section):
-    """Отнести к разделу все правила, у которых он еще не проставлен."""
     for r in out:
         r.setdefault("раздел", section)
 
 
-def _mo(v):
-    return "{:,.0f}".format(round(v)).replace(",", " ")
+# ── сборка условия ───────────────────────────────────────────────────
+def _limit_rule(name, meaning, where, unit, rows, kind=HARD, mode="не больше",
+                empty=""):
+    """Условие с числовым пределом: факт против предела в каждом случае.
+
+    ``rows`` — [{"объект", "факт", "предел"}]. Считается доля предела, запас
+    и самые узкие места: не только «соблюдено», но и насколько близко план
+    подошел к границе и что сломается от первой же правки.
+    """
+    checked = []
+    for r in rows:
+        limit, fact = r.get("предел"), r.get("факт")
+        if limit in (None, 0) or fact is None:
+            continue
+        over = (fact > limit + EPS) if mode == "не больше" else abs(fact - limit) > EPS
+        checked.append({"объект": r["объект"], "факт": round(fact, 2),
+                        "предел": round(limit, 2), "доля": round(fact / limit, 4),
+                        "запас": round(limit - fact, 2), "нарушено": over})
+    if not checked:
+        return {"правило": name, "смысл": meaning, "где": where, "тип": kind,
+                "состояние": "не применялось", "единица": unit, "проверено": 0,
+                "факт": empty, "строки": [], "нарушений": 0, "предел_общий": None}
+    broken = [c for c in checked if c["нарушено"]]
+    tight = sorted(checked, key=lambda c: -c["доля"])
+    worst = tight[0]
+    if mode == "не больше":
+        fact_text = ("использовано %d %% предела; узкое место — %s: запас %s %s"
+                     % (round(worst["доля"] * 100), worst["объект"],
+                        _mo(worst["запас"]), unit))
+    else:
+        big = max(checked, key=lambda c: abs(c["запас"]))
+        fact_text = ("расхождений %d из %d; наибольшее — %s: %s %s"
+                     % (len(broken), len(checked), big["объект"],
+                        _mo(big["запас"]), unit))
+    # Что показывать в таблице. При равенстве интересны только расхождения:
+    # тридцать шесть одинаковых строк «160 000 из 160 000, запас 0» — шум.
+    # При пределе интересны самые узкие места, но одинаковые случаи
+    # сворачиваются в один со счетчиком.
+    candidates = broken if mode == "равно" else broken + [c for c in tight
+                                                          if not c["нарушено"]]
+    shown, seen = [], {}
+    for c in candidates:
+        key = (c["факт"], c["предел"])
+        if key in seen:
+            seen[key]["таких же"] = seen[key].get("таких же", 1) + 1
+            continue
+        seen[key] = c
+        shown.append(c)
+    limits = {c["предел"] for c in checked}
+    return {"правило": name, "смысл": meaning, "где": where, "тип": kind,
+            "состояние": "нарушено" if broken else "соблюдено", "единица": unit,
+            "проверено": len(checked), "факт": fact_text,
+            "использовано": round(worst["доля"], 4),
+            "подпись предела": "нужно" if mode == "равно" else "предел",
+            "предел_общий": checked[0]["предел"] if len(limits) == 1 else None,
+            "строки": shown[:SHOW], "нарушений": len(broken)}
+
+
+def _count_rule(name, meaning, where, checked, bad, kind=HARD, empty="", unit=""):
+    """Условие без числового предела: сошлось или нет и в скольких случаях."""
+    if not checked:
+        return {"правило": name, "смысл": meaning, "где": where, "тип": kind,
+                "состояние": "не применялось", "единица": unit, "проверено": 0,
+                "факт": empty, "строки": [], "нарушений": 0, "предел_общий": None}
+    return {"правило": name, "смысл": meaning, "где": where, "тип": kind,
+            "состояние": "нарушено" if bad else "соблюдено", "единица": unit,
+            "проверено": checked, "нарушений": len(bad), "предел_общий": None,
+            "факт": "проверено случаев: %d, нарушений %d" % (checked, len(bad)),
+            "строки": bad[:SHOW]}
 
 
 def check(input_path, result_path):
-    """Все правила и их состояние в этом плане."""
+    """Все условия и их состояние в этом плане, в числах."""
     inp = _read_input(input_path)
     res = _read_result(result_path)
-    plan, emps = res["plan"], {e["code"]: e for e in inp["employees"]}
-    ctr = inp["contracts"]
-    norm = inp["norm"]
+    plan = res["plan"]
+    emps = {e["code"]: e for e in inp["employees"]}
+    ctr, norm, lim = inp["contracts"], inp["norm"], inp["limits"]
+    by_em = _by(plan, "emp", "month")
     out = []
 
-    # ── зарплата и виды выплат ───────────────────────────────────────
-    broken = []
-    by_em = _by(plan, "emp", "month")
+    def base_of(position):
+        return (lim.get(norm(position)) or {}).get("оклад")
+
+    def rate_of(rows):
+        """Ставка по окладу: оклад, деленный на оклад должности."""
+        base = base_of(rows[0]["position"]) if rows else None
+        return (_sum(rows, {"оклад"}) / base) if base else None
+
+    # ── зарплата и выплаты ───────────────────────────────────────────
+    rows = []
     for e in inp["employees"]:
         for m in range(e["from"], e["to"] + 1):
-            paid = _sum(by_em.get((e["code"], m), []))
-            if abs(paid - e["salary"]) > EPS:
-                broken.append("%s, %s: выплачено %s ₽ вместо %s ₽"
-                              % (e["fio"], SHORT[m - 1], _mo(paid), _mo(e["salary"])))
-    out.append(_rule(
-        "Человек получает всю зарплату каждый месяц",
-        "Месячная сумма из штатного расписания должна быть закрыта целиком: "
-        "окладом и надбавками. Недоплата возможна только если дефицит разрешен "
-        "в настройках.",
-        "План выплат", "нарушено" if broken else "соблюдено",
-        "проверено строк-месяцев: %d" % sum(e["to"] - e["from"] + 1 for e in inp["employees"]),
-        broken))
+            if e["salary"]:
+                rows.append({"объект": "%s, %s" % (e["fio"], SHORT[m - 1]),
+                             "факт": _sum(by_em.get((e["code"], m), [])),
+                             "предел": e["salary"]})
+    out.append(_limit_rule(
+        "Человек получает всю месячную зарплату",
+        "Сумма из штатного расписания закрывается целиком — окладом и "
+        "надбавками. Недоплата возможна, только если дефицит разрешен в "
+        "настройках расчета.",
+        "План выплат", "₽", rows, mode="равно"))
 
-    broken, checked = [], 0
-    for (code, m, c), rows in _by(plan, "emp", "month", "contract").items():
-        oklad = _sum(rows, {"оклад"})
-        if not oklad:
-            continue
-        base = (inp["limits"].get(norm(rows[0]["position"])) or {}).get("оклад")
-        if not base:
+    checked, bad = 0, []
+    for (code, m, c), rr in _by(plan, "emp", "month", "contract").items():
+        oklad, base = _sum(rr, {"оклад"}), base_of(rr[0]["position"])
+        if not oklad or not base:
             continue
         checked += 1
         rate = oklad / base
-        # Шаг ставки — четверть. Оклад на договоре обязан быть окладом
-        # должности, умноженным на открытую ставку, а не произвольной суммой.
         if abs(rate * 4 - round(rate * 4)) > 0.02:
-            broken.append("%s, %s, %s: оклад %s ₽ — это %s ставки, а ставка "
-                          "кратна четверти"
-                          % (rows[0]["fio"], SHORT[m - 1], c, _mo(oklad), round(rate, 3)))
-    out.append(_rule(
+            bad.append({"объект": "%s, %s, %s" % (rr[0]["fio"], SHORT[m - 1], c),
+                        "что": "оклад %s ₽ — это %s ставки, а шаг ставки четверть"
+                               % (_mo(oklad), round(rate, 3))})
+    out.append(_count_rule(
         "Оклад идет по ставке, а не произвольной суммой",
-        "Оклад на договоре — это оклад должности, умноженный на открытую там "
-        "ставку. Ставка кратна четверти, уменьшать оклад «для удобства» нельзя: "
+        "Оклад на договоре — оклад должности, умноженный на открытую там "
+        "ставку. Шаг ставки — четверть; уменьшать оклад «для удобства» нельзя, "
         "остаток зарплаты добирается надбавками.",
-        "Реестр → Справочник должностей",
-        "нарушено" if broken else ("соблюдено" if checked else "не применялось"),
-        "проверено назначений: %d" % checked if checked
-        else "в справочнике нет окладов по этим должностям", broken))
+        "Реестр → Справочник должностей", checked, bad,
+        empty="в справочнике нет окладов по этим должностям"))
 
-    broken = []
-    for (code, m), rows in by_em.items():
-        salary_ctr = {p["contract"] for p in rows if p["kind"] == "оклад"}
-        for p in rows:
-            if p["kind"] == "122" and salary_ctr and p["contract"] not in salary_ctr:
-                broken.append("%s, %s: 122 на %s, оклад на %s"
-                              % (p["fio"], SHORT[m - 1], p["contract"],
-                                 ", ".join(sorted(salary_ctr))))
-    out.append(_rule(
+    checked, bad = 0, []
+    for (code, m), rr in by_em.items():
+        salary_ctr = {p["contract"] for p in rr if p["kind"] == "оклад"}
+        for p in rr:
+            if p["kind"] != "122":
+                continue
+            checked += 1
+            if salary_ctr and p["contract"] not in salary_ctr:
+                bad.append({"объект": "%s, %s" % (p["fio"], SHORT[m - 1]),
+                            "что": "122 на %s, оклад на %s"
+                                   % (p["contract"], ", ".join(sorted(salary_ctr)))})
+    out.append(_count_rule(
         "Надбавка 122 — с того же договора, что и оклад",
         "За качество платят там же, где сидит оклад этой ставки.",
-        "План выплат", "нарушено" if broken else "соблюдено", "", broken))
+        "План выплат", checked, bad, empty="122 в этом плане не назначалась"))
 
-    broken = []
+    bad = []
     for p in plan:
         c = ctr.get(p["contract"])
         if c and p["kind"] and not c["kinds"].get(p["kind"], False):
-            broken.append("%s, %s: %s с договора %s, где этот вид запрещен"
-                          % (p["fio"], SHORT[p["month"] - 1], p["kind"], p["contract"]))
-    out.append(_rule(
+            bad.append({"объект": "%s, %s, %s" % (p["fio"], SHORT[p["month"] - 1],
+                                                  p["contract"]),
+                        "что": "вид «%s» договором запрещен" % p["kind"]})
+    out.append(_count_rule(
         "Платим только теми видами, которые разрешены договором",
         "Договор перечисляет, что с него можно платить: оклад, 120, 122, 124, "
         "152, стимулирующую приказом. Остальное с него платить нельзя.",
-        "Реестр → Договоры", "нарушено" if broken else "соблюдено", "", broken))
+        "Реестр → Договоры", len(plan), bad))
 
-    broken = []
-    for (code, m), rows in by_em.items():
-        kinds = {p["kind"] for p in rows}
-        if "152" in kinds and (kinds - {"оклад", "152"}):
-            broken.append("%s, %s: вместе со 152 назначены %s"
-                          % (emps.get(code, {}).get("fio", code), SHORT[m - 1],
-                             ", ".join(sorted(kinds - {"оклад", "152"}))))
-    used152 = any(p["kind"] == "152" for p in plan)
-    out.append(_rule(
+    checked, bad = 0, []
+    for (code, m), rr in by_em.items():
+        kinds = {p["kind"] for p in rr}
+        if "152" not in kinds:
+            continue
+        checked += 1
+        extra = kinds - {"оклад", "152"}
+        if extra:
+            bad.append({"объект": "%s, %s" % (rr[0]["fio"], SHORT[m - 1]),
+                        "что": "вместе со 152 назначены %s" % ", ".join(sorted(extra))})
+    out.append(_count_rule(
         "Режим «оклад плюс 152»",
-        "Если в месяце строке сотрудника назначена 152 за дополнительную "
+        "Если строке сотрудника в месяце назначена 152 за дополнительную "
         "работу, других надбавок и приказа в этом месяце у нее нет.",
-        "План выплат",
-        ("нарушено" if broken else "соблюдено") if used152 else "не применялось",
-        "" if used152 else "152 в этом плане не используется", broken))
+        "План выплат", checked, bad, empty="152 в этом плане не используется"))
     _mark(out, "Зарплата и выплаты")
 
     # ── договоры и деньги ────────────────────────────────────────────
-    broken = []
+    bad, seen = [], set()
     for p in plan:
         c = ctr.get(p["contract"])
         if c and not (c["from"] <= p["month"] <= c["to"]):
-            broken.append("%s: выплата в %s, договор действует %s—%s"
-                          % (p["contract"], SHORT[p["month"] - 1],
-                             SHORT[c["from"] - 1], SHORT[c["to"] - 1]))
-    out.append(_rule(
+            key = "%s, %s" % (p["contract"], SHORT[p["month"] - 1])
+            if key not in seen:
+                seen.add(key)
+                bad.append({"объект": key,
+                            "что": "договор действует %s—%s"
+                                   % (SHORT[c["from"] - 1], SHORT[c["to"] - 1])})
+    out.append(_count_rule(
         "Договор платит только в свои сроки",
         "Ни рубля до начала и после окончания договора.",
-        "Реестр → Договоры", "нарушено" if broken else "соблюдено", "",
-        sorted(set(broken))))
+        "Реестр → Договоры", len(plan), bad))
 
-    broken = []
-    for code, c in ctr.items():
+    cash_rows, series, worst = [], [], None
+    for code in sorted(ctr):
         got = inp["inflow"].get(code) or [0.0] * 12
         paid = [0.0] * 12
         for p in plan:
             if p["contract"] == code:
                 paid[p["month"] - 1] += p["amount"]
-        balance = 0.0
+        if not any(got) and not any(paid):
+            continue
+        bal, points, low, low_m = 0.0, [], None, 1
         for m in range(12):
-            balance += got[m] - paid[m]
-            if balance < -EPS:
-                broken.append("%s, %s: потрачено на %s ₽ больше, чем поступило"
-                              % (code, SHORT[m], _mo(-balance)))
-                break
-    out.append(_rule(
-        "Деньги нельзя потратить раньше, чем они пришли",
-        "Касса договора считается помесячно, остаток переносится только "
-        "вперед. Минуса на договоре быть не может.",
-        "Освоение", "нарушено" if broken else "соблюдено", "", broken))
+            bal += got[m] - paid[m]
+            points.append(round(bal, 2))
+            if low is None or bal < low:
+                low, low_m = bal, m + 1
+        series.append({"имя": code, "точки": points})
+        # Три графы «факт 0, предел 0, запас 0» ничего не говорят: у кассы
+        # интересен сам остаток и месяц, когда он был самым низким.
+        cash_rows.append({"объект": "%s, %s" % (code, SHORT[low_m - 1]),
+                          "что": ("остаток %s ₽ — самый низкий за год"
+                                  % _mo(low)) if low >= -EPS else
+                                 ("минус %s ₽ — потрачено больше, чем поступило"
+                                  % _mo(-low)),
+                          "низ": round(low, 2), "нарушено": low < -EPS})
+        if worst is None or low < worst["низ"]:
+            worst = cash_rows[-1]
+    cash = {
+        "правило": "Деньги нельзя потратить раньше, чем они пришли",
+        "смысл": "Касса договора считается помесячно, неизрасходованный "
+                 "остаток переносится только вперед. Минуса на договоре быть "
+                 "не может.",
+        "где": "Освоение", "тип": HARD, "единица": "₽", "предел_общий": 0.0,
+        "проверено": len(cash_rows),
+        "состояние": ("не применялось" if not cash_rows else
+                      ("нарушено" if any(r["нарушено"] for r in cash_rows) else "соблюдено")),
+        "нарушений": sum(1 for r in cash_rows if r["нарушено"]),
+        "факт": ("самый низкий остаток за год — %s: %s ₽" % (worst["объект"], _mo(worst["низ"]))
+                 if worst else "поступлений и выплат нет"),
+        "строки": sorted(cash_rows, key=lambda r: r["низ"])[:SHOW],
+        "график": {"вид": "месяцы", "подпись": "остаток на конец месяца, ₽",
+                   "ряды": series[:6], "линия": 0.0},
+    }
+    out.append(cash)
 
-    broken, unspent = [], []
-    for code, c in ctr.items():
-        paid = sum(p["amount"] for p in plan if p["contract"] == code)
-        if c["fot"] and paid > c["fot"] + EPS:
-            broken.append("%s: выплачено %s ₽ при ФОТ %s ₽"
-                          % (code, _mo(paid), _mo(c["fot"])))
-        elif c["fot"] and c["fot"] - paid > EPS:
-            unspent.append("%s: не освоено %s ₽ из %s ₽"
-                           % (code, _mo(c["fot"] - paid), _mo(c["fot"])))
-    out.append(_rule(
+    rows = [{"объект": code, "факт": sum(p["amount"] for p in plan if p["contract"] == code),
+             "предел": c["fot"]} for code, c in sorted(ctr.items()) if c["fot"]]
+    out.append(_limit_rule(
         "Выплаты не превышают ФОТ договора",
         "Фонд оплаты труда договора — верхняя граница всех выплат с него за год.",
-        "Реестр → Договоры", "нарушено" if broken else "соблюдено", "", broken))
-    out.append(_rule(
+        "Реестр → Договоры", "₽", rows))
+
+    spend = _limit_rule(
         "ФОТ договоров освоен",
         "Неосвоенный остаток расчет не ломает, но это деньги, которые остались "
         "на договоре к концу года.",
-        "Освоение", "внимание" if unspent else "соблюдено",
-        "не освоено договоров: %d" % len(unspent) if unspent else "освоено полностью",
-        unspent))
+        "Освоение", "₽", rows, kind=INFO)
+    if spend["состояние"] != "не применялось":
+        left = [r for r in spend["строки"] if r["запас"] > EPS]
+        fot = sum(r["предел"] for r in rows)
+        paid = sum(r["факт"] for r in rows)
+        spend["состояние"] = "внимание" if left else "соблюдено"
+        spend["использовано"] = round(paid / fot, 4) if fot else None
+        spend["факт"] = ("освоено %s ₽ из %s ₽ — %d %%; не освоено %s ₽"
+                         % (_mo(paid), _mo(fot), round(100 * paid / fot) if fot else 0,
+                            _mo(fot - paid)))
+        spend["строки"] = sorted(spend["строки"], key=lambda r: -r["запас"])[:SHOW]
+    out.append(spend)
     _mark(out, "Договоры и деньги")
 
-    # ── лимиты ───────────────────────────────────────────────────────
-    def rate_of(rows):
-        """Ставка на договоре: оклад, деленный на оклад должности по справочнику."""
-        oklad = _sum(rows, {"оклад"})
-        lim = inp["limits"].get(norm(rows[0]["position"])) if rows else None
-        base = (lim or {}).get("оклад")
-        return (oklad / base) if base else None
-
-    broken, checked = [], 0
-    for (code, m, c), rows in _by(plan, "emp", "month", "contract").items():
-        lim = inp["limits"].get(norm(rows[0]["position"])) or {}
-        p2556 = lim.get("П2556")
-        if not p2556:
-            continue
-        rate = rate_of(rows)
-        if rate is None:
-            continue
-        checked += 1
-        staff = _sum(rows, {"оклад", "122"})
-        if staff > p2556 * rate + EPS:
-            broken.append("%s, %s, %s: оклад и 122 дают %s ₽ при пределе %s ₽ на "
-                          "ставку %s" % (rows[0]["fio"], SHORT[m - 1], c, _mo(staff),
-                                         _mo(p2556 * rate), round(rate, 2)))
-    out.append(_rule(
+    # ── лимиты по должностям ─────────────────────────────────────────
+    rows = []
+    for (code, m, c), rr in _by(plan, "emp", "month", "contract").items():
+        p2556 = (lim.get(norm(rr[0]["position"])) or {}).get("П2556")
+        rate = rate_of(rr)
+        if p2556 and rate:
+            rows.append({"объект": "%s, %s, %s" % (rr[0]["fio"], SHORT[m - 1], c),
+                         "факт": _sum(rr, {"оклад", "122"}), "предел": p2556 * rate})
+    out.append(_limit_rule(
         "П2556: оклад и 122 не выше предела по должности",
         "Приказ 2556 задает максимум штатной части на полную ставку по каждой "
         "должности. На доле ставки предел уменьшается пропорционально.",
-        "Реестр → Справочник должностей",
-        "нарушено" if broken else ("соблюдено" if checked else "не применялось"),
-        "проверено назначений: %d" % checked if checked
-        else "в справочнике нет П2556 по этим должностям", broken))
+        "Реестр → Справочник должностей", "₽", rows,
+        empty="в справочнике нет П2556 по этим должностям"))
 
-    broken, goz_months = [], 0
-    for (c, m), rows in _by(plan, "contract", "month").items():
+    rows, series = [], {}
+    for (c, m), rr in _by(plan, "contract", "month").items():
         contract = ctr.get(c)
         if not contract or not contract["goz"]:
             continue
         beps, staff, rates = [], 0.0, 0.0
-        for (code,), er in _by(rows, "emp").items():
-            lim = inp["limits"].get(norm(er[0]["position"])) or {}
-            if lim.get("БЭП"):
-                beps.append(lim["БЭП"])
+        for (code,), er in _by(rr, "emp").items():
+            b = (lim.get(norm(er[0]["position"])) or {}).get("БЭП")
+            if b:
+                beps.append(b)
             r = rate_of(er)
             if r:
                 rates += r
             staff += _sum(er, {"оклад", "122"})
         if not beps or not rates:
             continue
-        goz_months += 1
-        limit = min(beps) * rates
-        if staff > limit + EPS:
-            broken.append("%s, %s: средняя штатная часть %s ₽ на ставку при БЭП %s ₽"
-                          % (c, SHORT[m - 1], _mo(staff / rates), _mo(min(beps))))
-    out.append(_rule(
+        rows.append({"объект": "%s, %s" % (c, SHORT[m - 1]),
+                     "факт": staff / rates, "предел": min(beps)})
+        series.setdefault(c, [None] * 12)[m - 1] = round(staff / rates, 2)
+    bep = _limit_rule(
         "БЭП: средняя зарплата по ГОЗ-договору в пределах базовой",
         "На гособоронзаказе ограничена не отдельная зарплата, а средняя по "
-        "договору за месяц: сумма оклада и 122 делится на сумму ставок.",
-        "Реестр → Справочник должностей",
-        "нарушено" if broken else ("соблюдено" if goz_months else "не применялось"),
-        "проверено договоро-месяцев: %d" % goz_months if goz_months
-        else "ГОЗ-договоров в плане нет", broken))
+        "договору за месяц: сумма оклада и 122, деленная на сумму ставок.",
+        "Реестр → Справочник должностей", "₽", rows,
+        empty="ГОЗ-договоров в плане нет")
+    if series:
+        bep["график"] = {"вид": "месяцы",
+                         "подпись": "средняя штатная часть на ставку, ₽",
+                         "ряды": [{"имя": k, "точки": v} for k, v in list(series.items())[:6]],
+                         "линия": min(r["предел"] for r in rows) if rows else None}
+    out.append(bep)
 
-    broken, p4_cases = [], 0
-    for (code, m), rows in by_em.items():
-        if not any(p["kind"] == "124" for p in rows):
+    rows = []
+    for (code, m), rr in by_em.items():
+        if not any(p["kind"] == "124" for p in rr):
             continue
-        lim = inp["limits"].get(norm(rows[0]["position"])) or {}
-        if not lim.get("П4"):
-            continue
-        rate = sum(filter(None, (rate_of(r) for (_, ), r in _by(rows, "contract").items())))
-        if not rate:
-            continue
-        p4_cases += 1
-        staff = _sum(rows, {"оклад", "122", "124"})
-        if staff > lim["П4"] * rate + EPS:
-            broken.append("%s, %s: оклад, 122 и 124 дают %s ₽ при пределе П4 %s ₽"
-                          % (rows[0]["fio"], SHORT[m - 1], _mo(staff),
-                             _mo(lim["П4"] * rate)))
-    out.append(_rule(
+        p4 = (lim.get(norm(rr[0]["position"])) or {}).get("П4")
+        rate = sum(filter(None, (rate_of(cr) for (_,), cr in _by(rr, "contract").items())))
+        if p4 and rate:
+            rows.append({"объект": "%s, %s" % (rr[0]["fio"], SHORT[m - 1]),
+                         "факт": _sum(rr, {"оклад", "122", "124"}), "предел": p4 * rate})
+    out.append(_limit_rule(
         "П4 при надбавке за интенсивность",
         "Если сотруднику назначена 124, включается предел П4: он смотрит "
         "оклад, 122 и 124 этой строки за месяц целиком, по всем договорам.",
-        "Реестр → Справочник должностей",
-        "нарушено" if broken else ("соблюдено" if p4_cases else "не применялось"),
-        "проверено случаев: %d" % p4_cases if p4_cases
-        else "надбавка 124 в этом плане не назначалась", broken))
+        "Реестр → Справочник должностей", "₽", rows,
+        empty="надбавка 124 в этом плане не назначалась"))
     _mark(out, "Лимиты по должностям")
 
     # ── ставки ───────────────────────────────────────────────────────
-    broken, extra = [], 0
-    for (code, m), rows in by_em.items():
-        total = 0.0
-        for (c,), cr in _by(rows, "contract").items():
-            r = rate_of(cr)
-            if r:
-                total += r
+    rows, extra = [], []
+    for (code, m), rr in by_em.items():
+        total = sum(filter(None, (rate_of(cr) for (_,), cr in _by(rr, "contract").items())))
         if not total:
             continue
-        staff_rate = emps.get(code, {}).get("rate") or 1.0
-        if total > staff_rate + 0.01:
-            extra += 1
-        if total > 1.5 + 0.01:
-            broken.append("%s, %s: суммарная ставка %s"
-                          % (rows[0]["fio"], SHORT[m - 1], round(total, 2)))
-        elif total - staff_rate > 0.5 + 0.01:
-            broken.append("%s, %s: по совместительству открыто %s сверх штатной"
-                          % (rows[0]["fio"], SHORT[m - 1], round(total - staff_rate, 2)))
-    out.append(_rule(
-        "Ставки: всего не больше 1,5, по совместительству — не больше 0,5",
+        staff = emps.get(code, {}).get("rate") or 1.0
+        rows.append({"объект": "%s, %s" % (rr[0]["fio"], SHORT[m - 1]),
+                     "факт": total, "предел": 1.5})
+        if total - staff > 0.01:
+            extra.append({"объект": "%s, %s" % (rr[0]["fio"], SHORT[m - 1]),
+                          "факт": total - staff, "предел": 0.5})
+    out.append(_limit_rule(
+        "Суммарная ставка — не больше 1,5",
         "Штатная ставка сохраняется, сверх нее сервис может открыть "
         "совместительство. Обычному сотруднику — до полутора ставок в сумме.",
-        "План выплат", "нарушено" if broken else "соблюдено",
-        "открыто совместительств: %d" % extra if extra
-        else "совместительство не открывалось", broken))
+        "План выплат", "ставки", rows))
+    out.append(_limit_rule(
+        "Совместительство — не больше 0,5 ставки",
+        "Сверх штатной ставки сотруднику можно открыть половину ставки, и "
+        "только по должности, которая ему разрешена правилами замещения.",
+        "Реестр → Правила замещения", "ставки", extra,
+        empty="совместительство в этом плане не открывалось"))
     _mark(out, "Ставки и совместительство")
 
     # ── трудоемкость ─────────────────────────────────────────────────
-    broken = []
+    tol = _num(inp["settings"].get("допуск трудоёмкости")) or 0.0
+    note = (" Допуск в настройках расчета: %s %%." % _mo(tol * 100)) if tol else ""
+    pm_rows, sum_rows = [], []
     for row in res["labor_control"]:
-        bad = [m for m in row["marks"] if m and m.lower() not in ("ок", "выполнено")]
-        if not bad:
-            continue
-        broken.append("%s / %s: %s. План %s чел.-мес. на %s ₽, вышло %s чел.-мес. "
-                      "на %s ₽"
-                      % (row["contract"], row["row"], row["status"] or "отклонение",
-                         row["plan_pm"], _mo(row["plan_sum"] or 0),
-                         row["fact_pm"], _mo(row["fact_sum"] or 0)))
-    out.append(_rule(
-        "Трудоемкость договоров закрыта",
-        "По каждой строке расчетно-калькуляционных материалов должны сойтись "
-        "и человеко-месяцы, и сумма: люди на договоре и деньги, которые им "
-        "начислены.",
-        "Реестр → Трудоемкость",
-        "нарушено" if broken else ("соблюдено" if res["labor_control"] else "не применялось"),
-        "строк трудоемкости: %d" % len(res["labor_control"]) if res["labor_control"]
-        else "трудоемкость по договорам не задана", broken))
+        obj = "%s / %s" % (row["contract"].split("—")[0].strip(), row["row"])
+        if row["plan_pm"]:
+            pm_rows.append({"объект": obj, "факт": row["fact_pm"] or 0.0,
+                            "предел": row["plan_pm"]})
+        if row["plan_sum"]:
+            sum_rows.append({"объект": obj, "факт": row["fact_sum"] or 0.0,
+                             "предел": row["plan_sum"]})
+    out.append(_limit_rule(
+        "Плановые человеко-месяцы закрыты",
+        "По строке расчетно-калькуляционных материалов на договоре должно "
+        "набраться столько человеко-месяцев, сколько заложено в РКМ." + note,
+        "Реестр → Трудоемкость", "чел.-мес.", pm_rows, kind=SOFT, mode="равно",
+        empty="трудоемкость по договорам не задана"))
+    out.append(_limit_rule(
+        "Сумма трудоемкости выбрана",
+        "Плановая стоимость строки — человеко-месяцы, умноженные на среднюю "
+        "стоимость. Столько же должно быть начислено людям, закрывающим эту "
+        "строку." + note,
+        "Реестр → Трудоемкость", "₽", sum_rows, kind=SOFT, mode="равно",
+        empty="трудоемкость по договорам не задана"))
 
-    broken = []
+    bad = []
     for lp in inp["labor"]:
         if not lp["position"]:
             continue
         who = [p for p in plan if p["contract"] == lp["contract"]
                and norm(p["position"]) == norm(lp["position"])]
         if not who:
-            broken.append("%s / %s: на договоре нет ни одной выплаты по этой должности"
-                          % (lp["contract"], lp["position"]))
-    out.append(_rule(
+            bad.append({"объект": "%s / %s" % (lp["contract"], lp["position"]),
+                        "что": "на договоре нет выплат по этой должности"})
+    out.append(_count_rule(
         "Работу закрывает подходящая должность",
         "Строку трудоемкости может закрыть сотрудник с той же должностью или "
         "тот, кому эта должность разрешена правилами замещения.",
-        "Реестр → Правила замещения",
-        "нарушено" if broken else ("соблюдено" if inp["labor"] else "не применялось"),
-        "" if inp["labor"] else "трудоемкость по договорам не задана", broken))
+        "Реестр → Правила замещения", len(inp["labor"]), bad,
+        empty="трудоемкость по договорам не задана"))
     _mark(out, "Трудоемкость договоров")
 
-    # Дефицит разрешен настройками — об этом надо сказать отдельно: тогда
-    # первое правило проверяет не то, что все получили зарплату, а то, что
-    # сервису разрешили недоплатить.
-    if str(inp["settings"].get("разрешить дефицит") or "").strip().lower() in ("да", "true", "1"):
-        soft = _rule(
-            "Дефицит выплат разрешен настройками",
-            "В настройках расчета разрешено оставить часть зарплаты "
-            "невыплаченной. План при этом сходится, но люди получают меньше.",
-            "Настройки расчета", "внимание",
-            "правило «человек получает всю зарплату» смягчено")
-        soft["раздел"] = "Настройки расчета"
-        out.insert(0, soft)
+    # Дефицит — единственная настройка, смягчающая жесткое условие.
+    if _yes(inp["settings"].get("разрешить дефицит")):
+        for r in out:
+            if r["правило"].startswith("Человек получает"):
+                r["тип"] = "смягчено настройкой"
+        out.insert(0, {
+            "правило": "Дефицит выплат разрешен настройками",
+            "смысл": "В настройках расчета разрешено оставить часть зарплаты "
+                     "невыплаченной. План при этом сходится, но люди получают меньше.",
+            "где": "Настройки расчета", "тип": INFO, "состояние": "внимание",
+            "единица": "", "проверено": 0, "нарушений": 0, "строки": [],
+            "предел_общий": None,
+            "факт": "условие «человек получает всю зарплату» смягчено",
+            "раздел": "Настройки расчета"})
     return out
+
+
+# ── сводка для финансиста ────────────────────────────────────────────
+def summary(input_path, result_path):
+    """План года цифрами: бюджет, освоение, структура выплат, люди.
+
+    То, с чего финансист начинает разговор о годовом плане: сколько денег
+    заложено и сколько разошлось по людям, как выплаты ложатся на месяцы
+    рядом с поступлениями, из чего складывается сумма, кто где сидит.
+    """
+    inp = _read_input(input_path)
+    res = _read_result(result_path)
+    plan = res["plan"]
+    ctr = inp["contracts"]
+
+    paid_m = [0.0] * 12
+    got_m = [0.0] * 12
+    for p in plan:
+        paid_m[p["month"] - 1] += p["amount"]
+    for code, row in inp["inflow"].items():
+        for m in range(12):
+            got_m[m] += row[m] or 0.0
+
+    kinds = {}
+    for p in plan:
+        kinds[p["kind"] or "прочее"] = kinds.get(p["kind"] or "прочее", 0.0) + p["amount"]
+
+    by_ctr = []
+    for code, c in sorted(ctr.items()):
+        paid = sum(p["amount"] for p in plan if p["contract"] == code)
+        got = sum(inp["inflow"].get(code) or [])
+        by_ctr.append({"договор": code, "название": c["name"], "ГОЗ": c["goz"],
+                       "ФОТ": round(c["fot"], 2), "поступления": round(got, 2),
+                       "выплаты": round(paid, 2),
+                       "остаток": round(c["fot"] - paid, 2),
+                       "освоение": round(paid / c["fot"], 4) if c["fot"] else None,
+                       "месяцы": [round(sum(p["amount"] for p in plan
+                                            if p["contract"] == code and p["month"] == m + 1), 2)
+                                  for m in range(12)]})
+
+    people = []
+    for e in inp["employees"]:
+        rows = [p for p in plan if p["emp"] == e["code"]]
+        paid = sum(p["amount"] for p in rows)
+        months = sorted({p["month"] for p in rows})
+        contracts = sorted({p["contract"] for p in rows})
+        people.append({"код": e["code"], "фио": e["fio"], "должность": e["position"],
+                       "подразделение": e["department"], "ставка": e["rate"],
+                       "зарплата": e["salary"], "за год": round(paid, 2),
+                       "месяцев": len(months), "договоров": len(contracts),
+                       "договоры": contracts})
+
+    total_fot = sum(c["fot"] for c in ctr.values())
+    total_paid = sum(paid_m)
+    return {
+        "год": int(inp["year"] or 0) or None,
+        "итого": {
+            "ФОТ договоров": round(total_fot, 2),
+            "распределено планом": round(total_paid, 2),
+            "не распределено": round(total_fot - total_paid, 2),
+            "освоение": round(total_paid / total_fot, 4) if total_fot else None,
+            "поступления": round(sum(got_m), 2),
+            "сотрудников": len(inp["employees"]),
+            "договоров": len(ctr),
+            "средняя выплата в месяц на человека":
+                round(total_paid / max(1, len(inp["employees"])) / 12, 2),
+        },
+        "месяцы": {"подписи": SHORT, "поступления": [round(v, 2) for v in got_m],
+                   "выплаты": [round(v, 2) for v in paid_m],
+                   "остаток": [round(sum(got_m[:i + 1]) - sum(paid_m[:i + 1]), 2)
+                               for i in range(12)]},
+        "виды выплат": [{"вид": k, "сумма": round(v, 2),
+                         "доля": round(v / total_paid, 4) if total_paid else 0}
+                        for k, v in sorted(kinds.items(), key=lambda kv: -kv[1])],
+        "договоры": by_ctr,
+        "люди": sorted(people, key=lambda p: -p["за год"]),
+    }

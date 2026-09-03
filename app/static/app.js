@@ -697,7 +697,8 @@ function agentCard(key) {
  * Входные данные приходят из базы, результат — из файла, который сохранил
  * решатель: для ГОЗ важно показывать ровно то, на чем построен план.
  */
-var view = "feed", vdata = null, vresult = null, vrun = null, vrules = null;
+var view = "feed", vdata = null, vresult = null, vrun = null, vrules = null,
+    vsum = null;
 
 var MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
               "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -737,12 +738,141 @@ function loadResult() {
     d.status = pick.status;
     d.analysis = (pick.summary && pick.summary["анализ"]) || [];
     vresult = d; vrun = pick.id;
-    // Правила считаются по тем же файлам, но отдельно: решатель о них не
-    // отчитывается, это проверка его работы, а не его слова.
-    return api("/api/case/" + caseId + "/run/" + pick.id + "/rules")
-      .then(function (r) { vrules = r["правила"] || []; })
-      .catch(function () { vrules = null; });
+    // Правила и сводка считаются по тем же файлам, но отдельно: решатель о
+    // них не отчитывается, это проверка его работы, а не его слова.
+    return Promise.all([
+      api("/api/case/" + caseId + "/run/" + pick.id + "/rules")
+        .then(function (r) { vrules = r["правила"] || []; })
+        .catch(function () { vrules = null; }),
+      api("/api/case/" + caseId + "/run/" + pick.id + "/summary")
+        .then(function (r) { vsum = r; })
+        .catch(function () { vsum = null; }),
+    ]);
   });
+}
+
+/* ── сводка года ───────────────────────────────────────────────
+ * То, с чего финансист начинает разговор о годовом плане: сколько денег
+ * заложено и сколько разошлось, как выплаты ложатся на месяцы рядом с
+ * поступлениями, из чего складывается сумма, кто сколько получит. Порядок
+ * стандартный для финансового дашборда: несколько ключевых чисел, затем
+ * план-факт по месяцам, затем структура и разрезы.
+ */
+function bar(share, cls) {
+  var w = Math.max(0, Math.min(1, share || 0));
+  return '<span class="bar ' + (cls || "") + '"><i style="width:' +
+         (w * 100).toFixed(1) + '%"></i></span>';
+}
+
+function pct(v) {
+  return v == null ? "—" : Math.round(v * 100) + " %";
+}
+
+/* Помесячный график: поступления и выплаты столбиками, остаток линией.
+   Рисуем SVG сами — библиотека ради двенадцати столбиков не нужна. */
+function monthChart(labels, got, paid, rest) {
+  var W = 720, H = 190, L = 54, B = 26, T = 10;
+  var max = Math.max.apply(null, got.concat(paid).concat([1]));
+  var step = (W - L) / labels.length;
+  var bw = Math.max(4, step / 2 - 3);
+  var y = function (v) { return T + (H - T - B) * (1 - v / max); };
+  var bars = labels.map(function (m, i) {
+    var x = L + i * step + 2;
+    return '<rect class="b1" x="' + x.toFixed(1) + '" y="' + y(got[i]).toFixed(1) +
+           '" width="' + bw.toFixed(1) + '" height="' +
+           Math.max(0, H - B - y(got[i])).toFixed(1) + '"></rect>' +
+           '<rect class="b2" x="' + (x + bw + 2).toFixed(1) + '" y="' + y(paid[i]).toFixed(1) +
+           '" width="' + bw.toFixed(1) + '" height="' +
+           Math.max(0, H - B - y(paid[i])).toFixed(1) + '"></rect>';
+  }).join("");
+  var maxRest = Math.max.apply(null, rest.concat([1]));
+  var line = rest.map(function (v, i) {
+    var x = L + i * step + step / 2;
+    var yy = T + (H - T - B) * (1 - Math.max(0, v) / Math.max(maxRest, max));
+    return (i ? "L" : "M") + x.toFixed(1) + " " + yy.toFixed(1);
+  }).join(" ");
+  var names = labels.map(function (m, i) {
+    return '<text class="mx" x="' + (L + i * step + step / 2).toFixed(1) +
+           '" y="' + (H - 8) + '">' + esc(m) + "</text>";
+  }).join("");
+  var ticks = [0, 0.5, 1].map(function (f) {
+    var v = max * f;
+    return '<line class="gl" x1="' + L + '" x2="' + W + '" y1="' + y(v).toFixed(1) +
+           '" y2="' + y(v).toFixed(1) + '"></line>' +
+           '<text class="ax" x="' + (L - 8) + '" y="' + (y(v) + 4).toFixed(1) +
+           '">' + esc(mo(v)) + "</text>";
+  }).join("");
+  return '<div class="chart"><svg viewBox="0 0 ' + W + " " + H +
+    '" preserveAspectRatio="none" role="img">' + ticks + bars +
+    '<path class="ln" d="' + line + '"></path>' + names + "</svg>" +
+    '<div class="lgd"><span class="k1">поступления</span>' +
+    '<span class="k2">выплаты</span><span class="k3">остаток</span></div></div>';
+}
+
+function summaryView() {
+  if (!vsum) return '<div class="none">Сводка недоступна: файлы прогона не сохранены</div>';
+  var t = vsum["итого"], m = vsum["месяцы"];
+  var cards = [
+    ["ФОТ договоров", mo(t["ФОТ договоров"]) + " ₽", "заложено на год"],
+    ["Распределено планом", mo(t["распределено планом"]) + " ₽",
+     pct(t["освоение"]) + " от ФОТ"],
+    ["Не распределено", mo(t["не распределено"]) + " ₽",
+     t["не распределено"] > 0 ? "останется на договорах" : "остатка нет"],
+    ["Сотрудников", t["сотрудников"], "договоров: " + t["договоров"]],
+    ["На человека в месяц", mo(t["средняя выплата в месяц на человека"]) + " ₽",
+     "в среднем по плану"],
+  ].map(function (c) {
+    return '<div class="kpi"><div class="kh">' + esc(c[0]) + "</div>" +
+      '<div class="kv">' + esc(String(c[1])) + "</div>" +
+      '<div class="kn">' + esc(String(c[2])) + "</div></div>";
+  }).join("");
+
+  var kinds = '<table class="mini"><thead><tr><th>Вид выплаты</th><th class="n">Сумма, ₽</th>' +
+    '<th class="n">Доля</th><th></th></tr></thead><tbody>' +
+    vsum["виды выплат"].map(function (k) {
+      return "<tr><td>" + esc(k["вид"]) + '</td><td class="n">' + mo(k["сумма"]) +
+        '</td><td class="n">' + pct(k["доля"]) + "</td><td>" + bar(k["доля"]) + "</td></tr>";
+    }).join("") + "</tbody></table>";
+
+  var ctrs = '<table class="mini"><thead><tr><th>Договор</th><th class="n">ФОТ, ₽</th>' +
+    '<th class="n">Поступления, ₽</th><th class="n">Выплаты, ₽</th>' +
+    '<th class="n">Остаток, ₽</th><th class="n">Освоение</th><th></th></tr></thead><tbody>' +
+    vsum["договоры"].map(function (c) {
+      return "<tr><td>" + esc(c["договор"]) +
+        (c["ГОЗ"] ? '<span class="tag">ГОЗ</span>' : "") +
+        '<div class="sub">' + esc(c["название"] || "") + "</div></td>" +
+        '<td class="n">' + mo(c["ФОТ"]) + '</td><td class="n">' + mo(c["поступления"]) +
+        '</td><td class="n">' + mo(c["выплаты"]) + '</td><td class="n' +
+        (c["остаток"] > 0 ? " warn" : "") + '">' + mo(c["остаток"]) +
+        '</td><td class="n">' + pct(c["освоение"]) + "</td><td>" +
+        bar(c["освоение"], c["остаток"] > 0 ? "warn" : "ok") + "</td></tr>";
+    }).join("") + "</tbody></table>";
+
+  var pgp = paged("sum-people", vsum["люди"]);
+  var people = table(
+    ["табельный", "ФИО", "должность", "подразделение", { t: "ставка" },
+     { t: "зарплата, ₽" }, { t: "за год, ₽" }, { t: "месяцев" }, "договоры"],
+    pgp.rows.map(function (p) {
+      return [p["код"], p["фио"], p["должность"], p["подразделение"] || "—",
+              { v: p["ставка"], cls: "n" },
+              { v: mo(p["зарплата"]), cls: "n" },
+              { v: mo(p["за год"]), cls: "n" },
+              { v: p["месяцев"], cls: "n" },
+              (p["договоры"] || []).join(", ")];
+    }), "", { startNum: pgp.from }) + pager("sum-people", pgp);
+
+  return '<div class="kpis">' + cards + "</div>" +
+    '<div class="grp"><h4>Поступления и выплаты по месяцам</h4>' +
+    '<div class="vh">Столбики — деньги, пришедшие на договоры и выплаченные ' +
+    "людям. Линия — остаток на счетах нарастающим итогом: он не может уйти " +
+    "ниже нуля.</div>" +
+    monthChart(m["подписи"], m["поступления"], m["выплаты"], m["остаток"]) + "</div>" +
+    '<div class="two">' +
+      '<div class="grp"><h4>Из чего складываются выплаты</h4>' +
+        '<div class="hscroll">' + kinds + "</div></div>" +
+      '<div class="grp"><h4>Договоры</h4>' +
+        '<div class="hscroll">' + ctrs + "</div></div></div>" +
+    '<div class="grp"><h4>Люди</h4>' + people + "</div>";
 }
 
 //: Состояние правила: как называется, каким цветом, в каком порядке.
@@ -763,18 +893,27 @@ function rulesView() {
     return '<div class="grp"><h4>Ограничения</h4>' +
       '<div class="none">Правила не проверены: файлы прогона не сохранены</div></div>';
   }
-  var bad = vrules.filter(function (r) { return r["состояние"] === "нарушено"; }).length;
+  var bad = vrules.filter(function (r) { return r["состояние"] === "нарушено"; });
   var warn = vrules.filter(function (r) { return r["состояние"] === "внимание"; }).length;
   var ok = vrules.filter(function (r) { return r["состояние"] === "соблюдено"; }).length;
-  var head = bad
-    ? "Нарушено правил: " + bad + " из " + vrules.length
-    : "Все проверенные правила соблюдены" + (warn ? ", есть что посмотреть" : "");
+  // Жесткие условия обсуждению не подлежат: нарушено хоть одно — план не
+  // годится, и это ошибка в данных или в сервисе, а не повод для решения.
+  var hard = vrules.filter(function (r) { return r["тип"] === "нарушать нельзя"; });
+  var hardBad = hard.filter(function (r) { return r["состояние"] === "нарушено"; }).length;
+  var hardOk = hard.filter(function (r) { return r["состояние"] === "соблюдено"; }).length;
+  var head = hardBad
+    ? "Нарушено жестких условий: " + hardBad + ". Такой план принимать нельзя: " +
+      "ищите ошибку во входных данных."
+    : "Жесткие условия соблюдены: " + hardOk + " из " +
+      hard.filter(function (r) { return r["состояние"] !== "не применялось"; }).length +
+      (bad.length ? ". Отклонения есть там, где они допускаются." : "") +
+      (warn ? ". Есть что посмотреть." : "");
   var order = [];
   vrules.forEach(function (r) {
     if (order.indexOf(r["раздел"]) < 0) order.push(r["раздел"]);
   });
   return '<div class="grp"><h4>Ограничения<span class="c ' +
-    (bad ? "bad" : "ok") + '">' + (bad ? bad : ok) + "</span></h4>" +
+    (hardBad ? "bad" : "ok") + '">' + (hardBad || ok) + "</span></h4>" +
     '<div class="vh">' + esc(head) + ". Проверено по плану выплат и входным " +
     "данным, независимо от решателя.</div>" +
     order.map(function (section) {
@@ -788,22 +927,59 @@ function rulesView() {
     }).join("") + "</div>";
 }
 
+/* Условие в числах: чем подтверждено, насколько план подошел к пределу и
+   таблица самых узких мест. «Соблюдено» без цифр не говорит ничего: важно,
+   осталось ли до границы 40 000 ₽ или ноль. */
+function ruleTable(r) {
+  var rows = r["строки"] || [];
+  if (!rows.length) return "";
+  var numeric = rows[0]["предел"] !== undefined && rows[0]["предел"] !== null;
+  if (!numeric) {
+    return '<table class="mini rb2"><tbody>' + rows.map(function (s) {
+      return "<tr><td>" + esc(s["объект"]) + "</td><td>" + esc(s["что"] || "") +
+             "</td></tr>";
+    }).join("") + "</tbody></table>";
+  }
+  var unit = r["единица"] === "₽" ? ", ₽" : (r["единица"] ? ", " + r["единица"] : "");
+  var limitName = cap(r["подпись предела"] || "предел");
+  return '<table class="mini rb2"><thead><tr><th>Где</th>' +
+    '<th class="n">Факт' + esc(unit) + '</th><th class="n">' + esc(limitName) +
+    esc(unit) + '</th><th class="n">Запас</th><th></th></tr></thead><tbody>' +
+    rows.map(function (s) {
+      return '<tr class="' + (s["нарушено"] ? "over" : "") + '"><td>' +
+        esc(s["объект"]) +
+        (s["таких же"] > 1 ? '<span class="same">и еще ' + (s["таких же"] - 1) +
+                             " с тем же результатом</span>" : "") +
+        '</td><td class="n">' + mo(s["факт"]) +
+        '</td><td class="n">' + mo(s["предел"]) + '</td><td class="n' +
+        (s["запас"] < 0 ? " over" : "") + '">' + mo(s["запас"]) + "</td><td>" +
+        (s["доля"] == null ? "" : bar(s["доля"], s["нарушено"] ? "bad" : "ok")) +
+        "</td></tr>";
+    }).join("") + "</tbody></table>";
+}
+
 function ruleRow(r) {
   var st = RULE_STATE[r["состояние"]] || { cls: "off" };
-  var more = r["всего нарушений"] - (r["нарушения"] || []).length;
-  return '<div class="rule ' + st.cls + '">' +
+  var hard = r["тип"] === "нарушать нельзя";
+  return '<div class="rule ' + st.cls + (hard ? " hard" : "") + '">' +
     '<span class="cdot2"></span>' +
-    '<div class="rn">' + esc(r["правило"]) + "</div>" +
+    '<div class="rn">' + esc(r["правило"]) +
+      (r["тип"] !== "показатель"
+        ? '<span class="rk' + (hard ? " h" : "") + '">' + esc(r["тип"]) + "</span>" : "") +
+    "</div>" +
     '<div class="rs">' + esc(r["состояние"]) + "</div>" +
     '<div class="rm">' + esc(r["смысл"]) + "</div>" +
-    '<div class="rf">' + esc(r["факт"] || "") +
+    '<div class="rf">' +
+      (r["использовано"] != null
+        ? bar(r["использовано"], r["состояние"] === "нарушено" ? "bad" : "ok") : "") +
+      esc(r["факт"] || "") +
       (r["где"] ? '<span class="rw">где смотреть: ' + esc(r["где"]) + "</span>" : "") +
     "</div>" +
-    ((r["нарушения"] || []).length
-      ? '<ul class="rb">' + r["нарушения"].map(function (b) {
-          return "<li>" + esc(b) + "</li>";
-        }).join("") + (more > 0 ? "<li>и еще " + more + "</li>" : "") + "</ul>"
-      : "") +
+    (hard && r["состояние"] === "нарушено"
+      ? '<div class="ralarm">Жесткое условие нарушено — план принимать нельзя. ' +
+        "Это ошибка во входных данных или в сервисе, а не выбор между " +
+        "вариантами.</div>" : "") +
+    ruleTable(r) +
     "</div>";
 }
 
@@ -1031,6 +1207,11 @@ function renderView() {
   }
   if (vresult.status !== "OPTIMAL" && view !== "lim") {
     el.innerHTML = failBanner();
+    return;
+  }
+
+  if (view === "sum") {
+    el.innerHTML = failBanner() + summaryView();
     return;
   }
 
