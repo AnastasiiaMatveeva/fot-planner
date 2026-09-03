@@ -1214,7 +1214,9 @@ function meta(pairs) {
       return p[1] !== null && p[1] !== undefined && p[1] !== "";
     })
     .map(function (p) {
-      return "<dt>" + esc(p[0]) + "</dt><dd>" + esc(p[1]) + "</dd>";
+      // Значение — текст; готовая разметка передается как {v: html}.
+      var v = (p[1] && typeof p[1] === "object") ? p[1].v : esc(p[1]);
+      return "<dt>" + esc(p[0]) + "</dt><dd>" + v + "</dd>";
     }).join("") + "</dl>";
 }
 
@@ -1351,7 +1353,11 @@ function openDocument(id) {
                  ? d["версия"] + (d["заменяет"] ? ", прежняя от " + d["заменяет"] : "")
                  : null],
               ["Формат", d["формат"]], ["Размер", bytes(d.size)],
-              ["Загружен", d.uploaded]]) +
+              ["Загружен", d.uploaded],
+              ["Отпечаток", d["отпечаток"]
+                 ? { v: '<span class="mono" title="SHA-256 ' + esc(d["отпечаток"]) +
+                        '">' + esc(d["отпечаток"].slice(0, 16)) + "…</span>" }
+                 : null]]) +
         (d.exists
           ? '<a class="dfile" href="/api/document/' + d.id +
             '/file" target="_blank" rel="noopener">Открыть файл</a>'

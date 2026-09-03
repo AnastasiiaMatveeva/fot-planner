@@ -217,6 +217,10 @@ class Document(Base):
     # истории. Цепочка версий — по supersedes_id.
     version: Mapped[int] = mapped_column(Integer, default=1)
     supersedes_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    # Отпечаток содержимого (SHA-256). Строка реестра ссылается на документ;
+    # отпечаток дает проверить, что документ с тех пор не подменяли, и
+    # отличить исправленную редакцию от того же файла, загруженного дважды.
+    sha256: Mapped[str | None] = mapped_column(String(64), default=None)
 
     case: Mapped[Case] = relationship(back_populates="documents")
 
@@ -454,7 +458,8 @@ _ADDED_COLUMNS = {
     # Переписка по документу живет в тех же сообщениях, что и лента плана,
     # только с ссылкой на документ вместо плана.
     "messages": [("document_id", "INTEGER")],
-    "documents": [("version", "INTEGER"), ("supersedes_id", "INTEGER")],
+    "documents": [("version", "INTEGER"), ("supersedes_id", "INTEGER"),
+                  ("sha256", "VARCHAR(64)")],
     "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
     "verdicts": [("grade", "VARCHAR(20)")],
     "employees": [

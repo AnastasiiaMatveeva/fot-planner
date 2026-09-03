@@ -883,3 +883,5 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .gr.g2{background:var(--okbg);color:var(--ok)}
 .gr.g1{background:var(--warnbg);color:var(--warn)}
 .gr.g0{background:var(--badbg);color:var(--bad)}
+
+.meta .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;letter-spacing:.02em;cursor:help}

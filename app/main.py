@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -312,20 +313,27 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
         for f in files:
             data = await f.read()
             name = _filename(f.filename)
-            safe = "%d_%d_%s" % (case_id, int(time.time() * 1000), os.path.basename(name))
-            path = os.path.join(UPLOAD_DIR, safe)
-            with open(path, "wb") as out:
-                out.write(data)
-            # Повторная загрузка того же файла — это исправленная редакция,
-            # а не второй документ. Прежнюю запись и все извлеченное из нее
-            # убираем, иначе реестр зарастает дублями.
-            doc = Document(case_id=case_id, name=name, path=path, size=len(data))
+            digest = hashlib.sha256(data).hexdigest()
             # Тот же файл уже есть — это новая версия, а не сосед. Прежняя
             # остается для истории, но ее строки уходят из реестра: кормить
             # расчет двумя редакциями одного документа нельзя.
             prev = (db.query(Document).filter_by(name=name)
                     .filter(Document.state != "заменен")
                     .order_by(Document.id.desc()).first())
+            if prev is not None and prev.sha256 == digest:
+                # Байт в байт тот же файл: версии не будет, разбора тоже —
+                # иначе случайный повтор загрузки стирал бы принятые строки
+                # и правки экономиста ради того же самого содержимого.
+                agents.say(db, case_id, "«%s» уже загружен, файл не изменился — "
+                           "оставил прежний." % name, agent="intake")
+                db.commit()
+                continue
+            safe = "%d_%d_%s" % (case_id, int(time.time() * 1000), os.path.basename(name))
+            path = os.path.join(UPLOAD_DIR, safe)
+            with open(path, "wb") as out:
+                out.write(data)
+            doc = Document(case_id=case_id, name=name, path=path, size=len(data),
+                           sha256=digest)
             if prev is not None:
                 _retire_document(db, prev)
                 doc.version = (prev.version or 1) + 1
@@ -691,6 +699,7 @@ def one_document(doc_id: int):
             "by": d.parsed_by, "summary": d.summary, "size": d.size,
             "формат": os.path.splitext(d.path)[1].lower() or "без расширения",
             "версия": d.version or 1,
+            "отпечаток": d.sha256,
             "заменяет": (lambda p: _dt(p.uploaded) if p else None)(
                 db.get(Document, d.supersedes_id) if d.supersedes_id else None),
             "uploaded": _dt(d.uploaded), "case_id": d.case_id,
