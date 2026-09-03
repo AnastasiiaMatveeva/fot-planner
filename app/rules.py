@@ -709,3 +709,106 @@ def summary(input_path, result_path):
         "договоры": by_ctr,
         "люди": sorted(people, key=lambda p: -p["за год"]),
     }
+
+
+# ── из чего складывается зарплата ────────────────────────────────────
+def payroll(input_path, result_path):
+    """Состав зарплаты по месяцам: договоры, ставки, виды выплат и смены схемы.
+
+    Матрица «ФИО на месяцы» ничего не говорит: сумма в каждой клетке равна
+    месячной зарплате, потому что это жесткое условие. Экономисту нужно то,
+    что за этой суммой: с каких договоров она финансируется, на каких
+    ставках человек сидит, из каких видов выплат складывается — и как часто
+    схема меняется. Смена договора оклада и смена состава выплат — это
+    приказы, допники и разговоры с людьми; оптимизатор их штрафует, а
+    экономист должен видеть, сколько их получилось.
+    """
+    inp = _read_input(input_path)
+    res = _read_result(result_path)
+    plan, lim, norm = res["plan"], inp["limits"], inp["norm"]
+    ctr = inp["contracts"]
+    order = sorted({p["contract"] for p in plan})
+
+    people = []
+    total_switch = total_mix = total_extra = total_opened = 0
+    for e in inp["employees"]:
+        rows = [p for p in plan if p["emp"] == e["code"]]
+        if not rows:
+            continue
+        base = (lim.get(norm(e["position"])) or {}).get("оклад")
+        months, prev_ctr, prev_mix = [], None, None
+        switch = mix_change = extra_months = opened = 0
+        for m in range(1, 13):
+            mr = [p for p in rows if p["month"] == m]
+            if not mr:
+                months.append(None)
+                continue
+            by_ctr = []
+            for code in order:
+                cr = [p for p in mr if p["contract"] == code]
+                if not cr:
+                    continue
+                oklad = _sum(cr, {"оклад"})
+                by_ctr.append({
+                    "код": code,
+                    "ставка": round(oklad / base, 2) if base and oklad else None,
+                    "сумма": round(_sum(cr), 2),
+                    "виды": [{"вид": k, "сумма": round(_sum(cr, {k}), 2)}
+                             for k in ("оклад", "120", "122", "124", "152", "приказ")
+                             if _sum(cr, {k})],
+                })
+            salary_ctr = sorted({p["contract"] for p in mr if p["kind"] == "оклад"})
+            mix = sorted({p["kind"] for p in mr if p["kind"]})
+            rate = sum(c["ставка"] or 0 for c in by_ctr)
+            change = []
+            if prev_ctr is not None and salary_ctr != prev_ctr:
+                # Появился второй договор оклада — это открытая ставка, а не
+                # смена: человек остался там, где был, и взял работу еще. А вот
+                # когда договор из-под оклада ушел, это перевод: приказ,
+                # допник, разговор с человеком. Считаем их по отдельности.
+                added = [c for c in salary_ctr if c not in prev_ctr]
+                gone = [c for c in prev_ctr if c not in salary_ctr]
+                if gone:
+                    change.append("оклад переехал: %s → %s"
+                                  % (", ".join(prev_ctr), ", ".join(salary_ctr) or "—"))
+                    switch += 1
+                if added and not gone:
+                    change.append("добавился оклад на %s" % ", ".join(added))
+                    opened += 1
+            if prev_mix is not None and mix != prev_mix:
+                change.append("состав: %s → %s" % (", ".join(prev_mix),
+                                                   ", ".join(mix)))
+                mix_change += 1
+            if rate > (e["rate"] or 1.0) + 0.01:
+                extra_months += 1
+            months.append({"м": m, "всего": round(_sum(mr), 2), "ставка": round(rate, 2),
+                           "договоры": by_ctr, "виды": mix, "изменилось": change})
+            prev_ctr, prev_mix = salary_ctr, mix
+        year = _sum(rows)
+        total_switch += switch
+        total_mix += mix_change
+        total_extra += extra_months
+        total_opened += opened
+        people.append({
+            "код": e["code"], "фио": e["fio"], "должность": e["position"],
+            "подразделение": e["department"], "ставка": e["rate"],
+            "зарплата": e["salary"], "за год": round(year, 2), "месяцы": months,
+            "смен договора оклада": switch, "смен состава выплат": mix_change,
+            "открыто ставок": opened,
+            "месяцев с совместительством": extra_months,
+            "договоры": sorted({p["contract"] for p in rows}),
+            "доли видов": [{"вид": k, "доля": round(_sum(rows, {k}) / year, 4)}
+                           for k in ("оклад", "120", "122", "124", "152", "приказ")
+                           if year and _sum(rows, {k})],
+        })
+    return {
+        "договоры": [{"код": c, "название": (ctr.get(c) or {}).get("name", ""),
+                      "ГОЗ": bool((ctr.get(c) or {}).get("goz"))} for c in order],
+        "итого": {"человек": len(people),
+                  "смен договора оклада": total_switch,
+                  "открыто ставок": total_opened,
+                  "смен состава выплат": total_mix,
+                  "месяцев с совместительством": total_extra,
+                  "за год": round(sum(p["за год"] for p in people), 2)},
+        "люди": people,
+    }

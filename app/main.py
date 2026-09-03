@@ -1577,6 +1577,17 @@ def _run_files(pair):
     return src, out
 
 
+@app.get("/api/case/{case_id}/run/{run_id}/payroll")
+def run_payroll(case_id: int, run_id: int):
+    """Состав зарплаты по месяцам: договоры, ставки, виды выплат, смены схемы."""
+    src, out = _run_files(db_run(case_id, run_id))
+    key = ("состав", run_id, os.path.getmtime(out))
+    if key not in _RULES_CACHE:
+        import rules as rules_mod
+        _RULES_CACHE[key] = rules_mod.payroll(src, out)
+    return _RULES_CACHE[key]
+
+
 @app.get("/api/case/{case_id}/run/{run_id}/result")
 def run_result(case_id: int, run_id: int):
     """Результат прогона: план, освоение, сводка, ограничения.

@@ -698,7 +698,7 @@ function agentCard(key) {
  * решатель: для ГОЗ важно показывать ровно то, на чем построен план.
  */
 var view = "feed", vdata = null, vresult = null, vrun = null, vrules = null,
-    vsum = null;
+    vsum = null, vpay = null;
 
 var MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
               "июл", "авг", "сен", "окт", "ноя", "дек"];
@@ -747,6 +747,9 @@ function loadResult() {
       api("/api/case/" + caseId + "/run/" + pick.id + "/summary")
         .then(function (r) { vsum = r; })
         .catch(function () { vsum = null; }),
+      api("/api/case/" + caseId + "/run/" + pick.id + "/payroll")
+        .then(function (r) { vpay = r; })
+        .catch(function () { vpay = null; }),
     ]);
   });
 }
@@ -873,6 +876,151 @@ function summaryView() {
       '<div class="grp"><h4>Договоры</h4>' +
         '<div class="hscroll">' + ctrs + "</div></div></div>" +
     '<div class="grp"><h4>Люди</h4>' + people + "</div>";
+}
+
+/* ── из чего складывается зарплата ─────────────────────────────
+ * Матрица «ФИО на месяцы» с суммами ничего не сообщала: в каждой клетке
+ * стоит месячная зарплата, потому что выплатить ее целиком — жесткое
+ * условие. Смотреть надо на состав: с каких договоров человек финансируется,
+ * на каких ставках сидит, из каких видов выплат складывается сумма и как
+ * часто схема меняется. Смена договора оклада и смена состава выплат — это
+ * приказы и допники: оптимизатор их штрафует, экономисту надо видеть,
+ * сколько их вышло.
+ */
+var CTR_COLOR = ["c1", "c2", "c3", "c4", "c5", "c6"];
+
+function ctrClass(code) {
+  var list = (vpay && vpay["договоры"]) || [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i]["код"] === code) return CTR_COLOR[i % CTR_COLOR.length];
+  }
+  return "c1";
+}
+
+/* Полоса года: двенадцать клеток, в каждой доли договоров по ставке.
+   Смена схемы отмечена засечкой — так видно, ровно ли идет год. */
+function yearStrip(person) {
+  return '<span class="strip">' + person["месяцы"].map(function (m, i) {
+    if (!m) return '<i class="off" title="' + MONTHS[i] + ': выплат нет"></i>';
+    var total = m["договоры"].reduce(function (a, c) { return a + c["сумма"]; }, 0);
+    var seg = m["договоры"].map(function (c) {
+      return '<u class="' + ctrClass(c["код"]) + '" style="flex:' +
+             (total ? c["сумма"] / total : 1) + '"></u>';
+    }).join("");
+    return '<i class="' + (m["изменилось"].length ? "chg" : "") + '" title="' +
+      esc(MONTHS[i] + ": " + m["договоры"].map(function (c) {
+        return c["код"] + (c["ставка"] ? " " + c["ставка"] : "");
+      }).join(" + ") + (m["изменилось"].length ? " — " + m["изменилось"].join("; ") : "")) +
+      '">' + seg + "</i>";
+  }).join("") + "</span>";
+}
+
+function payrollView() {
+  if (!vpay) {
+    return '<div class="none">Состав выплат недоступен: файлы прогона не сохранены</div>';
+  }
+  var t = vpay["итого"];
+  var legend = '<div class="lgd ctrs">' + vpay["договоры"].map(function (c) {
+    return '<span class="' + ctrClass(c["код"]) + '">' + esc(c["код"]) +
+           (c["ГОЗ"] ? " (ГОЗ)" : "") + "</span>";
+  }).join("") + '<span class="chgk">смена схемы</span>' +
+    '<span class="note">полоса — год с января по декабрь, доли договоров по ' +
+    "сумме; наведите на месяц</span></div>";
+  var head = '<div class="vh">Прогон № ' + vrun + ": " + t["человек"] + " " +
+    px(t["человек"], "человек", "человека", "человек") + ", всего <b>" +
+    mo(t["за год"]) + " ₽</b>. Сумма за месяц у каждого равна его зарплате — " +
+    "это жесткое условие, и смотреть надо не на нее, а на то, из чего она " +
+    "сложилась: договоры, ставки, виды выплат. Щелчок по строке — месяц за " +
+    "месяцем.</div>" +
+    '<div class="kpis small">' + [
+      ["Переводов оклада", t["смен договора оклада"],
+       "оклад ушел на другой договор"],
+      ["Открыто ставок", t["открыто ставок"], "добавился второй договор оклада"],
+      ["Смен состава выплат", t["смен состава выплат"], "менялся набор надбавок"],
+      ["Месяцев с совместительством", t["месяцев с совместительством"],
+       "ставка сверх штатной"],
+    ].map(function (c) {
+      return '<div class="kpi"><div class="kh">' + esc(c[0]) + "</div>" +
+        '<div class="kv">' + c[1] + "</div>" +
+        '<div class="kn">' + esc(c[2]) + "</div></div>";
+    }).join("") + "</div>";
+
+  var pg = paged("payroll", vpay["люди"]);
+  var body = table(
+    [{ v: "Сотрудник", cls: "key" }, "Должность", { t: "ставка" },
+     { t: "зарплата, ₽" }, "Год по месяцам", "Финансируется", "Виды выплат",
+     { t: "смен" }, { t: "за год, ₽" }],
+    pg.rows.map(function (p) {
+      var kinds = (p["доли видов"] || []).map(function (k) {
+        return '<span class="kd">' + esc(k["вид"]) + " " +
+               Math.round(k["доля"] * 100) + " %</span>";
+      }).join("");
+      var sw = p["смен договора оклада"] + p["смен состава выплат"];
+      return [
+        { v: '<span class="dname" data-emp="' + esc(p["код"]) + '">' +
+             esc(p["фио"]) + "</span>" +
+             (p["подразделение"] ? '<div class="sub">' + esc(p["подразделение"]) +
+                                   "</div>" : ""), cls: "key" },
+        p["должность"] || null,
+        { v: p["ставка"], cls: "n" },
+        { v: mo(p["зарплата"]), cls: "n" },
+        { v: yearStrip(p) },
+        { v: p["договоры"].map(function (c) {
+            return '<span class="ctag ' + ctrClass(c) + '">' + esc(c) + "</span>";
+          }).join("") },
+        { v: kinds },
+        { v: sw ? sw : "—", cls: "n" + (sw > 2 ? " warn" : "") },
+        { v: mo(p["за год"]), cls: "n tot" },
+      ];
+    }), "", { startNum: pg.from }) + pager("payroll", pg);
+  return head + legend + body;
+}
+
+/* Месяц за месяцем по одному человеку: договоры со ставками, виды выплат
+   суммами и отметка, что изменилось против прошлого месяца. */
+function personDetail(code) {
+  var p = ((vpay && vpay["люди"]) || []).filter(function (x) {
+    return x["код"] === code;
+  })[0];
+  if (!p) return "";
+  var kindOrder = ["оклад", "120", "122", "124", "152", "приказ"];
+  var used = kindOrder.filter(function (k) {
+    return p["месяцы"].some(function (m) {
+      return m && m["договоры"].some(function (c) {
+        return c["виды"].some(function (v) { return v["вид"] === k; });
+      });
+    });
+  });
+  var rows = [];
+  p["месяцы"].forEach(function (m, i) {
+    if (!m) return;
+    rows.push([
+      MONTHS[i],
+      { v: m["договоры"].map(function (c) {
+          return '<span class="ctag ' + ctrClass(c["код"]) + '">' + esc(c["код"]) +
+                 (c["ставка"] ? " · " + c["ставка"] : "") + "</span>";
+        }).join("") },
+    ].concat(used.map(function (k) {
+      var s = 0;
+      m["договоры"].forEach(function (c) {
+        c["виды"].forEach(function (v) { if (v["вид"] === k) s += v["сумма"]; });
+      });
+      return { v: s ? mo(s) : null, cls: "n" };
+    })).concat([
+      { v: mo(m["всего"]), cls: "n tot" },
+      { v: m["изменилось"].length
+          ? '<span class="chgtag">' + esc(m["изменилось"].join("; ")) + "</span>"
+          : null },
+    ]));
+  });
+  return '<div class="grp"><h4>' + esc(p["фио"]) + " — месяц за месяцем</h4>" +
+    '<div class="vh">Ставка складывается из открытых ставок на договорах. ' +
+    "«Изменилось» отмечает месяц, где сменился договор оклада или набор " +
+    "надбавок: за каждой такой сменой стоит приказ или допник.</div>" +
+    table(["Месяц", "Договоры и ставки"].concat(
+            used.map(function (k) { return { t: k + ", ₽" }; }),
+            [{ t: "всего, ₽" }, "Изменилось"]),
+      rows, "", { plain: true }) + "</div>";
 }
 
 //: Состояние правила: как называется, каким цветом, в каком порядке.
@@ -1216,42 +1364,7 @@ function renderView() {
   }
 
   if (view === "plan") {
-    // Строка на человека, месяцы графами — так план и читают: кому сколько в
-    // каком месяце. Раскладка по договорам и видам выплат — по щелчку на
-    // строку: она нужна, когда что-то не сошлось, а не всегда.
-    var byEmp = {}, info = {};
-    vresult.plan.forEach(function (p) { (byEmp[p.emp] = byEmp[p.emp] || []).push(p); });
-    vresult.employees.forEach(function (x) { info[x.code] = x; });
-    var total = vresult.plan.reduce(function (a, p) { return a + p.sum; }, 0);
-    var peak = 0;
-    var codes = Object.keys(byEmp).sort();
-    var months = {};
-    codes.forEach(function (code) {
-      var m = months[code] = [];
-      for (var i = 0; i < 12; i++) m.push(0);
-      byEmp[code].forEach(function (p) { if (p.m >= 0) m[p.m] += p.sum; });
-      m.forEach(function (v) { if (v > peak) peak = v; });
-    });
-    el.innerHTML = '<div class="vh">План выплат, прогон № ' + vrun + ": " +
-      codes.length + " " + px(codes.length, "человек", "человека", "человек") +
-      ", всего <b>" + mo(total) + " ₽</b>. Щелчок по строке — раскладка по " +
-      "договорам и видам выплат.</div>" +
-      table([{ v: "Сотрудник", cls: "key" }, "Должность"].concat(
-              MONTHS.map(function (m) { return { t: m }; }), [{ t: "всего, ₽" }]),
-        codes.map(function (code) {
-          var e = info[code] || {}, m = months[code];
-          var sum = m.reduce(function (a, v) { return a + v; }, 0);
-          return [{ v: '<span class="dname" data-emp="' + esc(code) + '">' +
-                       esc(e.fio || code) + "</span>", cls: "key" },
-                  e.pos || null].concat(
-            m.map(function (v) {
-              if (!v) return { v: null, cls: "n" };
-              var share = peak ? Math.max(4, Math.round((v / peak) * 100)) : 0;
-              return { v: '<span class="bar" style="--f:' + share + '%">' + mo(v) +
-                          "</span>", cls: "n" };
-            }), [{ v: mo(sum), cls: "n tot" }]);
-        }), "") +
-      '<div id="plandetail"></div>';
+    el.innerHTML = payrollView() + '<div id="plandetail"></div>';
     return;
   }
 
@@ -2526,22 +2639,15 @@ $("agentview").addEventListener("click", function (e) {
 
 $("view").addEventListener("click", function (e) {
   var who = e.target.closest("[data-emp]");
-  if (!who || !vresult) return;
+  if (!who) return;
   var code = who.getAttribute("data-emp");
-  var rows = vresult.plan.filter(function (p) { return p.emp === code; })
-    .sort(function (a, b) { return a.m - b.m || (a.ctr > b.ctr ? 1 : -1); });
   var box = $("plandetail");
   if (!box) return;
   if (box.getAttribute("data-for") === code) {
     box.innerHTML = ""; box.removeAttribute("data-for"); return;
   }
   box.setAttribute("data-for", code);
-  box.innerHTML = '<div class="grp"><h4>' + esc(who.textContent) +
-    " — по договорам и видам выплат</h4>" +
-    table(["Месяц", "Договор", "Вид выплаты", { t: "сумма, ₽" }],
-      rows.map(function (p) {
-        return [monthName(p.m), p.ctr, KINDS[p.kind] || p.kind, { v: mo(p.sum), cls: "n" }];
-      }), "") + "</div>";
+  box.innerHTML = personDetail(code);
   box.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
 

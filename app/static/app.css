@@ -1060,3 +1060,38 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 .rule table.rb2 tr.over td{color:var(--bad)}
 .rule table.rb2 td.over{font-weight:600}
 .rule .same{display:block;font-size:11.5px;color:var(--ink3);margin-top:2px}
+
+/* ── состав зарплаты ─────────────────────────────────────────── */
+.kpis.small .kpi{padding:9px 12px}
+.kpis.small .kv{font-size:17px;margin-top:4px}
+/* Полоса года: клетка на месяц, внутри доли договоров. Засечка сверху —
+   месяц, в котором сменилась схема. */
+.strip{display:flex;gap:2px;min-width:190px}
+.strip i{flex:1;display:flex;height:22px;border-radius:2px;overflow:hidden;
+         position:relative;background:var(--line2)}
+.strip i.off{background:repeating-linear-gradient(45deg,var(--s1),var(--s1) 3px,
+             transparent 3px,transparent 6px)}
+.strip i.chg::after{content:"";position:absolute;left:0;right:0;top:0;height:3px;
+                    background:var(--warn)}
+.strip u{display:block;text-decoration:none}
+.strip u.c1,.ctag.c1,.lgd.ctrs .c1::before{background:var(--acc)}
+.strip u.c2,.ctag.c2,.lgd.ctrs .c2::before{background:#7C5CFF}
+.strip u.c3,.ctag.c3,.lgd.ctrs .c3::before{background:#12A150}
+.strip u.c4,.ctag.c4,.lgd.ctrs .c4::before{background:#E0A106}
+.strip u.c5,.ctag.c5,.lgd.ctrs .c5::before{background:#DC2626}
+.strip u.c6,.ctag.c6,.lgd.ctrs .c6::before{background:#0F766E}
+.ctag{display:inline-block;margin:0 4px 3px 0;padding:1px 7px;border-radius:999px;
+      font:600 10.5px var(--f);color:#fff;white-space:nowrap}
+.lgd.ctrs{flex-wrap:wrap;margin:0 0 12px}
+.lgd.ctrs span::before{content:"";display:inline-block;width:10px;height:10px;
+                       border-radius:2px;margin-right:6px;vertical-align:-1px}
+.lgd.ctrs .chgk::before{background:var(--warn);height:3px;border-radius:2px;
+                        vertical-align:3px}
+.kd{display:inline-block;margin:0 6px 2px 0;font-size:11.5px;color:var(--ink2);
+    white-space:nowrap}
+.view td.n.warn{color:var(--warn);font-weight:600}
+.chgtag{display:inline-block;padding:2px 7px;border-radius:var(--r3);
+        background:var(--warnbg);color:var(--warn);font-size:11.5px;line-height:1.4}
+.view .key .sub{font-size:11.5px;color:var(--ink3);margin-top:2px}
+.lgd.ctrs .note{color:var(--ink3)}
+.lgd.ctrs .note::before{display:none}
