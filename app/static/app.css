@@ -730,3 +730,16 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
              background:var(--s0);color:var(--ink2);cursor:pointer;
              font:500 12.5px var(--f)}
 .dbody .mtag:hover{border-color:var(--acc);background:var(--accbg);color:var(--acc2)}
+
+
+/* Итог месяца по договору — та же строка, но это сумма, а не поступление:
+   отделяем начертанием, а не еще одной линейкой. */
+.view td.tot{font-weight:600;color:var(--ink)}
+
+
+/* Поступление месяца с полосой: доля от наибольшего в таблице. Полоса светлая
+   и под числом, а не вместо него — читают все-таки сумму, а полоса лишь дает
+   увидеть профиль года не считая. */
+.view td.n .bar{position:relative;display:inline-block;padding:2px 5px;
+                border-radius:3px;background:linear-gradient(to right,
+                var(--accbg) var(--f, 0%), transparent var(--f, 0%))}

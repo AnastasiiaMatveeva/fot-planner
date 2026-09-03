@@ -744,6 +744,14 @@ function pager(key, pg) {
     "</nav></div>";
 }
 
+/* Заголовок графы — с прописной, как и подписи свойств в карточке. Регистр
+   был разный в разных местах, и это бросалось в глаза раньше содержимого.
+   Правим здесь, в одном месте: заголовки задаются во многих таблицах. */
+function cap(s) {
+  s = String(s == null ? "" : s);
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
 /* Перечни всегда нумеруются: по номеру строки удобно сослаться в разговоре
    и найти место в длинной таблице. Колонку добавляем здесь, а не в каждом
    вызове, — чтобы нумерация была одинаковой везде. Отключается opts.plain. */
@@ -759,11 +767,11 @@ function table(head, rows, note, opts) {
        head.map(function (c) {
          // Заголовок бывает строкой, числовой колонкой {t} или готовой
          // разметкой {v} — в ней, например, флажок «выделить все».
-         if (typeof c !== "object") return "<th>" + esc(c) + "</th>";
+         if (typeof c !== "object") return "<th>" + esc(cap(c)) + "</th>";
          if (c.v != null) return '<th class="' + (c.cls || "") + '"' +
                                  (c.span ? ' colspan="' + c.span + '"' : "") + ">" +
                                  c.v + "</th>";
-         return '<th class="n">' + esc(c.t) + "</th>";
+         return '<th class="n">' + esc(cap(c.t)) + "</th>";
        }).join("") + "</tr></thead><tbody>";
   var first = (opts && opts.startNum) || 0;
   h += rows.map(function (r, i) {
@@ -1462,6 +1470,10 @@ function renderAgents() {
  */
 var inRegistry = false, regTab = "docs", regData = null;
 
+//: Короткие имена месяцев для графика поступлений.
+var MONTHS = ["янв", "фев", "мар", "апр", "май", "июн",
+              "июл", "авг", "сен", "окт", "ноя", "дек"];
+
 var REG_TABS = [
   { key: "docs", title: "Документы" },
   { key: "ctr", title: "Договоры" },
@@ -1567,7 +1579,7 @@ function renderRegistry() {
     // Графы те же, что во входном файле решателя: счет решает, можно ли
     // платить 120 без оклада, приоритет — на каком договоре держать оклад,
     // а основное место и совместительство — можно ли открыть ставку.
-    body = table([{ v: "шифр", cls: "key" }, "наименование", "номер", "вид",
+    body = table([{ v: "Шифр", cls: "key" }, "наименование", "номер", "вид",
                   "счет", "ГОЗ",
                   { t: "фонд, ₽" }, "срок", "разрешенные выплаты", "приоритет",
                   "основное", "совмест.", "оклад до", "надбавки до"],
@@ -1585,7 +1597,7 @@ function renderRegistry() {
     // Тип и категория занятости решают, можно ли открыть вторую ставку и до
     // какого предела: у студента и аспиранта он свой. Раньше их не было
     // видно, потому что в расчет уходило жестко «основное» и «основной».
-    body = table([{ v: "табельный", cls: "key" }, "ФИО", "должность",
+    body = table([{ v: "Табельный", cls: "key" }, "ФИО", "должность",
                   "подразделение",
                   { t: "ставка" }, "занятость", "категория", { t: "зарплата, ₽" },
                   "срок", "разрешены", "запрещены"],
@@ -1616,12 +1628,42 @@ function renderRegistry() {
       "содержание расчетно-калькуляционных материалов и Формы 9д.",
       { startNum: pgl.from }) + pager("labor", pgl);
   } else if (regTab === "inflow") {
-    var pgi = paged("inflow", d.inflows || []);
-    body = table(["договор", { t: "год" }, { t: "месяц" }, { t: "поступление, ₽" }],
-      pgi.rows.map(function (x) {
-        return [x.contract, { v: x.year == null ? null : String(x.year), cls: "n" },
-                { v: x.month == null ? null : String(x.month), cls: "n" },
-                { v: x.amount == null ? null : mo(x.amount), cls: "n" }];
+    // График поступлений читают строкой по месяцам, а не списком из двух
+    // десятков записей: девятнадцать строк «договор, год, месяц, сумма» — это
+    // та же матрица, разложенная в столбик, и по ней не видно ни провала в
+    // середине года, ни того, когда договор начинается.
+    var rows = d.inflows || [];
+    var by = {}, years = {};
+    rows.forEach(function (x) {
+      var key = x.contract + "|" + (x.year == null ? "" : x.year);
+      (by[key] = by[key] || {})[x.month] = x.amount;
+      years[key] = [x.contract, x.year];
+    });
+    var keys = Object.keys(by).sort();
+    // Наибольшее поступление задает длину полос: сравнивать месяцы имеет
+    // смысл между собой, а не с чужой таблицей.
+    var peak = 0;
+    rows.forEach(function (x) { if (x.amount > peak) peak = x.amount; });
+    var pgi = paged("inflow", keys);
+    body = table(
+      [{ v: "Договор", cls: "key" }, { t: "год" }].concat(
+        MONTHS.map(function (m) { return { t: m }; }),
+        [{ t: "всего, ₽" }]),
+      pgi.rows.map(function (key) {
+        var months = by[key], total = 0;
+        var cells = MONTHS.map(function (m, i) {
+          var v = months[i + 1];
+          if (v == null) return { v: null, cls: "n" };
+          total += v;
+          // Полоса под числом: провал в середине года и месяц, с которого
+          // договор начинается, видно раньше, чем прочитаны цифры.
+          var share = peak ? Math.max(4, Math.round((v / peak) * 100)) : 0;
+          return { v: '<span class="bar" style="--f:' + share + '%">' +
+                      mo(v) + "</span>", cls: "n" };
+        });
+        return [{ v: esc(years[key][0]), cls: "key" },
+                { v: years[key][1] == null ? null : String(years[key][1]), cls: "n" }]
+          .concat(cells, [{ v: mo(total), cls: "n tot" }]);
       }),
       "Когда деньги приходят на договор. Решатель не может потратить их " +
       "раньше поступления; без графика фонд раскладывается ровно по месяцам " +
@@ -1669,7 +1711,10 @@ function renderRegistry() {
     '<div class="rtabs">' + REG_TABS.map(function (t) {
       var n = { docs: docs.length, ctr: (d.contracts || []).length,
                 emp: (d.employees || []).length, labor: (d.labor || []).length,
-                inflow: (d.inflows || []).length, secret: (d.secret || []).length,
+                inflow: new Set((d.inflows || []).map(function (x) {
+                  return x.contract + "|" + x.year;
+                })).size,
+                secret: (d.secret || []).length,
                 ref: (d.reference || []).length,
                 sub: (d.substitutions || []).length }[t.key];
       return '<button type="button" data-rtab="' + t.key + '"' +
