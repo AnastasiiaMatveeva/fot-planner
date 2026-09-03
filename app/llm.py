@@ -251,10 +251,58 @@ RESPONSE_SCHEMA = {
 }
 
 
+class Truncated(Exception):
+    """Ответ модели оборван по лимиту длины, но часть строк удалось спасти.
+
+    Раньше это была обычная ошибка разбора JSON: кусок документа пропадал
+    целиком, а в ленте оставалось «Unterminated string starting at: line 130».
+    Спасенное лежит в ``data`` — вызывающая сторона решает, брать ли его.
+    """
+
+    def __init__(self, data, reason=""):
+        super().__init__(reason or "ответ модели оборван по длине")
+        self.data = data
+
+
+def _salvage(raw):
+    """Разобрать оборванный JSON, отрезав его по последнему целому значению.
+
+    Модель пишет массивы объектов, и обрыв приходится на середину очередного
+    объекта. Все, что закончилось до него, — годные строки, и терять их из-за
+    последней недописанной незачем.
+    """
+    stack, in_string, escaped, stops = [], False, False, []
+    for i, ch in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "[{":
+            stack.append(ch)
+        elif ch in "]}":
+            if stack:
+                stack.pop()
+            stops.append((i + 1, list(stack)))
+
+    for pos, open_at in reversed(stops[-400:]):
+        tail = "".join("]" if c == "[" else "}" for c in reversed(open_at))
+        try:
+            return json.loads(raw[:pos] + tail)
+        except ValueError:
+            continue
+    return None
+
+
 def _call_openai_compatible(text, filename, model, url, api_key=None,
                             schema=False, no_thinking=False, insecure=False,
                             system=None, shape=None, json_schema=None,
-                            schema_name="reference_update"):
+                            schema_name="reference_update", max_tokens=8000):
     """Запрос к любому серверу с OpenAI-совместимым API.
 
     Один адаптер на облачный DeepSeek и на vLLM в своей сети: протокол тот же,
@@ -273,7 +321,7 @@ def _call_openai_compatible(text, filename, model, url, api_key=None,
             {"role": "user", "content": "Документ «%s»:\n\n%s" % (filename, text)},
         ],
         "temperature": 0,
-        "max_tokens": 8000,
+        "max_tokens": max_tokens,
     }
     if schema:
         payload["response_format"] = {
@@ -296,9 +344,20 @@ def _call_openai_compatible(text, filename, model, url, api_key=None,
     ctx = None
     if url.lower().startswith("https"):
         ctx = ssl._create_unverified_context() if insecure else _ssl_context()
-    with urllib.request.urlopen(req, timeout=300, context=ctx) as resp:
+    with urllib.request.urlopen(req, timeout=600, context=ctx) as resp:
         answer = json.loads(resp.read().decode("utf-8"))
-    return json.loads(answer["choices"][0]["message"]["content"])
+    choice = answer["choices"][0]
+    content = choice["message"]["content"]
+    try:
+        return json.loads(content)
+    except ValueError as e:
+        # Ответ не разобрался — почти всегда потому, что кончился бюджет
+        # длины и объект оборвался на середине. Спасаем целые строки, а
+        # решение, что с ними делать, оставляем вызывающей стороне.
+        saved = _salvage(content)
+        if saved is None:
+            raise
+        raise Truncated(saved, "%s: %s" % (choice.get("finish_reason") or "обрыв", e))
 
 
 #: Сколько текста уходит в один запрос и насколько части перекрываются.
@@ -737,9 +796,24 @@ def freeform(path, filename="", max_chunks=8):
     parts = _chunks(text)[:max_chunks]
     errors = []
 
-    for part in parts:
+    cut = 0
+    queue = list(parts)
+    while queue:
+        part = queue.pop(0)
         try:
             raw = _ask_freeform(name, model, part, filename)
+        except Truncated as e:
+            # Часть оказалась слишком плотной: ответ не поместился в бюджет.
+            # Спасенное берем, а саму часть переспрашиваем половинами — так
+            # находится и то, что не поместилось. Делим, пока есть что делить.
+            cut += 1
+            raw = e.data
+            if len(part) > 4000:
+                half = len(part) // 2
+                edge = part.rfind("\n", half // 2, half + half // 2)
+                if edge <= 0:
+                    edge = half
+                queue[:0] = [part[:edge], part[edge:]]
         except Exception as e:  # noqa: BLE001 — сеть, лимиты, битый JSON
             errors.append(str(e))
             continue
@@ -761,7 +835,7 @@ def freeform(path, filename="", max_chunks=8):
     if errors and not any(found.values()):
         return {"ok": False, "error": errors[0]}
     return {"ok": True, "model": "%s %s" % (name, model), "parts": len(parts),
-            **found}
+            "обрезано частей": cut, **found}
 
 
 def _ask_freeform(name, model, text, filename):
@@ -774,7 +848,10 @@ def _ask_freeform(name, model, text, filename):
         no_thinking=_no_thinking(name),
         insecure=_truthy(os.environ.get("FOT_LLM_INSECURE_TLS")),
         system=FREEFORM_SYSTEM, shape=FREEFORM_SHAPE,
-        json_schema=FREEFORM_SCHEMA, schema_name="freeform_entities")
+        json_schema=FREEFORM_SCHEMA, schema_name="freeform_entities",
+        # Семь сущностей и шесть десятков полей: на плотной части документа
+        # ответ длиннее прежних восьми тысяч токенов, и его обрывало.
+        max_tokens=16000)
 
 
 def _freeform_anthropic(text, filename, model):
