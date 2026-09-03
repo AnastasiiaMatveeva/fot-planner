@@ -301,6 +301,10 @@ class Run(Base):
     input_path: Mapped[str | None] = mapped_column(String(500), default=None)
     result_path: Mapped[str | None] = mapped_column(String(500), default=None)
     summary: Mapped[str | None] = mapped_column(Text, default=None)    # JSON: итоги для карточки
+    # Состав расчета: документы (имя, версия, отпечаток, сколько строк дали)
+    # и версии агентов на момент запуска. План ГОЗ должен отвечать на вопрос
+    # «на основании чего» и через год, когда документы уже заменены.
+    sources: Mapped[str | None] = mapped_column(Text, default=None)    # JSON
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
 
     case: Mapped[Case] = relationship(back_populates="runs")
@@ -461,6 +465,7 @@ _ADDED_COLUMNS = {
     "documents": [("version", "INTEGER"), ("supersedes_id", "INTEGER"),
                   ("sha256", "VARCHAR(64)")],
     "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
+    "runs": [("sources", "TEXT")],
     "verdicts": [("grade", "VARCHAR(20)")],
     "employees": [
         ("department", "VARCHAR(200)"),

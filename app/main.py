@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -114,7 +115,8 @@ def case_state(db, case):
                        "answer": q.answer} for q in qs],
         "runs": [{"id": r.id, "status": r.status, "seconds": r.seconds,
                   "created": _dt(r.created),
-                  "summary": json.loads(r.summary) if r.summary else None} for r in runs],
+                  "summary": json.loads(r.summary) if r.summary else None,
+                  "sources": json.loads(r.sources) if r.sources else None} for r in runs],
         "agents": agents.agent_list(),
         "solver": agents.SOLVER,
         "model": {"provider": provider_name, "name": provider_model,
@@ -1555,6 +1557,59 @@ async def post_reference(request: Request):
 
 
 # ── расчет ──────────────────────────────────────────────────────
+def _run_sources(db):
+    """Что легло в основание расчета: документы и версии агентов.
+
+    Документ попадает сюда, если хоть одна строка реестра ссылается на него.
+    У каждого — версия и отпечаток содержимого: по ним через год можно
+    проверить, что план построен на этом файле, а не на исправленном.
+    """
+    rows = {}
+    for model, what in ((Employee, "сотрудников"), (Contract, "договоров"),
+                        (LaborRow, "строк трудоемкости"), (Inflow, "поступлений"),
+                        (SecretAllowance, "надбавок 120"),
+                        (Substitution, "правил замещения")):
+        for r in db.query(model).all():
+            if r.document_id:
+                rows.setdefault(r.document_id, {})
+                rows[r.document_id][what] = rows[r.document_id].get(what, 0) + 1
+    docs = []
+    for doc_id, counts in sorted(rows.items()):
+        d = db.get(Document, doc_id)
+        if d is None:
+            continue
+        docs.append({"id": d.id, "имя": d.name, "версия": d.version or 1,
+                     "отпечаток": d.sha256, "загружен": _dt(d.uploaded),
+                     "строк": counts})
+    return {"документы": docs,
+            "агенты": {a: agents.version_of(a) for a in ("intake", "norms", "solver")},
+            "справочник": {"файл": os.path.basename(reference.TEMPLATE),
+                           "должностей": len(reference.read_rows())}}
+
+
+def _write_sources_sheet(path, sources):
+    """Лист «источники» в файле результата: план уходит из сервиса в письмо
+    и в архив, и должен нести основание с собой."""
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(path)
+        if "источники" in wb.sheetnames:
+            del wb["источники"]
+        ws = wb.create_sheet("источники")
+        ws.append(["документ", "версия", "загружен", "отпечаток SHA-256", "строк в реестре"])
+        for d in sources["документы"]:
+            ws.append([d["имя"], d["версия"], d["загружен"], d["отпечаток"],
+                       ", ".join("%s %d" % (k, v) for k, v in d["строк"].items())])
+        ws.append([])
+        for a, v in sources["агенты"].items():
+            ws.append(["агент «%s»" % a, v])
+        ws.append(["справочник должностей", sources["справочник"]["должностей"]])
+        wb.save(path)
+    except Exception as exc:  # noqa: BLE001 — результат важнее листа с основанием
+        logging.getLogger("fot.app").warning("лист источников не записан: %s", exc)
+
+
 def _solve(case_id: int, run_id: int, settings: dict | None):
     db = session()
     try:
@@ -1565,7 +1620,11 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
             warn = []
             build_input.build(reference.TEMPLATE, src, _registry_data(db, case), warn)
             run.input_path = src
+            sources = _run_sources(db)
+            run.sources = json.dumps(sources, ensure_ascii=False)
             w["detail"] = "; ".join(warn) or "вход собран"
+            w["artifact"] = {"документов в основании": len(sources["документы"]),
+                             "версии агентов": sources["агенты"]}
             db.commit()
         for line in warn:
             agents.say(db, case_id, line, agent="intake")
@@ -1600,6 +1659,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
 
         run.status = "OPTIMAL"
         run.result_path = out
+        _write_sources_sheet(out, sources)
         summary = {}
         try:
             import result2json

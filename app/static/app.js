@@ -479,8 +479,32 @@ function renderRuns() {
            (r.status === "OPTIMAL"
              ? '<div class="mt"><a href="/api/case/' + caseId + "/result/" + r.id +
                '">скачать xlsx</a></div>' : "") +
+           runSources(r.sources) +
            "</div>";
   }).join("");
+}
+
+/* Основание расчета: документы с версией и отпечатком, версии агентов.
+   Свернуто в одну строку — раскрывается, когда нужно ответить «на чем
+   считали». Тот же перечень лежит листом «источники» в файле результата. */
+function runSources(s) {
+  if (!s || !s["документы"] || !s["документы"].length) return "";
+  var docs = s["документы"];
+  var ag = s["агенты"] || {};
+  return '<details class="srcs"><summary>' +
+    "на основании " + docs.length + " " + px(docs.length, "документа", "документов", "документов") +
+    "</summary><ul>" + docs.map(function (d) {
+      return "<li>" + esc(d["имя"]) +
+        (d["версия"] > 1 ? " · версия " + d["версия"] : "") +
+        (d["отпечаток"] ? ' · <span class="mono" title="SHA-256 ' + esc(d["отпечаток"]) +
+                          '">' + esc(d["отпечаток"].slice(0, 10)) + "…</span>" : "") +
+        '<div class="mt">' + esc(Object.keys(d["строк"] || {}).map(function (k) {
+          return k + " " + d["строк"][k];
+        }).join(", ")) + "</div></li>";
+    }).join("") + "</ul>" +
+    '<div class="mt">агенты: ' + esc(Object.keys(ag).map(function (a) {
+      return a + " " + ag[a];
+    }).join(", ")) + "</div></details>";
 }
 
 function renderAsk() {
