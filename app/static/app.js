@@ -760,7 +760,7 @@ function loadResult() {
  */
 function bar(share, cls) {
   var w = Math.max(0, Math.min(1, share || 0));
-  return '<span class="bar ' + (cls || "") + '"><i style="width:' +
+  return '<span class="gauge ' + (cls || "") + '"><i style="width:' +
          (w * 100).toFixed(1) + '%"></i></span>';
 }
 

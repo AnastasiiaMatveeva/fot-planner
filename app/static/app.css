@@ -1047,13 +1047,15 @@ table.mini .n.warn{color:var(--warn)}
 table.mini .sub{font-size:11.5px;color:var(--ink3);margin-top:2px}
 table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
                 background:var(--accbg);color:var(--acc2);font:600 10px var(--f)}
-.bar{display:inline-block;width:72px;height:7px;border-radius:999px;
-     background:var(--line2);overflow:hidden;vertical-align:middle}
-.bar i{display:block;height:100%;background:var(--acc)}
-.bar.ok i{background:var(--ok)}
-.bar.warn i{background:var(--warn)}
-.bar.bad i{background:var(--bad)}
-.rule .rf .bar{margin-right:8px}
+/* Шкала доли предела. Своим именем, а не .bar: тем классом в плане выплат
+   залиты сами числа, и общее правило их стирало. */
+.gauge{display:inline-block;width:72px;height:7px;border-radius:999px;
+       background:var(--line2);overflow:hidden;vertical-align:middle}
+.gauge i{display:block;height:100%;background:var(--acc)}
+.gauge.ok i{background:var(--ok)}
+.gauge.warn i{background:var(--warn)}
+.gauge.bad i{background:var(--bad)}
+.rule .rf .gauge{margin-right:8px}
 .rule table.rb2{grid-column:2/4;margin-top:9px}
 .rule table.rb2 tr.over td{color:var(--bad)}
 .rule table.rb2 td.over{font-weight:600}
