@@ -1388,12 +1388,56 @@ function leaveAgents() {
   $("openagents").classList.remove("on");
 }
 
+/* Карточка плана: пять этапов чипами, под ними — что мешает. Щелчок по
+   этапу раскрывает его строки и действие. Цвет чипа — состояние, а не
+   украшение: стоит, внимание, готово, не начато. */
+var STAGE_CLS = { "готово": "ok", "внимание": "warn", "стоит": "bad", "не начато": "off" };
+
+function planCard(p) {
+  var opened = openWork["p:" + p.id];
+  var chips = p["этапы"].map(function (s, i) {
+    return '<button type="button" class="stage ' + STAGE_CLS[s["состояние"]] +
+           (opened === i ? " on" : "") + '" data-stage="' + p.id + ":" + i + '">' +
+           '<span class="sdot"></span>' + esc(s["имя"]) + "</button>";
+  }).join('<span class="sarrow">›</span>');
+  var detail = "";
+  if (opened != null && p["этапы"][opened]) {
+    var s = p["этапы"][opened];
+    var act = s["действие"];
+    detail = '<div class="sdetail">' +
+      '<div class="ssum">' + esc(s["итог"]) + "</div>" +
+      (s["строки"].length
+        ? '<div class="srows">' + s["строки"].map(function (r) {
+            return '<div class="srow' + (r["внимание"] ? " warn" : "") + '"' +
+              (r["document_id"] ? ' data-doc2="' + r["document_id"] + '"' : "") +
+              (r["case_id"] ? ' data-case="' + r["case_id"] + '"' : "") + ">" +
+              esc(r["текст"]) +
+              (r["состояние"] ? ' <span class="c">' + esc(r["состояние"]) + "</span>" : "") +
+              "</div>";
+          }).join("") + "</div>"
+        : "") +
+      (act ? '<button type="button" class="sact" data-go="' + esc(act["куда"]) + '"' +
+             (act["document_id"] ? ' data-doc2="' + act["document_id"] + '"' : "") +
+             (act["case_id"] ? ' data-case="' + act["case_id"] + '"' : "") +
+             (act["вкладка"] ? ' data-tab="' + esc(act["вкладка"]) + '"' : "") + ">" +
+             esc(act["текст"]) + "</button>" : "") +
+      "</div>";
+  }
+  return '<div class="plan"><div class="ph"><span class="pt">' + esc(p["план"]) +
+    "</span>" + '<span class="py">' + p["год"] + "</span></div>" +
+    '<div class="stages">' + chips + "</div>" +
+    (p["мешает"]
+      ? '<div class="pblock"><b>' + esc(p["мешает_этап"]) + ":</b> " + esc(p["мешает"]) + "</div>"
+      : '<div class="pok">Ничего не мешает — план на этапе «' + esc(p["этап"]) + "»</div>") +
+    detail + "</div>";
+}
+
 function renderAgents() {
   var d = agentData;
   var wait = d["ждет"] || [];
 
-  var head = '<div class="vh">Работа агентов по всем планам. Здесь видно, что ' +
-    "ждет вашего ответа, что уже сделано и на чем это основано.</div>";
+  var head = '<div class="vh">Где каждый план сейчас и что мешает ему дойти до ' +
+    "результата. Подробности и журнал — ниже, по желанию.</div>";
 
   // Блок «требует вас» идет первым и только если есть что: пустой блок с
   // надписью «ничего не ждет» — та же реклама, что и схема со стрелками.
@@ -1509,7 +1553,20 @@ function renderAgents() {
       }).join("") + "</div>"
     : "";
 
-  $("agentview").innerHTML = head + need + trail + journal + missing;
+  // Сводка → подробности → журнал. Большинство остановится на сводке, и
+  // это правильно: ей и должно хватать. Подробности и журнал свернуты.
+  var plans = (d["планы"] || []).map(planCard).join("") ||
+              '<div class="none">Планов пока нет</div>';
+  var more = function (key, title, html) {
+    var open = !!openWork[key];
+    return '<div class="fold' + (open ? " open" : "") + '" data-fold="' + key + '">' +
+           '<div class="fh">' + esc(title) + "</div>" +
+           (open ? html : "") + "</div>";
+  };
+  $("agentview").innerHTML = head + need + plans +
+    more("f:trail", "Подробности по документам", trail) +
+    more("f:journal", "Журнал всех работ", journal) +
+    more("f:missing", "Что не работает в этой сборке", missing);
 }
 
 /* ── реестр организации ───────────────────────────────────────
@@ -1870,6 +1927,34 @@ $("regview").addEventListener("change", function (e) {
 });
 
 $("agentview").addEventListener("click", function (e) {
+  // Этап плана: раскрыть его строки. Действие этапа: уйти по назначению.
+  var go = e.target.closest("[data-go]");
+  if (go) {
+    var where = go.getAttribute("data-go");
+    if (where === "реестр") { openRegistry(); return; }
+    if (where === "документ") { openDocument(+go.getAttribute("data-doc2")); return; }
+    if (where === "план") {
+      open(+go.getAttribute("data-case"));
+      var tab = go.getAttribute("data-tab");
+      if (tab) setTimeout(function () { setView(tab); }, 600);
+      return;
+    }
+  }
+  var st = e.target.closest("[data-stage]");
+  if (st) {
+    var parts = st.getAttribute("data-stage").split(":");
+    var key = "p:" + parts[0], idx = +parts[1];
+    openWork[key] = openWork[key] === idx ? null : idx;
+    renderAgents();
+    return;
+  }
+  var fold = e.target.closest("[data-fold]");
+  if (fold && e.target.closest(".fh")) {
+    var fk = fold.getAttribute("data-fold");
+    openWork[fk] = !openWork[fk];
+    renderAgents();
+    return;
+  }
   // Провал: документ → шаги → артефакт. Щелчок по шагу не должен сворачивать
   // документ, поэтому шаг проверяется первым.
   var step = e.target.closest("[data-step]");

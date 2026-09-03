@@ -334,6 +334,157 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
         db.close()
 
 
+def _progress(db, case):
+    """Состояние плана этапами: где он сейчас и что мешает дойти до результата.
+
+    Лента работ отвечает на вопрос «что делали агенты», а экономисту нужен
+    другой: «где мой план и что от меня требуется». Пять этапов — документы,
+    разбор, данные для расчета, расчет, результат — и у каждого состояние:
+    готово, требует внимания, стоит, не начато. Первый стоящий этап и есть
+    ответ «что мешает».
+    """
+    import tempfile
+
+    docs = db.query(Document).order_by(Document.id).all()
+    stages = []
+
+    # 1. Документы
+    bad = [d for d in docs if d.state in ("не прочитан", "текст нечитаемый")]
+    rows = [{"текст": d.name, "состояние": docStatus(d.state), "document_id": d.id}
+            for d in docs]
+    stages.append({
+        "имя": "Документы",
+        "состояние": "стоит" if not docs else ("внимание" if bad else "готово"),
+        "итог": ("документов нет — загрузите их в реестр" if not docs else
+                 "%d %s, из них не читаются %d" % (len(docs), _px(len(docs), "документ", "документа", "документов"), len(bad))
+                 if bad else "%d %s" % (len(docs), _px(len(docs), "документ", "документа", "документов"))),
+        "строки": rows, "действие": {"текст": "Открыть реестр", "куда": "реестр"},
+    })
+
+    # 2. Разбор
+    pending = db.query(Proposal).filter_by(state="предложено").all()
+    by_doc = {}
+    for pr in pending:
+        by_doc[pr.document_id] = by_doc.get(pr.document_id, 0) + 1
+    questions = (db.query(Question).filter_by(case_id=case.id, answer=None)
+                 .order_by(Question.id).all())
+    rows = []
+    for did, n in by_doc.items():
+        d = db.get(Document, did)
+        rows.append({"текст": "%s — %d %s ждут подтверждения" % (
+            d.name if d else did, n, _px(n, "строка", "строки", "строк")),
+            "document_id": did, "внимание": True})
+    for q in questions:
+        rows.append({"текст": q.text, "case_id": case.id, "внимание": True})
+    needs = bool(by_doc or questions)
+    stages.append({
+        "имя": "Разбор",
+        "состояние": "не начато" if not docs else ("стоит" if needs else "готово"),
+        "итог": ("ждет вас: %d %s на подтверждение, %d %s агента"
+                 % (len(pending), _px(len(pending), "строка", "строки", "строк"),
+                    len(questions), _px(len(questions), "вопрос", "вопроса", "вопросов"))
+                 if needs else "все документы разобраны"),
+        "строки": rows,
+        "действие": ({"текст": "Подтвердить", "куда": "документ",
+                      "document_id": next(iter(by_doc))} if by_doc else
+                     {"текст": "Ответить", "куда": "план", "case_id": case.id} if questions
+                     else None),
+    })
+
+    # 3. Данные для расчета — тот же сборщик, что перед расчетом, только
+    # в никуда: его предупреждения и есть список допущений.
+    data = _registry_data(db, case)
+    warn = []
+    try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        tmp.close()
+        build_input.build(reference.TEMPLATE, tmp.name, data, warn)
+        os.remove(tmp.name)
+    except Exception as e:  # noqa: BLE001 — сборка не должна ронять сводку
+        warn.append("Сборка входного файла не удалась: %s" % str(e)[:200])
+    counts = [("сотрудников", len(data["employees"])), ("договоров", len(data["contracts"])),
+              ("поступлений", len(data["inflows"])), ("строк трудоемкости", len(data["labor"])),
+              ("надбавок 120", len(data["secret"])), ("правил замещения", len(data["substitutions"]))]
+    rows = [{"текст": "%s: %d" % (k, v)} for k, v in counts]
+    rows += [{"текст": w, "внимание": True} for w in warn]
+    blocked = not data["employees"] or not data["contracts"]
+    stages.append({
+        "имя": "Данные для расчета",
+        "состояние": "стоит" if blocked else ("внимание" if warn else "готово"),
+        "итог": ("нет сотрудников или договоров — считать не на чем" if blocked else
+                 "%d %s приняты сервисом за вас — проверьте"
+                 % (len(warn), _px(len(warn), "допущение", "допущения", "допущений"))
+                 if warn else "все листы заполнены из документов"),
+        "строки": rows, "действие": {"текст": "Открыть реестр", "куда": "реестр"},
+    })
+
+    # 4. Расчет
+    run = (db.query(Run).filter_by(case_id=case.id).order_by(Run.id.desc()).first())
+    stages.append({
+        "имя": "Расчет",
+        "состояние": ("не начато" if run is None else
+                      "готово" if run.status == "OPTIMAL" else "стоит"),
+        "итог": ("еще не запускался" if run is None else
+                 "план найден за %s с" % run.seconds if run.status == "OPTIMAL" else
+                 "решения нет: %s" % (run.status or "ошибка")),
+        "строки": ([] if run is None else
+                   [{"текст": "прогон № %d, %s" % (run.id, run.status or "—")}]),
+        "действие": {"текст": "К плану", "куда": "план", "case_id": case.id},
+    })
+
+    # 5. Результат
+    problems = {"Ошибка": 0, "Предупреждение": 0}
+    plan_rows = None
+    if run is not None and run.status == "OPTIMAL":
+        js = os.path.join(RESULT_DIR, "case%d_run%d.json" % (case.id, run.id))
+        if os.path.exists(js):
+            with open(js, encoding="utf-8") as f:
+                res = json.load(f)
+            plan_rows = len(res.get("plan") or [])
+            for w in res.get("warnings") or []:
+                if w and w[0] in problems:
+                    problems[w[0]] += 1
+    stages.append({
+        "имя": "Результат",
+        "состояние": ("не начато" if plan_rows is None else
+                      "внимание" if problems["Ошибка"] else "готово"),
+        "итог": ("пока нет" if plan_rows is None else
+                 "%d %s плана, ошибок %d, предупреждений %d"
+                 % (plan_rows, _px(plan_rows, "строка", "строки", "строк"),
+                    problems["Ошибка"], problems["Предупреждение"])),
+        "строки": [], "действие": ({"текст": "Смотреть результат", "куда": "план",
+                                    "case_id": case.id, "вкладка": "plan"}
+                                   if plan_rows is not None else None),
+    })
+
+    blocker = next((s for s in stages if s["состояние"] == "стоит"), None)
+    return {"id": case.id, "план": case.title, "год": case.year, "этап": case.stage,
+            "этапы": stages,
+            "мешает": blocker["итог"] if blocker else None,
+            "мешает_этап": blocker["имя"] if blocker else None}
+
+
+def _px(n, one, few, many):
+    d, h = n % 10, n % 100
+    if 11 <= h <= 14:
+        return many
+    if d == 1:
+        return one
+    if 2 <= d <= 4:
+        return few
+    return many
+
+
+#: Статусы документа так, как их называет таблица реестра.
+_DOC_STATUS = {"разобран": "Обработан", "ждет подтверждения": "Требует подтверждения",
+               "не распознан": "Данные не извлечены", "не прочитан": "Файл не прочитан",
+               "текст нечитаемый": "Текст нечитаемый", "ожидает": "В обработке"}
+
+
+def docStatus(state):
+    return _DOC_STATUS.get(state, state or "—")
+
+
 #: Название шага по глаголу из заголовка работы — коротко и существительным.
 _STEPS = (("определяет вид", "определение вида"),
           ("сверяет", "сверка со справочником"),
@@ -444,8 +595,10 @@ def agents_page(limit: int = 60):
                            "делает": one["does"], "работает": one["real"],
                            "работ": counts.get(one["key"], 0),
                            "версия": agents.version_of(one["key"])})
+        plans = [_progress(db, c) for c in
+                 db.query(Case).order_by(Case.updated.desc()).all()]
         return {"ждет": waiting, "работы": work, "следы": trace_list,
-                "агенты": roster, "решатель": agents.SOLVER}
+                "планы": plans, "агенты": roster, "решатель": agents.SOLVER}
     finally:
         db.close()
 

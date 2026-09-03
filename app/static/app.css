@@ -768,3 +768,49 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .step .sd{flex:0 0 auto;font-size:11.5px;color:var(--ink3);white-space:nowrap}
 .step .sdet{margin:3px 0 0 15px;font-size:12px;color:var(--ink2);line-height:1.45}
 .step .meta{margin:8px 0 2px 15px}
+
+
+/* ── ход работы ────────────────────────────────────────────── */
+/* Карточка плана: этапы чипами, состояние — цветом точки, «что мешает» —
+   одной строкой. Сводка первой, подробности свернуты. */
+.plan{border:1px solid var(--line2);border-radius:var(--r2);background:var(--s0);
+      padding:14px 16px 12px;margin-bottom:12px}
+.plan .ph{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+.plan .pt{font-size:14px;font-weight:600;color:var(--ink)}
+.plan .py{font-size:12px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.stages{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.stage{display:inline-flex;align-items:center;gap:7px;padding:6px 11px;
+       border:1px solid var(--line);border-radius:999px;background:var(--s0);
+       color:var(--ink2);cursor:pointer;font:500 12.5px var(--f)}
+.stage:hover{border-color:var(--ink3);color:var(--ink)}
+.stage.on{background:var(--s2);border-color:var(--ink3);color:var(--ink)}
+.stage .sdot{width:7px;height:7px;border-radius:50%;background:var(--line)}
+.stage.ok .sdot{background:var(--ok)}
+.stage.warn .sdot{background:var(--warn)}
+.stage.bad .sdot{background:var(--bad)}
+.stage.off{color:var(--ink3)}
+.sarrow{color:var(--line);font-size:14px}
+.pblock{margin-top:10px;padding:9px 12px;border-radius:var(--r3);background:var(--badbg);
+        color:var(--bad);font-size:12.5px;line-height:1.45}
+.pblock b{font-weight:600}
+.pok{margin-top:10px;font-size:12.5px;color:var(--ink3)}
+.sdetail{margin-top:10px;padding:12px 13px;border-top:1px solid var(--line2)}
+.ssum{font-size:13px;color:var(--ink);margin-bottom:8px}
+.srows{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.srow{font-size:12.5px;color:var(--ink2);padding:5px 9px;border-radius:var(--r3);
+      background:var(--s1)}
+.srow.warn{background:var(--warnbg);color:var(--warn)}
+.srow[data-doc2],.srow[data-case]{cursor:pointer}
+.srow[data-doc2]:hover,.srow[data-case]:hover{background:var(--accbg);color:var(--acc2)}
+.srow .c{color:var(--ink3);font-size:11.5px;margin-left:6px}
+.sact{padding:7px 14px;border:1px solid var(--acc);background:var(--acc);color:#fff;
+      border-radius:var(--r3);cursor:pointer;font:600 12.5px var(--f)}
+.sact:hover{background:var(--acc2);border-color:var(--acc2)}
+/* Свернутые разделы: подробности и журнал существуют, но не первыми. */
+.fold{margin-top:18px;border-top:1px solid var(--line2);padding-top:10px}
+.fold .fh{font:600 12px var(--f);letter-spacing:.04em;text-transform:uppercase;
+          color:var(--ink3);cursor:pointer;padding:4px 0}
+.fold .fh::before{content:"›";display:inline-block;margin-right:8px;transition:transform .15s}
+.fold.open .fh::before{transform:rotate(90deg)}
+.fold .fh:hover{color:var(--ink)}
+.fold > .grp{margin-top:10px}
