@@ -103,6 +103,16 @@ def position_limit_tables_from_salary_limits(
             )
             for row in rows
         ],
+        "bep": [
+            PositionLimit(
+                limit_code="bep",
+                position=row.position,
+                personnel_category=row.personnel_category,
+                limit=row.bep_limit,
+                note=None,
+            )
+            for row in rows
+        ],
     }
     return tables
 

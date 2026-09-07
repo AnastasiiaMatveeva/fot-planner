@@ -99,9 +99,54 @@ def _labor_rows_by_group_only(ctx: PlanningContext) -> list[ConflictRecord]:
     return out
 
 
+def _person_key(employee) -> str:
+    name = str(getattr(employee, "full_name", "") or "").strip().lower()
+    return " ".join(name.split()) or employee.id
+
+
+def _employment_structure_conflicts(ctx: PlanningContext) -> list[ConflictRecord]:
+    """У человека одно основное место и не больше двух совместительств.
+
+    Совместительства без основного не бывает: внешний совместитель в модели
+    не предусмотрен, основное место у каждого здесь. Строки одного человека
+    узнаются по ФИО.
+    """
+    by_person: dict[str, list] = {}
+    for e in ctx.employees:
+        by_person.setdefault(_person_key(e), []).append(e)
+    out: list[ConflictRecord] = []
+    for rows in by_person.values():
+        mains = [e for e in rows if e.employment_type != "part_time"]
+        parts = [e for e in rows if e.employment_type == "part_time"]
+        if parts and not mains:
+            for e in parts:
+                out.append(ConflictRecord(
+                    code="PART_TIME_WITHOUT_MAIN",
+                    message=(f"Сотрудник {e.id}: совместительство без основного места — "
+                             "у каждого сотрудника должна быть строка основного места"),
+                    employee_id=e.id,
+                ))
+        if len(mains) > 1:
+            for e in mains[1:]:
+                out.append(ConflictRecord(
+                    code="SECOND_MAIN_ROW",
+                    message=f"Сотрудник {e.id}: второе основное место у одного человека",
+                    employee_id=e.id,
+                ))
+        if len(parts) > 2:
+            for e in parts[2:]:
+                out.append(ConflictRecord(
+                    code="TOO_MANY_PART_TIME",
+                    message=f"Сотрудник {e.id}: третье совместительство — допускается не больше двух",
+                    employee_id=e.id,
+                ))
+    return out
+
+
 def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
     conflicts: list[ConflictRecord] = _defaults_used_conflicts(ctx)
     conflicts += _labor_rows_by_group_only(ctx)
+    conflicts += _employment_structure_conflicts(ctx)
     emp_ids = {e.id for e in ctx.employees}
     contract_ids = {c.id for c in ctx.contracts}
 

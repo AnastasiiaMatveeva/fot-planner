@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import fastapi
 import os
 import subprocess
 import sys
@@ -75,6 +76,32 @@ app = FastAPI(title="Планирование ФОТ")
 init_db()
 
 
+def _close_orphans():
+    """Строки работы и прогоны, брошенные прошлым запуском.
+
+    Фоновая задача живёт в процессе сервера: перезапуск её убивает, а строка
+    «агент работает» и прогон «идет» остаются навсегда — в шапке плана
+    висит агент, которого нет. При старте закрываем такие следы честно.
+    """
+    from db import Activity, Run, session as _session
+    db = _session()
+    try:
+        stale_acts = db.query(Activity).filter_by(state="идет").all()
+        for a in stale_acts:
+            a.state = "прервано"
+            a.detail = "сервис был перезапущен, работа не завершена"
+        stale_runs = db.query(Run).filter_by(status="идет").all()
+        for r in stale_runs:
+            r.status = "прерван"
+        if stale_acts or stale_runs:
+            db.commit()
+    finally:
+        db.close()
+
+
+_close_orphans()
+
+
 # ── сериализация для страницы ───────────────────────────────────
 def _dt(v):
     return v.strftime("%d.%m.%Y %H:%M") if v else None
@@ -94,14 +121,20 @@ def case_state(db, case):
     return {
         "case": {"id": case.id, "title": case.title, "year": case.year,
                  "stage": case.stage, "updated": _dt(case.updated),
-                 "has_data": bool(case.passport),
+                 "has_data": bool(case.passport) or _registry_ready(db),
                  "counts": {
                      "employees": db.query(Employee).count(),
                      "contracts": db.query(Contract).count(),
                      "substitutions": db.query(Substitution).count()}},
         "documents": [{"id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
                        "by": d.parsed_by, "summary": d.summary,
-                       "uploaded": _dt(d.uploaded), "size": d.size} for d in docs],
+                       "uploaded": _dt(d.uploaded), "size": d.size,
+                       # Реестр — общие документы; план — песочница этого плана.
+                       "scope": ("план" if d.scope == "план" and d.case_id == case.id
+                                 else "реестр"),
+                       "muted": d.id in _muted(case)}
+                      for d in docs
+                      if d.scope != "план" or d.case_id == case.id],
         "messages": [{"id": m.id, "who": m.who, "agent": m.agent,
                       "to": m.to_agent, "text": m.text,
                       "payload": json.loads(m.payload) if m.payload else None,
@@ -116,7 +149,8 @@ def case_state(db, case):
         "runs": [{"id": r.id, "status": r.status, "seconds": r.seconds,
                   "created": _dt(r.created),
                   "summary": json.loads(r.summary) if r.summary else None,
-                  "sources": json.loads(r.sources) if r.sources else None} for r in runs],
+                  "sources": json.loads(r.sources) if r.sources else None,
+                  "settings": json.loads(r.settings) if r.settings else None} for r in runs],
         "agents": agents.agent_list(),
         "solver": agents.SOLVER,
         "model": {"provider": provider_name, "name": provider_model,
@@ -131,13 +165,21 @@ def list_cases():
     db = session()
     try:
         rows = db.query(Case).order_by(Case.updated.desc()).all()
-        return [{"id": c.id, "title": c.title, "year": c.year, "stage": c.stage,
-                 "updated": _dt(c.updated),
-                 # Список группируется по давности, для этого нужна дата,
-                 # а не отформатированная строка.
-                 "updated_at": c.updated.isoformat() if c.updated else None,
-                 "documents": db.query(Document).filter_by(case_id=c.id).count()}
-                for c in rows]
+        out = []
+        for c in rows:
+            # Последний удачный прогон: по нему «Текущий план» открывается
+            # сразу сводкой, минуя ленту.
+            last = (db.query(Run).filter_by(case_id=c.id, status="OPTIMAL")
+                    .order_by(Run.id.desc()).first())
+            out.append({"id": c.id, "title": c.title, "year": c.year, "stage": c.stage,
+                        "updated": _dt(c.updated),
+                        # Список группируется по давности, для этого нужна дата,
+                        # а не отформатированная строка.
+                        "updated_at": c.updated.isoformat() if c.updated else None,
+                        "documents": db.query(Document).filter_by(case_id=c.id).count(),
+                        "run_id": last.id if last else None,
+                        "computed_at": _dt(last.created) if last else None})
+        return out
     finally:
         db.close()
 
@@ -247,7 +289,18 @@ def _process(case_id: int, doc_id: int):
     try:
         case = db.get(Case, case_id)
         doc = db.get(Document, doc_id)
-        if case and doc:
+        if case and doc and (doc.scope or "реестр") == "план":
+            # Песочница: вид определяем, но в реестр ничего не пишем —
+            # только предложения, которые экономист подтверждает сам.
+            kind, owner, by, garbled = intake.classify(doc.path, doc.name)
+            doc.kind, doc.parsed_by = kind, by
+            doc.state = "текст нечитаемый" if garbled is not None else (
+                "не прочитан" if by is None else "не распознан")
+            db.commit()
+            if by is not None and garbled is None:
+                intake.propose_entities(db, case, doc)
+            _prerender_first_sheet(doc)
+        elif case and doc:
             intake.handle_document(db, case, doc)
             _prerender_first_sheet(doc)
     finally:
@@ -304,8 +357,45 @@ def _filename(raw):
     return raw
 
 
+def _muted(case):
+    """Документы, которые чат этого плана не смотрит: снятые флажки."""
+    try:
+        return set(json.loads(case.muted_docs) if case.muted_docs else [])
+    except (TypeError, ValueError):
+        return set()
+
+
+def _set_muted(db, case, doc_id, muted):
+    ids = _muted(case)
+    if muted:
+        ids.add(doc_id)
+    else:
+        ids.discard(doc_id)
+    case.muted_docs = json.dumps(sorted(ids))
+    db.commit()
+
+
+@app.post("/api/case/{case_id}/doc/{doc_id}/mute")
+async def mute_document(case_id: int, doc_id: int, request: Request):
+    """Флажок документа: снят — чат плана его не видит, поставлен — видит."""
+    body = await request.json()
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None or db.get(Document, doc_id) is None:
+            raise HTTPException(404, "план или документ не найден")
+        _set_muted(db, case, doc_id, bool(body.get("muted")))
+        return {"ok": True, "muted": sorted(_muted(case))}
+    finally:
+        db.close()
+
+
 @app.post("/api/case/{case_id}/upload")
-async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFile]):
+async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFile],
+                 scope: str = fastapi.Form("реестр")):
+    # «план» — песочница: документ виден чату этого плана, разбор дает только
+    # предложения, строки в реестр не идут.
+    scope = "план" if str(scope).strip().lower() == "план" else "реестр"
     db = session()
     try:
         case = db.get(Case, case_id)
@@ -335,7 +425,7 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
             with open(path, "wb") as out:
                 out.write(data)
             doc = Document(case_id=case_id, name=name, path=path, size=len(data),
-                           sha256=digest)
+                           sha256=digest, scope=scope)
             if prev is not None:
                 _retire_document(db, prev)
                 doc.version = (prev.version or 1) + 1
@@ -360,6 +450,17 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
                            "иначе одни и те же данные окажутся в реестре дважды."
                            % (name, twin.name), agent="intake", document_id=doc.id)
                 db.commit()
+        # Все файлы уже были в реестре (повторная загрузка тех же форм в новый
+        # план): разбирать нечего, но план от этого не «в сборе данных» —
+        # реестр организации полон, считать можно.
+        if not added and _registry_ready(db):
+            if case.stage == "сбор данных":
+                case.stage = "готово к расчету"
+                agents.say(db, case_id, "Документы уже в реестре организации, данных "
+                           "достаточно для расчета. Могу считать.", agent="intake",
+                           payload={"kind": "offer_solve"})
+            db.commit()
+            return {"ok": True, "documents": added}
         case.stage = "сбор данных"
         db.commit()
         for doc_id in added:
@@ -507,10 +608,14 @@ def _preflight(db, case):
         os.remove(tmp.name)
     except Exception as e:  # noqa: BLE001 — сборка не должна ронять сводку
         warn.append("Сборка входного файла не удалась: %s" % str(e)[:200])
+    ps = _apply_plan_settings(data, case)
     counts = [("сотрудников", len(data["employees"])), ("договоров", len(data["contracts"])),
               ("поступлений", len(data["inflows"])), ("строк трудоемкости", len(data["labor"])),
               ("надбавок 120", len(data["secret"])),
-              ("правил замещения", len(data["substitutions"]))]
+              ("правил замещения", len(data["substitutions"])),
+              ("закреплений", len(ps["назначения"])), ("запретов", len(ps["запреты"]))]
+    for name, value in sorted((ps.get("настройки") or {}).items()):
+        counts.append((name, value))
     return {"строки": counts, "допущения": warn,
             "стоит": not data["employees"] or not data["contracts"],
             "год": case.year}
@@ -683,6 +788,11 @@ def all_documents():
                 "produced": {
                     "сотрудников": db.query(Employee).filter_by(document_id=d.id).count(),
                     "договоров": db.query(Contract).filter_by(document_id=d.id).count(),
+                    "поступлений": db.query(Inflow).filter_by(document_id=d.id).count(),
+                    "строк трудоемкости": db.query(LaborRow)
+                                            .filter_by(document_id=d.id).count(),
+                    "надбавок 120": db.query(SecretAllowance)
+                                      .filter_by(document_id=d.id).count(),
                     "правил замещения": db.query(Substitution)
                                           .filter_by(document_id=d.id).count(),
                 }})
@@ -852,8 +962,8 @@ async def decide_proposals(doc_id: int, request: Request):
                 db.add(Contract(
                     code=str(f.get("code") or ""), name=f.get("name"),
                     number=f.get("num"), kind=f.get("type"),
-                    account=f.get("account"), goz=f.get("goz"),
-                    fund=f.get("fot"), kinds=_allowed_kinds(f),
+                    account=f.get("account"), department=f.get("department"),
+                    goz=f.get("goz"), fund=f.get("fot"), kinds=_allowed_kinds(f),
                     priority=f.get("priority"), allow_main=f.get("allow_main"),
                     allow_part_time=f.get("allow_part"),
                     salary_deadline=f.get("salary_deadline"),
@@ -868,6 +978,7 @@ async def decide_proposals(doc_id: int, request: Request):
                     position_level=f.get("level"),
                     person_months=f.get("person_months"),
                     avg_cost=f.get("avg_cost"),
+                    headcount=f.get("headcount"),
                     source=doc.name, document_id=doc.id))
             elif pr.entity == "поступление":
                 db.add(Inflow(
@@ -1205,6 +1316,18 @@ def _registry_data(db, case):
     }
 
 
+def _apply_plan_settings(data, case):
+    """Переменные, заданные экономистом в чате, поверх данных реестра:
+    закрепления и запреты — листами ручных назначений, настройки — в
+    «настройки». Они живут с планом и уходят в каждый его расчёт."""
+    ps = chat.plan_settings(case)
+    if ps.get("настройки"):
+        data["settings"] = {**(data.get("settings") or {}), **ps["настройки"]}
+    data["manual_assignments"] = ps.get("назначения") or []
+    data["manual_prohibitions"] = ps.get("запреты") or []
+    return ps
+
+
 def _case_settings(case):
     """Лист «настройки» из последнего загруженного шаблона этого плана."""
     try:
@@ -1318,6 +1441,37 @@ async def post_message(case_id: int, background: BackgroundTasks, request: Reque
         db.commit()
 
         action = res.get("action")
+        # Закрепления, запреты и настройки — переменные решателя, заданные
+        # рукой экономиста. Пишем в план и пересчитываем, если план уже
+        # считался; без месяцев — спрашиваем и ничего не пишем.
+        if res.get("fixes") or res.get("settings") or chat.parse_settings(text):
+            lines, questions = chat.apply_fixes(db, case, res.get("fixes"), text)
+            lines += chat.apply_settings(db, case, res.get("settings"), text)
+            db.commit()
+            if lines:
+                agents.say(db, case_id, "\n".join(lines), agent="tuning")
+            if questions:
+                agents.say(db, case_id, "\n".join(questions), agent="tuning",
+                           payload={"kind": "ask_months"})
+                db.commit()
+                return {"ok": True, "action": "вопрос"}
+            if not lines:
+                db.commit()
+                return {"ok": True, "action": "ничего"}
+            last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
+                    .order_by(Run.id.desc()).first())
+            if last is None:
+                db.commit()
+                return {"ok": True, "action": "закреплено"}
+            base = json.loads(last.settings) if last and last.settings else {}
+            run = Run(case_id=case_id, settings=json.dumps(base, ensure_ascii=False))
+            db.add(run)
+            db.commit()
+            agents.say(db, case_id, "Пересчитываю план с этими условиями.", agent="tuning")
+            db.commit()
+            background.add_task(_solve, case_id, run.id, base)
+            return {"ok": True, "action": "расчет", "run_id": run.id}
+
         if action == "ответить на вопрос агента":
             pending = (db.query(Question).filter_by(case_id=case_id, answer=None)
                        .order_by(Question.id).first())
@@ -1360,6 +1514,40 @@ async def post_message(case_id: int, background: BackgroundTasks, request: Reque
                 return {"ok": True, "action": "ничего"}
             background.add_task(_reprocess, case_id, doc.id, owner, kind)
             return {"ok": True, "action": "переразбор", "document": doc.name}
+
+        if action in ("исключить документ", "вернуть документ") and res.get("document"):
+            # «Не смотри на прошлогоднюю штатку» — агент снимает флажок сам;
+            # «верни» — ставит обратно. Тот же флажок, что в панели документов.
+            doc = _find_document(db, case_id, res["document"])
+            if doc is None:
+                agents.say(db, case_id, "Не нашел документ «%s»." % res["document"],
+                           agent="intake")
+                db.commit()
+                return {"ok": True, "action": "ничего"}
+            _set_muted(db, case, doc.id, action == "исключить документ")
+            return {"ok": True, "action": "флажок", "document": doc.name}
+
+        if action == "претензия к плану":
+            # Претензия сдвигает веса целей относительно последнего удачного
+            # прогона и запускает пересчет. Что именно сдвинуто — в ленте и в
+            # настройках прогона, чтобы план помнил свои претензии.
+            last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
+                    .order_by(Run.id.desc()).first())
+            base = json.loads(last.settings) if last and last.settings else {}
+            new_settings, lines = chat.claim_settings(base, res.get("claims"), text)
+            if not res.get("claims"):
+                agents.say(db, case_id, "Претензию понял, но в цель решателя "
+                           "перевести не смог — назовите, что именно в плане не так: "
+                           "переводы, связки с договорами, освоение по месяцам или "
+                           "суммы по месяцам.", agent="solver")
+                db.commit()
+                return {"ok": True, "action": "ничего"}
+            agents.say(db, case_id, "\n".join(lines), agent="solver")
+            run = Run(case_id=case_id, settings=json.dumps(new_settings, ensure_ascii=False))
+            db.add(run)
+            db.commit()
+            background.add_task(_solve, case_id, run.id, new_settings)
+            return {"ok": True, "action": "расчет", "run_id": run.id}
 
         if action == "запустить расчет":
             if not case.passport:
@@ -1494,6 +1682,7 @@ def case_data(case_id: int):
                            "source": e.source} for e in emps],
             "contracts": [{"code": c.code, "name": c.name, "number": c.number,
                            "kind": c.kind, "account": c.account, "goz": c.goz,
+                           "department": c.department,
                            "fund": c.fund, "kinds": c.kinds,
                            "priority": c.priority, "allow_main": c.allow_main,
                            "allow_part": c.allow_part_time,
@@ -1505,7 +1694,7 @@ def case_data(case_id: int):
                        "position": r.position, "page": r.salary_page,
                        "group": r.salary_group, "level": r.position_level,
                        "person_months": r.person_months, "avg_cost": r.avg_cost,
-                       "source": r.source}
+                       "headcount": r.headcount, "source": r.source}
                       for r in db.query(LaborRow).order_by(LaborRow.id).all()],
             "inflows": [{"contract": r.contract_code, "year": r.year,
                          "month": r.month, "amount": r.amount,
@@ -1546,6 +1735,17 @@ def run_rules(case_id: int, run_id: int):
         import rules as rules_mod
         _RULES_CACHE[key] = rules_mod.check(src, out)
     return {"правила": _RULES_CACHE[key]}
+
+
+@app.get("/api/case/{case_id}/run/{run_id}/report")
+def run_report(case_id: int, run_id: int):
+    """План ФОТ на год в формах экономистов: двенадцать разделов числами."""
+    src, out = _run_files(db_run(case_id, run_id))
+    key = ("отчет", run_id, os.path.getmtime(out))
+    if key not in _RULES_CACHE:
+        import report as report_mod
+        _RULES_CACHE[key] = report_mod.report(src, out)
+    return _RULES_CACHE[key]
 
 
 @app.get("/api/case/{case_id}/run/{run_id}/summary")
@@ -1671,6 +1871,20 @@ def _explain_failure(db, case, run, src, out, err_text=""):
         except Exception as exc:  # noqa: BLE001 — разбор важнее файла проверок
             found["почему"].append("Проверки решателя прочитать не удалось: %s" % str(exc)[:160])
     found["ошибки"] = warnings
+    # Если решатель не нашёл ни одного плана, все строки трудоёмкости
+    # «не закрыты» на 100 % — это следствие, а не причина. Пересказывать их
+    # по одной незачем: экономист прочтёт пять абзацев про должности, а
+    # дело в деньгах или в жёстком ограничении.
+    labor_errs = [w for w in warnings if w[1] == "Трудоёмкость"]
+    no_plan = bool(labor_errs) and all(
+        (w[5] is not None and abs(float(w[5] or 0)) >= 0.999 * _labor_plan_sum(db, w[2]))
+        for w in labor_errs) and _labor_plan_sum(db, labor_errs[0][2]) > 0
+    if no_plan:
+        warnings = [w for w in warnings if w[1] != "Трудоёмкость"]
+        found["почему"].append(
+            "Ни одного допустимого плана не нашлось: ни одна строка трудоемкости не закрыта "
+            "даже частично, значит, дело не в подборе людей, а в жестком условии — деньгах "
+            "по месяцам, сроках договоров или числе людей по строкам РКМ.")
 
     employees = db.query(Employee).all()
     subs = db.query(Substitution).all()
@@ -1741,7 +1955,7 @@ def _explain_failure(db, case, run, src, out, err_text=""):
                 found["почему"].append(text)
         elif section == "Конфликт":
             m = re.search(r"\(([^)]+)\)", str(descr or ""))
-            if m:
+            if m and not no_plan:
                 found["почему"].append("Решатель назвал ограничение, которое не сошлось: %s."
                                        % m.group(1))
         else:
@@ -1765,8 +1979,7 @@ def _explain_failure(db, case, run, src, out, err_text=""):
         if status == "сходится":
             found["почему"].append("План сходится, если %s%s." % (name, (": " + cost) if cost else ""))
             break
-    found["текст"] = ("Решения нет. " + " ".join(found["почему"]) +
-                      (" Проверки решателя — на вкладке «Ограничения»." if found["has_result"] else ""))
+    found["текст"] = "Решения нет. " + " ".join(found["почему"])
     return found
 
 
@@ -1776,6 +1989,26 @@ _RELAXATIONS = (
     ("не требовать точного попадания в трудоемкость", "допуск трудоёмкости", 1),
     ("не требовать равномерного освоения", "штраф отклонения от равномерного освоения", 0),
 )
+
+
+def _registry_ready(db):
+    """Реестр организации полон для расчета: люди, договоры, поступления."""
+    return bool(db.query(Employee).count() and db.query(Contract).count()
+                and db.query(Inflow).count())
+
+
+def _labor_plan_sum(db, obj):
+    """Плановая сумма строки РКМ «договор / должность» — для отсечки «факт 0»."""
+    from fot_planner.position_reference import normalize_position
+    try:
+        code, position = [x.strip() for x in str(obj).split("/", 1)]
+    except ValueError:
+        return 0.0
+    for r in db.query(LaborRow).all():
+        if ((r.contract_code or "").strip().lower() == code.lower()
+                and normalize_position(r.position or "") == normalize_position(position)):
+            return float(r.person_months or 0) * float(r.avg_cost or 0)
+    return 0.0
 
 
 def _try_relaxations(src, case, run):
@@ -1801,17 +2034,138 @@ def _try_relaxations(src, case, run):
                 continue
             ws.cell(row=2, column=hdr.index(column) + 1).value = value
             wb.save(tmp)
+            limit = 480 if column == "разрешить дефицит" else 180
             p = subprocess.run([EXE, "solve", "-i", tmp, "-o", res],
-                               capture_output=True, text=True, timeout=180, cwd=ROOT)
+                               capture_output=True, text=True, timeout=limit, cwd=ROOT)
             if p.returncode != 0:
                 out.append((name, "не сходится", ""))
                 continue
             cost = _relaxation_cost(res)
             out.append((name, "сходится", cost))
             break
+        except subprocess.TimeoutExpired:
+            # Модель с дефицитом тяжелее основной: три минуты — предел опыта.
+            out.append((name, "не уложился в %d минут" % (limit // 60), ""))
         except Exception as exc:  # noqa: BLE001 — опыт не должен ронять разбор
             out.append((name, "опыт не удался: %s" % str(exc)[:120], ""))
     return out
+
+
+def _solver_warnings(path):
+    """Строки листа «Проблемы и предупреждения» готового результата."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True)
+    if "Проблемы и предупреждения" not in wb.sheetnames:
+        return []
+    rows = list(wb["Проблемы и предупреждения"].iter_rows(values_only=True))
+    out = []
+    for r in rows[1:]:
+        if not r or not r[0]:
+            continue
+        out.append({"уровень": r[0], "раздел": r[1], "объект": r[2], "месяц": r[3],
+                    "что": r[4], "сумма": r[5], "куда": r[6] if len(r) > 6 else None,
+                    "совет": r[7] if len(r) > 7 else None})
+    return out
+
+
+def _review_result(db, case_id, run_id, out):
+    """Агент проверки: пересказать предупреждения решателя экономисту.
+
+    Решатель пишет их в лист результата, который в интерфейсе не виден.
+    Список — детерминированный, слова — модели: она называет числа и
+    говорит, на что смотреть, но ничего не добавляет от себя.
+    """
+    try:
+        rows = _solver_warnings(out)
+    except Exception as exc:  # noqa: BLE001 — проверка не должна ронять расчет
+        agents.say(db, case_id, "Предупреждения решателя прочитать не удалось: %s" % str(exc)[:120],
+                   agent="checker")
+        db.commit()
+        return
+    if not rows:
+        agents.say(db, case_id, "Проверки решателя замечаний не нашли.", agent="checker",
+                   payload={"kind": "review", "run_id": run_id, "строк": 0})
+        db.commit()
+        return
+    lines = []
+    for r in rows:
+        where = " · ".join(str(x) for x in (r["объект"], r["месяц"]) if x not in (None, "", "—"))
+        amount = (" — %s ₽" % _money(r["сумма"])) if isinstance(r["сумма"], (int, float)) else ""
+        lines.append("%s, %s: %s%s%s" % (r["уровень"], r["раздел"], r["что"],
+                                        (" (%s)" % where) if where else "", amount))
+    text = "Предупреждения решателя (%d):\n" % len(rows) + "\n".join("• " + x for x in lines[:12])
+    if len(lines) > 12:
+        text += "\n• … и еще %d" % (len(lines) - 12)
+    # Слова — от модели, если она доступна; список остаётся как есть.
+    name, model, _why = llm.provider()
+    if name and name != "anthropic":
+        try:
+            raw = llm._call_openai_compatible(
+                "Предупреждения решателя по готовому плану ФОТ:\n" + "\n".join(lines),
+                "проверка", model, llm._endpoint(name), api_key=llm._key(name),
+                schema=llm._use_schema(name), no_thinking=llm._no_thinking(name),
+                insecure=llm._truthy(os.environ.get("FOT_LLM_INSECURE_TLS")),
+                system="Ты — агент проверки результата в сервисе планирования ФОТ. "
+                       "Экономисту нужно две-четыре фразы: что решатель отметил, с числами, "
+                       "и на что смотреть в первую очередь. Ничего не добавляй от себя, "
+                       "не советуй того, чего нет в списке.",
+                shape='Ответь одним объектом JSON: {"reply": "текст для экономиста"}',
+                json_schema={"type": "object", "properties": {"reply": {"type": "string"}},
+                             "required": ["reply"], "additionalProperties": False},
+                schema_name="review_reply", max_tokens=600)
+            if raw and raw.get("reply"):
+                text = raw["reply"].strip() + "\n\n" + text
+        except Exception:  # noqa: BLE001 — без модели остаётся список
+            pass
+    agents.say(db, case_id, text, agent="checker",
+               payload={"kind": "review", "run_id": run_id, "строк": len(rows)})
+    db.commit()
+
+
+def _read_goals(path):
+    """Лист «цели» результата: название, значение, единица, приоритет, вес."""
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+    except Exception:  # noqa: BLE001 — файла нет или он битый
+        return []
+    if "цели" not in wb.sheetnames:
+        return []
+    rows = list(wb["цели"].iter_rows(values_only=True))
+    if not rows:
+        return []
+    head = [str(h) for h in rows[0]]
+    return [dict(zip(head, r)) for r in rows[1:] if r and r[0]]
+
+
+def _goals_diff_text(db, case_id, run_id, goals):
+    """Что изменилось по взвешенным целям против предыдущего удачного прогона."""
+    prev = (db.query(Run).filter(Run.case_id == case_id, Run.id < run_id,
+                                 Run.status == "OPTIMAL")
+            .order_by(Run.id.desc()).first())
+    if prev is None or not prev.summary:
+        return ""
+    before = {g["цель"]: g for g in (json.loads(prev.summary).get("цели") or [])}
+    parts, moved = [], False
+    for g in goals or []:
+        if g.get("приоритет") != "вес" or g["цель"] not in before:
+            continue
+        was, now_ = before[g["цель"]].get("значение"), g.get("значение")
+        try:
+            same = abs(float(was) - float(now_)) < 0.5
+        except (TypeError, ValueError):
+            same = was == now_
+        moved = moved or not same
+        unit = g.get("единица") or ""
+        fmt = _money if unit == "₽" else _n
+        parts.append("%s: %s → %s %s" % (g["цель"].lower(), fmt(was), fmt(now_), unit))
+    if not parts:
+        return ""
+    head = " Против прошлого расчета " + ("изменилось: " if moved else
+                                         "ничего не сдвинулось — претензия план не изменила, "
+                                         "упёрлось в правила или данные. ")
+    return head + "; ".join(parts) + "."
 
 
 def _relaxation_cost(path):
@@ -1912,7 +2266,15 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         with agents.working(db, case_id, "intake", "собирает входной файл для расчета") as w:
             src = os.path.join(RESULT_DIR, "case%d_input.xlsx" % case_id)
             warn = []
-            build_input.build(reference.TEMPLATE, src, _registry_data(db, case), warn)
+            data = _registry_data(db, case)
+            if settings:
+                # Настройки прогона поверх настроек из шаблона: сюда попадают
+                # веса целей, сдвинутые претензиями экономиста.
+                data["settings"] = {**(data.get("settings") or {}),
+                                    **{k: v for k, v in settings.items()
+                                       if k != "претензии"}}
+            _apply_plan_settings(data, case)
+            build_input.build(reference.TEMPLATE, src, data, warn)
             run.input_path = src
             sources = _run_sources(db)
             run.sources = json.dumps(sources, ensure_ascii=False)
@@ -1938,8 +2300,25 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
             db.commit()
 
         run.seconds = sec
+        solver_status = ""
+        for line in (p.stdout or "").splitlines():
+            if line.startswith("Статус:"):
+                solver_status = line.split(":", 1)[1].strip()
+        if p.returncode != 0 and solver_status in ("NOT_SOLVED", "TIME_LIMIT", "UNKNOWN", "ошибка"):
+            # Решатель не ответил в отведённое время — это не «решения нет»,
+            # а «не успел»: разбор причин неразрешимости тут ни к чему.
+            run.status = "не успел"
+            case.stage = "не успел"
+            run.summary = json.dumps({"error": p.stdout[-800:]}, ensure_ascii=False)
+            db.commit()
+            agents.say(db, case_id, "Расчет не уложился в отведенное время (сервер был занят "
+                       "другими расчетами). Запустите еще раз, когда предыдущие расчеты "
+                       "завершатся.", agent="solver")
+            db.commit()
+            return
         if p.returncode != 0:
             run.status = "нет решения"
+            case.stage = "нет решения"
             agents.handoff(db, case_id, "solver", "infeasible",
                            "Решения нет, передаю разбор причин агенту «Анализ "
                            "невыполнимости».")
@@ -1980,13 +2359,23 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
                        "contracts": len(data.get("contracts") or [])}
         except Exception as exc:  # noqa: BLE001
             summary = {"note": "результат посчитан, разбор для карточки не удался: %s" % exc}
+        # Цели решателя: что вышло по каждой и какой вес держал. Экономист
+        # сравнивает два прогона по этим числам, а не по всему плану.
+        summary["цели"] = _read_goals(out)
+        if settings and settings.get("претензии"):
+            summary["претензии"] = settings["претензии"]
         run.summary = json.dumps(summary, ensure_ascii=False)
         case.stage = "посчитано"
         db.commit()
-        agents.say(db, case_id,
-                   "План посчитан за %s с. Строк плана — %s." % (sec, summary.get("plan_rows", "?")),
-                   agent="solver", payload={"kind": "run", "run_id": run_id, **summary})
+        text = "План посчитан за %s с. Строк плана — %s." % (sec, summary.get("plan_rows", "?"))
+        # После претензии экономисту нужен не план, а ответ: сдвинулось ли то,
+        # на что он жаловался. Сравниваем цели с предыдущим удачным прогоном.
+        if settings and settings.get("претензии"):
+            text += _goals_diff_text(db, case_id, run_id, summary["цели"])
+        agents.say(db, case_id, text, agent="solver",
+                   payload={"kind": "run", "run_id": run_id, **summary})
         db.commit()
+        _review_result(db, case_id, run_id, out)
     except Exception as exc:  # noqa: BLE001
         run = db.get(Run, run_id)
         if run:
@@ -2007,12 +2396,19 @@ async def solve(case_id: int, background: BackgroundTasks, request: Request):
         case = db.get(Case, case_id)
         if case is None:
             raise HTTPException(404, "план не найден")
-        run = Run(case_id=case_id,
-                  settings=json.dumps(body.get("settings") or {}, ensure_ascii=False))
+        settings = body.get("settings")
+        if not settings:
+            # Кнопка наследует веса последнего удачного расчёта: претензии
+            # экономиста не должны сбрасываться от того, что он нажал кнопку,
+            # а не написал в чат.
+            last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
+                    .order_by(Run.id.desc()).first())
+            settings = json.loads(last.settings) if last and last.settings else {}
+        run = Run(case_id=case_id, settings=json.dumps(settings, ensure_ascii=False))
         db.add(run)
         db.commit()
         agents.say(db, case_id, "Запускаю расчет.", who="экономист")
-        background.add_task(_solve, case_id, run.id, body.get("settings"))
+        background.add_task(_solve, case_id, run.id, settings)
         return {"ok": True, "run_id": run.id}
     finally:
         db.close()

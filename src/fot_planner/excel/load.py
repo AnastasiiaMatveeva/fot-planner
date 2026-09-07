@@ -560,6 +560,7 @@ def _load_contracts(df: pd.DataFrame) -> list[Contract]:
                 end_date=_parse_date(r["end_date"]),
                 total_fot=float(r["total_fot"]),
                 account=_clean_optional_text(r.get("account")) or "",
+                department=_clean_optional_text(r.get("department")) or "",
                 is_goz_defense_order=_bool(r.get("is_goz_defense_order"), False),
                 allow_salary=_bool(r.get("allow_salary"), True),
                 allow_secret=_bool(r.get("allow_secret"), False),
@@ -991,6 +992,9 @@ def _load_contract_labor(
         )
         avg_raw = r.get("avg_monthly_labor_cost")
         avg_cost = float(avg_raw) if pd.notna(avg_raw) and str(avg_raw).strip() else None
+        head_raw = r.get("headcount") if "headcount" in r.index else None
+        headcount = (float(head_raw) if head_raw is not None and pd.notna(head_raw)
+                     and str(head_raw).strip() else None)
         rows.append(
             ContractLaborPlan(
                 contract_id=cid,
@@ -1000,6 +1004,7 @@ def _load_contract_labor(
                 equivalence_group=equivalence_group,
                 position_level=level,
                 avg_monthly_labor_cost=avg_cost,
+                headcount=headcount if headcount and headcount > 0 else None,
             )
         )
     return rows
@@ -1026,6 +1031,7 @@ def _load_weights(settings: pd.DataFrame) -> OptimizationWeights:
         "weight_uniform_spend_deviation": "uniform_spend_deviation",
         "weight_labor_deviation": "labor_deviation",
         "weight_order_incentive_use": "order_incentive_use",
+        "weight_payment_change": "payment_change",
     }
     if settings.empty:
         return w

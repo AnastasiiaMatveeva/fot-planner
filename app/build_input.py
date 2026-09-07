@@ -128,6 +128,7 @@ def fill_contracts(ws, rows, warn, year=None):
             _yes(c.allow_main) if c.allow_main else "да",
             _yes(c.allow_part_time) if c.allow_part_time else "да",
             c.salary_deadline or None, c.allowance_deadline or None,
+            c.department or None,
         ])
 
 
@@ -221,6 +222,10 @@ def fill_labor(ws, rows, warn):
     if not rows:
         return
     _clear(ws)
+    # Графа числа людей появилась позже шаблона приложения — дописываем
+    # справа, загрузчик решателя читает лист по заголовкам.
+    if _col(ws, "количество человек") is None:
+        ws.cell(1, ws.max_column + 1).value = "количество человек"
     for r in rows:
         _put(ws, [
             (("договор", "проект"), r.contract_code),
@@ -232,6 +237,7 @@ def fill_labor(ws, rows, warn):
             (("трудоемкость", "трудоёмкость", "чел-мес"), r.person_months),
             (("средняя стоимость выполнения работ в месяц", "средняя зарплата",
               "стоимость 1 чел-мес", "стоимость чел мес"), r.avg_cost),
+            (("количество человек", "кол-во человек"), getattr(r, "headcount", None)),
         ])
 
 
@@ -244,6 +250,19 @@ def fill_secret(ws, rows, warn):
         _put(ws, [(("сотрудник",), r.employee_code),
                   (("договор секретности",), r.secret_contract_code or ""),
                   (("ставка 120",), r.rate)])
+
+
+def fill_manual(ws, rows, prohibit=False):
+    """Листы «ручные_назначения» и «ручные_запреты» — переменные решателя,
+    зафиксированные экономистом в чате."""
+    _clear(ws)
+    for r in rows or []:
+        vals = [(("сотрудник",), r["сотрудник"]), (("договор",), r["договор"]),
+                (("год",), r.get("год")), (("месяц с",), r["с"]), (("месяц по",), r["по"]),
+                (("вид выплаты",), r.get("вид") or "оклад")]
+        if not prohibit:
+            vals.append((("фикс сумма",), r.get("сумма")))
+        _put(ws, vals)
 
 
 def fill_substitutions(wb, pairs):
@@ -276,6 +295,12 @@ def build(template_path, out_path, data, warn):
     if "120_надбавка" in wb.sheetnames:
         fill_secret(wb["120_надбавка"], data.get("secret") or [], warn)
     fill_substitutions(wb, data.get("substitutions") or [])
+    year_for_manual = data.get("year")
+    for name, key, prohibit in (("ручные_назначения", "manual_assignments", False),
+                                ("ручные_запреты", "manual_prohibitions", True)):
+        if name in wb.sheetnames:
+            rows = [{**r, "год": r.get("год") or year_for_manual} for r in (data.get(key) or [])]
+            fill_manual(wb[name], rows, prohibit)
 
     year = data.get("year")
     if year and "настройки" in wb.sheetnames:
@@ -290,16 +315,23 @@ def build(template_path, out_path, data, warn):
         ws = wb["настройки"]
         taken = []
         for name, value in settings.items():
+            if str(name).strip().lower() in ("год", "претензии") or value is None:
+                continue
             col = _col(ws, name)
-            if col and value is not None and str(name).strip().lower() != "год":
-                ws.cell(2, col).value = value
-                taken.append("%s: %s" % (name, value))
+            if col is None:
+                # Графы в шаблоне нет — веса целей появились позже него.
+                # Загрузчик решателя читает лист по заголовкам, поэтому
+                # достаточно дописать графу справа.
+                col = ws.max_column + 1
+                ws.cell(1, col).value = name
+            ws.cell(2, col).value = value
+            taken.append("%s: %s" % (name, value))
         if taken:
             # В ленту — только то, что решает исход: дефицит и допуск. Полный
             # перечень штрафов есть на листе «настройки» входного файла.
             key = [t for t in taken if t.split(":")[0] in ("разрешить дефицит", "допуск трудоёмкости")]
             rest = len(taken) - len(key)
-            warn.append("Настройки расчета взяты из загруженного шаблона: %s%s."
+            warn.append("Настройки расчета: %s%s."
                         % ("; ".join(key) or "%d параметров" % len(taken),
                            (" и еще %d" % rest) if key and rest else ""))
 

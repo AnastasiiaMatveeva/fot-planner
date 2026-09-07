@@ -99,10 +99,52 @@ CASES = [
         "why": "скан без текстового слоя",
         "unreadable": True,
     },
+    # ── демо-набор экономиста (scripts/create_demo_docs.py): якорный разбор ──
     {
-        "doc": "РКМ по ГОЗ_ОБРАЗЕЦ.xlsx",
-        "why": "пустой образец формы: нули и «ТЕМА», извлекать нечего",
+        "doc": "Штатное расписание 2026.xlsx",
+        "why": "штатка в графах шаблона: восемь человек, совместитель, студентка",
+        "kind": ["штатное расписание", "документ по договору"],
+        "extract": True,
+        "counts": {"employees": 8},
+        "must": {"employees": [
+            {"code": "E001", "pos": "Ведущий инженер", "sal": 145000},
+            {"code": "E007", "employment_category": "студент", "rate": 0.5},
+        ]},
+        "none": ["contracts", "inflows", "labor"],
+    },
+    {
+        "doc": "Договоры 2026.xlsx",
+        "why": "четыре договора со сроками, пределом выплат и поступлениями по месяцам",
         "kind": ["документ по договору"],
+        "extract": True,
+        "counts": {"contracts": 4, "inflows": 28},
+        "must": {"contracts": [
+            {"code": "C_GOZ-26", "goz": "да", "from": "01.03.2026", "salary_deadline": "31.10.2026"},
+            {"code": "C_P4-26", "fot": 1800000},
+        ]},
+        "none": ["employees", "labor"],
+    },
+    {
+        "doc": "РКМ ГОЗ Радар-26.xlsx",
+        "why": "форма 9д: трудоемкость по должностям, число специалистов, шифр в шапке",
+        "kind": ["документ по договору"],
+        "extract": True,
+        "counts": {"labor": 3},
+        "must": {"labor": [
+            {"contract": "C_GOZ-26", "position": "Инженер", "person_months": 16, "headcount": 2},
+            {"contract": "C_GOZ-26", "position": "Старший научный сотрудник", "avg_cost": 118000},
+        ]},
+        "none": ["employees", "contracts", "inflows"],
+    },
+    {
+        "doc": "Структура цены Грант-26.xlsx",
+        "why": "«Расшифровка ФОТ» по двум этапам: должности складываются, шифр в шапке",
+        "kind": ["документ по договору"],
+        "extract": True,
+        "counts": {"labor": 2},
+        "must": {"labor": [
+            {"contract": "C_GRANT-26", "position": "Научный сотрудник", "person_months": 7},
+        ]},
         "none": ["employees", "contracts", "inflows"],
     },
 ]

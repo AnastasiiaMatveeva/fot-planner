@@ -165,6 +165,7 @@ function delButton(attr, id, title) {
 /* ── планы ─────────────────────────────────────────────────── */
 function loadCases() {
   return api("/api/cases").then(function (rows) {
+    casesCache = rows;
     // Плоский список, сверху последние измененные — так же, как в списках
     // переписок. Сортировку дает сервер: cases отдаются по updated.
     $("caselist").innerHTML = rows.length
@@ -242,6 +243,7 @@ function startRename(row) {
 function stageClass(stage) {
   if (stage === "посчитано") return "ok";
   if (stage === "готово к расчету") return "ready";
+  if (stage === "нет решения" || stage === "не успел") return "bad";
   return "";
 }
 
@@ -279,10 +281,31 @@ function open(id) {
   leaveAgents();
   caseId = id;
   lastSig = "";
-  vdata = null; vresult = null; vrun = null;
+  vdata = null; vresult = null; vrun = null; vrep = null; chosenRun = null;
   setView("feed");
   loadCases();
   tick();
+}
+
+/* Текущий план: последний посчитанный, сразу сводкой года. Экономист заходит
+ * посмотреть план, а не переписку, — лента остается на своей вкладке. */
+var casesCache = [];
+function openCurrent() {
+  var computed = casesCache.filter(function (c) { return c.run_id; });
+  if (!computed.length) {
+    if (casesCache.length) open(casesCache[0].id);
+    return;
+  }
+  var c = computed[0];
+  if (caseId !== c.id) open(c.id);
+  // Сводке нужен список прогонов дела; он приходит первым опросом состояния,
+  // а сервер после перезапуска отвечает не сразу — ждем состояние, не таймер.
+  var tries = 0;
+  (function whenReady() {
+    if (state && state.runs && caseId === c.id) { setView("sum"); return; }
+    if (tries++ < 50) setTimeout(whenReady, 200);
+  })();
+  $("opencurrent").classList.add("on");
 }
 
 /* ── отрисовка ────────────────────────────────────────────── */
@@ -412,15 +435,21 @@ function renderRoster() {
 
 }
 
-var openDocs = {};
+var openDocs = { "реестр": true, "план": true };
 
+/* Документ с флажком: поставлен — чат этого плана его учитывает, снят —
+ * нет. Точка перед именем — состояние разбора. */
 function docCard(d) {
   var cls = d.state === "разобран" ? "ok" : (d.state === "ожидает" ? "wait" : "bad");
-  return '<div class="doc ' + cls + '"><div class="nm">' + esc(d.name) +
+  return '<div class="doc ' + cls + (d.muted ? " off" : "") + '">' +
+         '<input type="checkbox" data-mute="' + d.id + '"' + (d.muted ? "" : " checked") +
+         ' title="Учитывать в этом плане">' +
+         '<div class="db"><div class="nm"><span><span class="st"></span>' + esc(d.name) + "</span>" +
          rowMenu("data-docmenu", d.id) + "</div>" +
-         '<div class="mt">' + esc(d.kind || d.state) +
-         (d.summary ? " · " + esc(d.summary) : "") +
-         (d.by ? " · " + esc(d.by) : "") + "</div></div>";
+         // Под именем — вид и состояние словом; подробности в подсказке.
+         '<div class="mt" title="' + esc(d.summary || "") + '">' +
+         esc(d.kind || "") + (d.kind && d.state ? " · " : "") + esc(d.state || "") +
+         "</div></div></div>";
 }
 
 function renderDocs() {
@@ -429,73 +458,106 @@ function renderDocs() {
     el.innerHTML = '<div class="empty">Документов пока нет</div>';
     return;
   }
-  // Документы разложены по видам: в общей куче двадцать договоров вперемешку
-  // с приказами не читаются. Разобранные группы свернуты — они в порядке,
-  // а требующие внимания раскрыты.
-  var groups = [
-    { key: "договоры", title: "По договорам",
-      is: function (d) { return d.kind === "документ по договору" ||
-                                d.kind === "штатное расписание"; } },
-    { key: "нормативы", title: "Нормативная база",
-      is: function (d) { return d.kind === "нормативный документ" ||
-                                d.kind === "правила замещения должностей"; } },
-    { key: "внимание", title: "Требуют внимания", open: true,
-      is: function (d) { return d.state !== "разобран"; } },
-  ];
-  var taken = {};
-  var html = "";
-  groups.forEach(function (g) {
-    var list = state.documents.filter(function (d) {
-      if (taken[d.id]) return false;
-      var hit = g.key === "внимание" ? g.is(d) : (d.state === "разобран" && g.is(d));
-      if (hit) taken[d.id] = 1;
-      return hit;
-    });
-    if (!list.length) return;
-    var open = g.open || openDocs[g.key];
-    html += '<div class="dgrp"><button type="button" class="dgh' + (open ? " on" : "") +
-            '" data-grp="' + g.key + '"><span class="t">' + esc(g.title) + "</span>" +
-            '<span class="c">' + list.length + "</span></button>" +
-            (open ? list.map(docCard).join("") : "") + "</div>";
-  });
-  var rest = state.documents.filter(function (d) { return !taken[d.id]; });
-  if (rest.length) {
-    var open = openDocs["прочее"];
-    html += '<div class="dgrp"><button type="button" class="dgh' + (open ? " on" : "") +
-            '" data-grp="прочее"><span class="t">Прочее</span>' +
-            '<span class="c">' + rest.length + "</span></button>" +
-            (open ? rest.map(docCard).join("") : "") + "</div>";
-  }
-  el.innerHTML = html;
+  // Две группы: реестр организации — общие документы, и песочница этого
+  // плана — загружены в чат, в реестр не идут.
+  var groups = [["реестр", "Реестр организации"], ["план", "В этом плане"]];
+  el.innerHTML = groups.map(function (g) {
+    var list = state.documents.filter(function (d) { return (d.scope || "реестр") === g[0]; });
+    if (!list.length) return "";
+    var open = openDocs[g[0]];
+    return '<div class="dgrp"><button type="button" class="dgh' + (open ? " on" : "") +
+           '" data-grp="' + g[0] + '"><span class="t">' + esc(g[1]) + "</span>" +
+           '<span class="c">' + list.length + "</span></button>" +
+           (open ? list.map(docCard).join("") : "") + "</div>";
+  }).join("");
 }
 
+/* Цели решателя в карточке прогона: стадии-правила со значениями и
+ * взвешенные цели с весом. По этим числам экономист видит, что дала
+ * претензия: переводов было 4, стало 1. Претензии прогона — ниже списком. */
+function runGoals(s) {
+  var goals = s["цели"] || [], claims = s["претензии"] || [];
+  if (!goals.length && !claims.length) return "";
+  var html = "";
+  if (goals.length) {
+    html += '<table class="mini goals"><thead><tr><th>Цель</th><th class="n">Значение</th>' +
+      "<th>Единица</th><th>Приоритет</th><th class=\"n\">Вес</th></tr></thead><tbody>" +
+      goals.map(function (g) {
+        return "<tr><td>" + esc(g["цель"]) + '</td><td class="n">' +
+          esc(fmtGoal(g["значение"])) + "</td><td>" + esc(g["единица"] || "") +
+          "</td><td>" + esc(g["приоритет"] || "") + '</td><td class="n">' +
+          (g["вес"] != null ? esc(fmtGoal(g["вес"])) : "—") + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+  if (claims.length) {
+    html += '<div class="mt">' + claims.map(function (c) {
+      return "претензия: " + esc(c["текст"] || "") + " → " + esc(c["направление"] || "") +
+        " «" + esc(c["цель"] || "") + "» ×" + esc(String(c["множитель"] || "")) +
+        " (вес " + esc(fmtGoal(c["вес"])) + ")";
+    }).join("<br>") + "</div>";
+  }
+  return '<div class="mt">' + html + "</div>";
+}
+function fmtGoal(v) {
+  if (v == null || v === "") return "—";
+  var n = Number(v);
+  if (isNaN(n)) return String(v);
+  return (Math.abs(n) >= 100 ? Math.round(n) : Math.round(n * 100) / 100)
+    .toLocaleString("ru-RU");
+}
+
+/* Версии расчета: номер, дата, статус и что изменилось против предыдущего
+ * удачного — числами по целям решателя. Щелчок открывает отчет этой версии. */
+var chosenRun = null;
+var GOAL_SHORT = {
+  "Смены договора оклада (переводы и открытия)": "смены",
+  "Переводы оклада между договорами": "смены",
+  "Административная сложность выплат": "сложность",
+  "Отклонение от равномерного освоения": "освоение",
+  "Изменение сумм выплат между месяцами": "суммы",
+};
+function goalDiff(cur, prev) {
+  var goals = ((cur || {})["цели"] || []).filter(function (g) { return g["приоритет"] === "вес"; });
+  if (!goals.length) return "";
+  var before = {};
+  ((prev || {})["цели"] || []).forEach(function (g) { before[g["цель"]] = g; });
+  // Стрелки — только там, где число сдвинулось; одинаковый план показывает
+  // просто свои значения.
+  var moved = goals.some(function (g) {
+    var b = before[g["цель"]];
+    return b && Math.abs(Number(g["значение"]) - Number(b["значение"])) >= 0.5;
+  });
+  return goals.map(function (g) {
+    var name = GOAL_SHORT[g["цель"]] || g["цель"];
+    var f = g["единица"] === "₽" ? function (v) { return mo(Math.round(v)); } : fmtGoal;
+    var b = before[g["цель"]];
+    if (!b || !moved) return esc(name) + " " + esc(f(g["значение"]));
+    var d = Number(g["значение"]) - Number(b["значение"]);
+    var cls = Math.abs(d) < 0.5 ? "" : (d > 0 ? "up" : "dn");
+    return esc(name) + ' <span class="' + cls + '">' + esc(f(b["значение"])) + " → " +
+           esc(f(g["значение"])) + "</span>";
+  }).join(" · ");
+}
 function renderRuns() {
   var el = $("runs");
   if (!state.runs.length) { el.innerHTML = '<div class="empty">Расчет еще не выполнен</div>'; return; }
-  el.innerHTML = state.runs.map(function (r) {
+  var runs = state.runs;
+  var shown = chosenRun || (runs.filter(function (r) { return r.status === "OPTIMAL"; })[0] || {}).id;
+  el.innerHTML = runs.map(function (r, i) {
+    var prev = runs.slice(i + 1).filter(function (x) { return x.status === "OPTIMAL"; })[0];
     var cls = r.status === "OPTIMAL" ? "" : (r.status === "идет" ? "work" : "bad");
-    var s = r.summary || {};
-    var why = (s["анализ"] || []).slice(0, 2).map(function (t) {
-      return '<div class="mt why">' + esc(t) + "</div>";
-    }).join("");
-    // Опыты с ослаблением: что пробовали снять и сошлось ли. Экономист видит
-    // не только «нет решения», но и что это не лечится одним допущением.
-    if ((s["опыты"] || []).length) {
-      why += '<div class="mt why">опыты: ' + esc(s["опыты"].map(function (o) {
-        return o[0] + " — " + o[1] + (o[2] ? " (" + o[2] + ")" : "");
-      }).join("; ")) + "</div>";
-    }
-    return '<div class="run ' + cls + '"><b>' + esc(r.status) + "</b>" +
-           (r.seconds != null ? " · " + r.seconds + " с" : "") +
-           '<div class="mt">' + esc(r.created) +
-           (s.plan_rows != null ? " · строк плана " + s.plan_rows : "") +
-           (s.error && !why ? " · " + esc(String(s.error).slice(0, 120)) : "") + "</div>" +
-           why +
-           (r.status === "OPTIMAL"
-             ? '<div class="mt"><a href="/api/case/' + caseId + "/result/" + r.id +
-               '">скачать xlsx</a></div>' : "") +
-           runSources(r.sources) +
-           "</div>";
+    var diff = r.status === "OPTIMAL" ? goalDiff(r.summary, prev && prev.summary) : "";
+    return '<div class="ver ' + cls + (r.id === shown ? " on" : "") + '" data-ver="' + r.id + '">' +
+      '<div class="vh1"><span class="vn">№ ' + r.id + "</span>" +
+      '<span class="vs' + (cls === "bad" ? " bad" : "") + '">' +
+      esc(r.status === "OPTIMAL" ? "посчитан" : r.status) +
+      (r.seconds != null ? " · " + r.seconds + " с" : "") + "</span>" +
+      '<span class="vd">' + esc(r.created) + "</span></div>" +
+      (diff ? '<div class="vdiff">' + diff + "</div>" : "") +
+      (r.status === "OPTIMAL"
+        ? '<div class="vdiff"><a href="/api/case/' + caseId + "/result/" + r.id + '">xlsx</a></div>'
+        : "") +
+      "</div>";
   }).join("");
 }
 
@@ -538,14 +600,16 @@ function renderAsk() {
 
 function renderStage() {
   var c = state.case;
-  var working = state.activities.filter(function (a) { return a.state === "идет"; });
+  // Работы приходят от старой к новой: в шапку берём последнюю, иначе
+  // первой встанет давняя строка, а не то, чем сервис занят сейчас.
+  var working = state.activities.filter(function (a) { return a.state === "идет"; }).slice(-1);
 
   $("ptitle").textContent = c.title;
 
   // В строке под названием — состояние плана и то, чем сейчас занят сервис.
   var pill = working.length
     ? '<span class="pill work">агент работает: ' + esc(working[0].title) + "</span>"
-    : '<span class="pill' + (c.stage === "посчитано" ? " ok" : "") + '">' +
+    : '<span class="pill' + (c.stage === "посчитано" ? " ok" : (c.stage === "нет решения" || c.stage === "не успел" ? " bad" : "")) + '">' +
       esc(c.stage) + "</span>";
   var why = !c.has_data ? "для расчета нужны документы по договорам" : "";
   $("pmeta").innerHTML = pill +
@@ -577,7 +641,6 @@ function render() {
   safely("вкладки", renderTabs);
   safely("заголовок плана", renderStage);
   if (view === "feed") safely("лента", renderFeed);
-  safely("агенты", renderRoster);
   safely("документы", renderDocs);
   safely("расчеты", renderRuns);
   safely("вопрос", renderAsk);
@@ -698,7 +761,7 @@ function agentCard(key) {
  * решатель: для ГОЗ важно показывать ровно то, на чем построен план.
  */
 var view = "feed", vdata = null, vresult = null, vrun = null, vrules = null,
-    vsum = null, vpay = null;
+    vsum = null, vpay = null, vrep = null;
 //: Сколько реплик пришло, пока лента не на виду.
 var unseen = 0, lastMsgCount = null;
 
@@ -717,13 +780,16 @@ function monthName(m) { return MONTHS[m] || MONTHS[m - 1] || m; }
 
 function setView(v) {
   view = v;
-  // Подробным таблицам нужна ширина: колонка контекста забирает 320 пикселей
-  // и разрезает месяцы. На вкладках результата убираем ее, как в реестре.
-  if (!inRegistry && !inAgents) wideScreen(v !== "feed");
+  // Подробным таблицам нужна ширина: колонка контекста забирает 320 пикселей,
+  // и месяцы перестают помещаться. На отчете ее убираем, а версию выбирают
+  // в его же панели; вернуть колонку можно кнопкой в шапке.
+  if (!inRegistry && !inAgents) wideScreen(v === "sum");
   // Ответ агента приходит в ленту. Если экономист смотрит план или сводку,
   // он о нем не узнает: раньше вопрос выглядел оставленным без ответа.
   if (v === "feed") unseen = 0;
   markFeedTab();
+  var cur = $("opencurrent");
+  if (cur) cur.classList.toggle("on", v === "sum" && !inRegistry && !inAgents);
   Array.prototype.forEach.call(document.querySelectorAll(".tabs .tab"), function (b) {
     b.classList.toggle("on", b.getAttribute("data-view") === v);
   });
@@ -741,7 +807,10 @@ function setView(v) {
 
 function loadResult() {
   var runs = state.runs || [];
-  var ok = runs.filter(function (r) { return r.status === "OPTIMAL"; })[0];
+  // Выбранная версия — если экономист щелкнул по ней в панели; иначе последняя.
+  var ok = (chosenRun && runs.filter(function (r) {
+              return r.id === chosenRun && r.status === "OPTIMAL"; })[0]) ||
+           runs.filter(function (r) { return r.status === "OPTIMAL"; })[0];
   // Без удачного расчета показываем проверки последнего неудачного: где
   // именно не сошлось — и есть ответ на вопрос «почему решения нет».
   var failed = runs.filter(function (r) {
@@ -766,6 +835,10 @@ function loadResult() {
       api("/api/case/" + caseId + "/run/" + pick.id + "/payroll")
         .then(function (r) { vpay = r; })
         .catch(function () { vpay = null; }),
+      // Отчет в формах экономистов — им и заменены прежние таблицы результата.
+      api("/api/case/" + caseId + "/run/" + pick.id + "/report")
+        .then(function (r) { vrep = r; })
+        .catch(function () { vrep = null; }),
     ]);
   });
 }
@@ -857,13 +930,11 @@ function summaryView() {
         '</td><td class="n">' + pct(k["доля"]) + "</td><td>" + bar(k["доля"]) + "</td></tr>";
     }).join("") + "</tbody></table>";
 
-  var ctrs = '<table class="mini"><thead><tr><th>Договор</th><th class="n">ФОТ, ₽</th>' +
+  var ctrs = '<table class="mini"><thead><tr><th>Договор</th><th>ГОЗ</th><th class="n">ФОТ, ₽</th>' +
     '<th class="n">Поступления, ₽</th><th class="n">Выплаты, ₽</th>' +
     '<th class="n">Остаток, ₽</th><th class="n">Освоение</th><th></th></tr></thead><tbody>' +
     vsum["договоры"].map(function (c) {
-      return "<tr><td>" + esc(c["договор"]) +
-        (c["ГОЗ"] ? '<span class="tag">ГОЗ</span>' : "") +
-        '<div class="sub">' + esc(c["название"] || "") + "</div></td>" +
+      return "<tr><td>" + esc(c["договор"]) + "</td><td>" + (c["ГОЗ"] ? "да" : "—") + "</td>" +
         '<td class="n">' + mo(c["ФОТ"]) + '</td><td class="n">' + mo(c["поступления"]) +
         '</td><td class="n">' + mo(c["выплаты"]) + '</td><td class="n' +
         (c["остаток"] > 0 ? " warn" : "") + '">' + mo(c["остаток"]) +
@@ -1271,8 +1342,7 @@ function failBanner() {
   return '<div class="failban"><b>Решения нет.</b> ' +
     (vresult.analysis.length
       ? "<ul>" + vresult.analysis.map(function (t) { return "<li>" + esc(t) + "</li>"; }).join("") + "</ul>"
-      : "Решатель причину не назвал.") +
-    '<div class="mt">Проверки решателя — на вкладке «Ограничения».</div></div>';
+      : "Решатель причину не назвал.") + "</div>";
 }
 
 /* ── страницы ─────────────────────────────────────────────────
@@ -1405,6 +1475,1148 @@ function table(head, rows, note, opts) {
   return h + "</tbody></table></div>";
 }
 
+/* ── план ФОТ на год: формы экономистов ───────────────────────
+ * Двенадцать разделов числами, по согласованному прототипу. Данные
+ * считает сервер (report.py), здесь только раскладка по вкладкам:
+ * сводка — итоги, договоры, освоение; освоение — касса; план выплат —
+ * виды, регистр, ставки; ограничения — БЭП, П4, трудоемкость, цели. */
+var repPeriod = "year", repGroup = "e";
+var MON = ["янв", "фев", "мар", "апр", "май", "июн",
+           "июл", "авг", "сен", "окт", "ноя", "дек"];
+function rmi(v) { return v == null ? "—" : mo(Math.round(v)); }
+function rf(v) { return v == null ? "—" : Number(v).toFixed(2).replace(".", ","); }
+function rm(v) { return v == null ? "—" : rmi(Math.round(v)); }
+function rp(v) {
+  return v == null ? "—" : String(Math.round(v * 1000) / 10).replace(".", ",") + " %";
+}
+// Процент числом, без знака: для граф, у которых «%» уже стоит в заголовке.
+function rpn(v) {
+  return v == null ? "—" : String(Math.round(v * 1000) / 10).replace(".", ",");
+}
+function rs(v, d) { return v == null ? "—" : (v > 0 ? "+" : (v < 0 ? "−" : "")) + (d ? rf(Math.abs(v)) : rmi(Math.abs(v))); }
+function nc(v, cls) {
+  var neg = typeof v === "string" && v.charAt(0) === "−";
+  return { v: v == null || v === "—" ? "" : v, cls: "n" + (cls ? " " + cls : "") + (neg ? " neg" : "") };
+}
+function gc(v) { return { v: v == null || v === "—" ? "" : v, cls: "gray" }; }
+
+/* ── сетка отчета ────────────────────────────────────────────
+ * Плотная сетка, как в учетной системе: линии по обеим осям, шапка и первые
+ * графы закреплены при прокрутке, одинаковые значения в соседних строках
+ * объединены, строки-группы сворачиваются, итоги — жирным над двойной линией.
+ * Ячейка — строка или объект {v, cls, span (rowspan), cs (colspan), skip};
+ * строка — массив ячеек или объект {cells, cls, grp, g (ключ группы)}. */
+var REP_SECTIONS = [];
+/* Автофильтр как в Excel: у каждой графы кнопка со списком значений и
+   сортировкой. Отбор и сортировка хранятся по таблице; таблицы нумеруются по
+   порядку отрисовки, поэтому номера устойчивы между перерисовками. */
+var repColFilter = {}, repSort = {}, repHideCol = {}, GRID_SEQ = 0, CUR_SEC = 0, GRID_DATA = {};
+var REP_SHORT = { 1: "Итоги", 2: "Договоры", 3: "Освоение", 4: "Касса", 5: "Виды выплат",
+                  6: "Выплаты", 7: "Ставки", 8: "БЭП", 9: "П4", 10: "Трудоёмкость",
+                  11: "Исполнители", 12: "Нехватка", 13: "Цели", 14: "Дефицит" };
+function secH(n, t, meta) {
+  REP_SECTIONS.push({ n: n, t: REP_SHORT[n] || t, meta: meta || "" });
+  CUR_SEC = n;
+  return '<div class="grp rep" id="sec-' + n + '"><div class="sech">' +
+    '<span class="sn">' + n + '</span><span class="stt">' + esc(t) + "</span>" +
+    (meta || "") + '<span class="sp"></span></div>';
+}
+
+/* Текст ячейки для отбора и сортировки: без разметки, в нижнем регистре. */
+function cellText(c) {
+  if (c == null) return "";
+  var v = typeof c === "object" ? (c.skip ? "" : c.v) : c;
+  return String(v == null ? "" : v).replace(/<[^>]+>/g, "").toLowerCase();
+}
+function cellShow(c) {
+  if (c == null) return "";
+  var v = typeof c === "object" ? (c.skip ? "" : c.v) : c;
+  return String(v == null ? "" : v).replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim();
+}
+function isDataRow(r) { return !r.grp && !(r.cls && /\bsum\b/.test(r.cls)); }
+function numOf(t) {
+  var s = String(t).replace(/[\s\u00a0\u202f]/g, "").replace("−", "-").replace(",", ".");
+  return s !== "" && !isNaN(Number(s)) ? Number(s) : null;
+}
+
+/* Отбор и сортировка до объединения ячеек: строки ещё полные, ключи в них
+   повторяются, и совпадение ищется по всей строке. Строка группы остаётся,
+   если совпала сама или совпала хоть одна её строка; строка остаётся, если
+   совпала сама или совпал заголовок её группы (у человека в регистре имя
+   стоит только в заголовке). Сортируется ведущий блок обычных строк,
+   итоговые в хвосте остаются на месте; таблицы с промежуточными итогами и
+   группами не сортируются. */
+function rowPasses(r, colf, skipCol) {
+  var cells = r.cells || r;
+  for (var c in colf) {
+    if (skipCol != null && +c === skipCol) continue;
+    if (!colf[c][cellText(cells[c])]) return false;
+  }
+  return true;
+}
+/* Отбор до объединения ячеек: строки ещё полные. Обычная строка остаётся,
+   если проходит отбор по всем графам. Строка группы остаётся, если под ней
+   осталась хоть одна строка; промежуточный итог — если в его блоке (от
+   предыдущей группы или итога) что-то осталось; общий итог («all») — если
+   осталось хоть что-то. Сортируется ведущий блок обычных строк, итоги в
+   хвосте на месте; таблицы с группами и промежуточными итогами не
+   сортируются. */
+function gridPrepare(rows, colf, srt) {
+  rows = rows.slice();
+  if (colf && Object.keys(colf).length) {
+    var parents = function (g) {
+      var out = [], p = g.indexOf("\u0001");
+      while (p >= 0) { out.push(g.slice(0, p)); p = g.indexOf("\u0001", p + 1); }
+      out.push(g);
+      return out;
+    };
+    var pass = rows.map(function (r) { return isDataRow(r) && rowPasses(r, colf); });
+    var grpHit = {};
+    rows.forEach(function (r, i) {
+      if (pass[i] && r.g) parents(r.g).forEach(function (k) { grpHit[k] = true; });
+    });
+    var keep = [], block = false, any = false;
+    rows.forEach(function (r, i) {
+      if (r.grp) { if (grpHit[r.k || r.g]) keep.push(r); block = false; return; }
+      if (isDataRow(r)) { if (pass[i]) { keep.push(r); block = true; any = true; } return; }
+      if (r.cls && /\ball\b/.test(r.cls)) keep.push(r);
+      else if (block) keep.push(r);
+      block = false;
+    });
+    rows = any ? keep : [];
+  }
+  if (srt && srt.c != null) {
+    var n = rows.length;
+    while (n > 0 && !isDataRow(rows[n - 1])) n--;
+    var head = rows.slice(0, n), tail = rows.slice(n);
+    if (head.every(isDataRow)) {
+      head.sort(function (a, b) {
+        var ta = cellText((a.cells || a)[srt.c]), tb = cellText((b.cells || b)[srt.c]);
+        var na = numOf(ta), nb = numOf(tb);
+        var r = (na != null && nb != null) ? na - nb : ta.localeCompare(tb, "ru");
+        return srt.d === "d" ? -r : r;
+      });
+      rows = head.concat(tail);
+    }
+  }
+  return rows;
+}
+function gridSortable(rows) {
+  var n = rows.length;
+  while (n > 0 && !isDataRow(rows[n - 1])) n--;
+  return n > 1 && rows.slice(0, n).every(isDataRow);
+}
+function subH(n, t) {
+  return '<div class="sech sub"><span class="sn">' + n + '</span><span class="stt">' + esc(t) + "</span></div>";
+}
+function chip(v, cls) { return '<span class="chip ' + (cls || "") + '">' + v + "</span>"; }
+
+/* Подпись договора одна на весь отчет. Шифр — то, чем договор называют и
+   ищут, поэтому он жирный и всегда первый; название идет за ним и берется
+   из реестра «Договоры» (графы «шифр» и «название»). Раньше каждый раздел
+   склеивал подпись по-своему: где через тире, где через точку, где без
+   названия, и один договор выглядел в отчете четырьмя разными строками. */
+
+// Шапка группы: шифр договора и ничего больше.
+function ctrHead(code) {
+  return "<b>" + esc(code) + "</b>";
+}
+function thCell(c, i, fix, sep, so) {
+  var cls = (i < fix ? "fx" : "") + (sep ? " gs" : ""), dc = (i < fix ? ' data-c="' + i + '"' : "") + ' scope="col"';
+  var btn = "";
+  if (so) {
+    var on = so.f ? " fon" : "", sorted = so.s && so.s.c === so.c ? (so.s.d === "d" ? " sd" : " sa") : "";
+    cls += " af" + on + sorted;
+    btn = '<button type="button" class="fbtn" data-fc="' + so.c + '" aria-label="Отбор и сортировка"></button>';
+  }
+  var wrap = function (txt) { return btn ? '<span class="thw"><span>' + txt + "</span>" + btn + "</span>" : "<span>" + txt + "</span>"; };
+  if (typeof c !== "object") return '<th class="' + cls + '"' + dc + ">" + wrap(esc(c)) + "</th>";
+  if (c.v != null) return '<th class="' + cls + " " + (c.cls || "") + '"' + dc +
+                          (c.span ? ' colspan="' + c.span + '"' : "") + ">" + c.v + "</th>";
+  return '<th class="n ' + cls + '"' + dc + ">" + wrap(esc(c.t)) + "</th>";
+}
+/* Верхний ярус шапки: месяцы или кварталы над своими графами. Двенадцать
+   подписей вида «03.26 по плану» читались как сплошная строка текста, а
+   границы кварталов не были видны вовсе.
+   lead — сколько граф слева не относится к месяцам, per — сколько граф на
+   месяц, tail — сколько граф справа (итог за год и пределы). */
+function monGroupRow(lead, per, tail, mode) {
+  var g = [];
+  if (lead) g.push({ t: "", span: lead });
+  if (mode === "month") {
+    repMon.forEach(function (m) { g.push({ t: MON[m - 1], span: per }); });
+  } else {
+    var qs = [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]];
+    var names = ["I квартал", "II квартал", "III квартал", "IV квартал"];
+    qs.forEach(function (arr, i) {
+      var n = arr.filter(function (m) { return repMon.indexOf(m) >= 0; }).length;
+      if (n) g.push({ t: names[i], span: n * per });
+    });
+  }
+  if (tail) g.push({ t: "", span: tail });
+  return g;
+}
+
+function grid(head, rows, opts) {
+  opts = opts || {};
+  var tid = "g" + (GRID_SEQ++);
+  var colf = repColFilter[tid] || {}, srt = repSort[tid];
+  var sortable = gridSortable(rows);
+  // Значения граф до отбора и объединения — для списков автофильтра.
+  GRID_DATA[tid] = { rows: rows.map(function (r) { return { d: isDataRow(r), v: (r.cells || r).map(cellShow),
+                                                            t: (r.cells || r).map(cellText) }; }),
+                     sortable: sortable };
+  var filtered = Object.keys(colf).length > 0;
+  rows = gridPrepare(rows, colf, srt);
+  if (opts.merge) mergeDown(rows, opts.merge, opts.fix || 0);
+  if (!rows.length && !filtered) return '<div class="none">Пусто</div>';
+  // Скрытые графы (меню автофильтра → «Скрыть графу»). Состояние хранится в
+  // исходных номерах граф; при отрисовке скрытые пропускаются, объединённые
+  // по горизонтали ячейки и ярусы шапки сужаются на число скрытых внутри них.
+  var hid = repHideCol[tid] || {}, N = head.length, visPos = [], nvis = 0;
+  for (var k = 0; k < N; k++) visPos[k] = hid[k] ? -1 : ++nvis;   // позиция среди видимых, 1-based
+  var visIn = function (from, count) {   // сколько видимых граф в [from, from+count)
+    var n = 0;
+    for (var q = from; q < from + count && q < N; q++) if (!hid[q]) n++;
+    return n;
+  };
+  GRID_DATA[tid].hidden = Object.keys(hid).length;
+  // Первая графа — номер строки: по нему называют строку вслух и находят её
+  // после прокрутки вбок, поэтому он закреплён вместе с ключевыми графами.
+  // Считаем только строки данных: у групп и итогов номера нет.
+  var fix = visIn(0, opts.fix || 0) + 1, num = 0;
+  // Границы групп: по ним ставим более заметную линию и в шапке, и в строках.
+  var sep = {}, at = 0;
+  (opts.groups || []).forEach(function (g, i) {
+    if (i) sep[at] = true;
+    at += g.span || 1;
+  });
+  var gh = "";
+  if (opts.groups) {
+    at = 0;
+    gh = '<tr class="g1"><th class="num fx" data-c="0"></th>' +
+      opts.groups.map(function (g, i) {
+        var cls = (i && sep[at] ? "gs " : "") + (g.t ? "gt" : "");
+        var span = visIn(at, g.span || 1);
+        at += g.span || 1;
+        return span ? '<th class="' + cls + '" colspan="' + span + '">' + esc(g.t || "") + "</th>" : "";
+      }).join("") + "</tr>";
+  }
+  var h = '<div class="grid' + (opts.tall ? " tall" : "") + '" data-fix="' + fix + '" data-tid="' + tid + '"><table><thead>' + gh + "<tr>" +
+    '<th class="num fx" data-c="0" scope="col"><span>№</span></th>' +
+    head.map(function (c, i) {
+      if (hid[i]) return "";
+      var so = !(c && typeof c === "object" && c.v != null) ? { c: i, s: srt, f: !!colf[i] } : null;
+      return thCell(c, visPos[i], fix, sep[i], so);
+    }).join("") + "</tr></thead><tbody>";
+  h += rows.map(function (r, i) {
+    var cells = r.cells || r;
+    // Класс строки — и свой, и от rowCls: полоса группы оборачивает строку
+    // в объект, и без этого итоговая строка теряла «sum» и получала номер.
+    var rc = (r.cls || "") + " " + (opts.rowCls ? opts.rowCls(i) || "" : "");
+    if (r.grp) rc += " grp";
+    var attrs = (rc.trim() ? ' class="' + rc.trim() + '"' : "") + (r.g ? ' data-g="' + esc(r.g) + '"' : "") +
+                (r.k ? ' data-k="' + esc(r.k) + '"' : "");
+    var data = !r.grp && rc.indexOf("sum") < 0;
+    var col = 1, swallow = 0;   // исходный номер графы, 1-based
+    return "<tr" + attrs + '><td class="num fx" data-c="0">' + (data ? ++num : "") + "</td>" +
+      cells.map(function (c) {
+      // Заглушки {skip} бывают двух родов: после ячейки с colspan они лишь
+      // держат место уже занятых граф (счётчик не двигаем), после
+      // объединения по вертикали — занимают свою графу (двигаем).
+      if (c && c.skip) { if (swallow > 0) swallow--; else col++; return ""; }
+      var start = col, width = (c && typeof c === "object" && c.cs) ? c.cs : 1;
+      col += width;
+      swallow = width - 1;
+      var vspan = visIn(start - 1, width);
+      if (!vspan) return "";
+      var vp = visPos[start - 1];
+      if (vp < 0) { for (var q = start; q < start + width; q++) if (visPos[q - 1] > 0) { vp = visPos[q - 1]; break; } }
+      var fx = vp < fix, cls = (fx ? "fx " : "") + (sep[start - 1] ? "gs " : "");
+      var extra = fx ? ' data-c="' + vp + '"' : "";
+      if (c && typeof c === "object") {
+        if (c.span) extra += ' rowspan="' + c.span + '"';
+        if (vspan > 1) extra += ' colspan="' + vspan + '"';
+        return '<td class="' + cls + (c.cls || "") + '"' + extra + ">" + (c.v == null ? "" : c.v) + "</td>";
+      }
+      return '<td class="' + cls + '"' + extra + ">" + (c == null ? "" : esc(c)) + "</td>";
+    }).join("") + "</tr>";
+  }).join("");
+  return h + "</tbody></table></div>";
+}
+function repT(head, rows, rowCls, opts) {
+  var o = opts || {};
+  o.rowCls = rowCls;
+  return grid(head, rows, o);
+}
+/* Одинаковые значения в соседних строках по заданным графам объединяются в
+   одну ячейку. Графы идут слева направо: вторая объединяется только внутри
+   объединения первой — как группировка в учетных формах. */
+/* fixN — сколько граф слева будет закреплено при прокрутке вбок. Их
+   объединять нельзя: браузер не держит липкую ячейку с rowspan, и при
+   прокрутке таблица разъезжается. В таких графах повтор просто не печатаем —
+   значение стоит один раз, как при объединении, а строка остаётся целой. */
+function mergeDown(rows, cols, fixN) {
+  var val = function (c) { return c && typeof c === "object" ? c.v : c; };
+  var keys = rows.map(function (r) {
+    var cells = r.cells || r, acc = "";
+    return cols.map(function (ci) { acc += "\u0001" + (val(cells[ci]) == null ? "" : val(cells[ci])); return acc; });
+  });
+  // Полоса по первой графе: строки одного договора (или человека) лежат на
+  // общем фоне. Без этого длинная таблица читается как сплошная сетка.
+  if (cols.length) {
+    var band = false;
+    for (var r = 0; r < rows.length; r++) {
+      if (r && keys[r][0] !== keys[r - 1][0]) band = !band;
+      if (band) {
+        if (rows[r].cells) rows[r].cls = ((rows[r].cls || "") + " alt").trim();
+        else rows[r] = { cells: rows[r], cls: "alt" };
+      }
+    }
+  }
+  cols.forEach(function (ci, k) {
+    var start = 0;
+    for (var i = 1; i <= rows.length; i++) {
+      if (i < rows.length && keys[i][k] === keys[start][k]) continue;
+      if (i - start > 1) {
+        var cells = rows[start].cells || rows[start], c = cells[ci];
+        if (ci < (fixN || 0)) {
+          for (var b = start + 1; b < i; b++) (rows[b].cells || rows[b])[ci] = "";
+        } else {
+          cells[ci] = (c && typeof c === "object") ? Object.assign({}, c, { span: i - start })
+                    : { v: c == null ? "" : esc(c), span: i - start, cls: "top" };
+          for (var j = start + 1; j < i; j++) (rows[j].cells || rows[j])[ci] = { skip: true };
+        }
+      }
+      start = i;
+    }
+  });
+  return rows;
+}
+var SVG = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">';
+function navChip(meta) {
+  var bad = null, warn = null, re = /<span class="chip ([a-z]*)">([^<]*)<\/span>/g, m;
+  while ((m = re.exec(meta || ""))) {
+    if (m[1] === "er" && !bad) bad = m;
+    if (m[1] === "wr" && !warn) warn = m;
+  }
+  var got = bad || warn;
+  return got ? '<span class="chip ' + got[1] + '">' + got[2] + "</span>" : "";
+}
+
+function repNav() {
+  return '<nav class="repnav">' + REP_SECTIONS.map(function (x) {
+    return '<a href="#sec-' + x.n + '" data-sec="' + x.n + '"' +
+           (x.n === repSec ? ' class="on"' : "") + '><b>' + x.n + "</b><span>" + esc(x.t) +
+           "</span>" + navChip(x.meta) + "</a>";
+  }).join("") + "</nav>";
+}
+
+function repToolbar() {
+  var title = (state.case && state.case.title) || "";
+  return '<div class="rtool"><div class="ftitle"><b>' + esc(title) + "</b>" +
+  "</div>" +
+  '<div class="acts">' +
+  '<label class="fld">Версия<select data-sel="run">' + (state.runs || []).filter(function (r) {
+    return r.status === "OPTIMAL";
+  }).map(function (r) {
+    return '<option value="' + r.id + '"' + (r.id === vrun ? " selected" : "") + ">№ " + r.id +
+           " · " + esc(r.created || "") + "</option>";
+  }).join("") + "</select></label>" +
+  '<label class="fld secsel">Раздел<select data-sel="sec">' + REP_SECTIONS.map(function (x) {
+    return '<option value="' + x.n + '"' + (x.n === repSec ? " selected" : "") + ">" + x.n + " " +
+           esc(x.t) + "</option>";
+  }).join("") + "</select></label>" +
+  '<label class="fld">Период<select data-sel="mset">' + MON_SETS.map(function (x) {
+    return '<option value="' + x[1].join(",") + '"' +
+           (x[1].join() === repMon.join() ? " selected" : "") + ">" + x[0] + "</option>";
+  }).join("") + "</select></label>" +
+  '<label class="fld">Масштаб<select data-sel="zoom">' + ZOOMS.map(function (z) {
+    return '<option value="' + z[1] + '"' +
+           (String(z[1]) === String(repZoom) ? " selected" : "") + ">" + z[0] + "</option>";
+  }).join("") + "</select></label>" +
+  '<span class="sp"></span>' +
+  (vrun ? '<a class="xl" href="/api/case/' + caseId + "/result/" + vrun + '">Excel</a>' : "") +
+  '<button type="button" data-ra="full" class="ico full" title="Отчет на весь экран" ' +
+  'aria-label="Отчет на весь экран">' +
+  SVG + '<path class="i-a" d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/>' +
+  '<path class="i-b" d="M13.5 6.5h-4v-4M9.5 6.5 13.5 2.5M2.5 9.5h4v4M6.5 9.5 2.5 13.5"/></svg>' +
+  "</button></div></div>";
+}
+/* Оглавление показывает, где экономист сейчас: при прокрутке подсвечен
+   раздел, чья шапка прошла под панелью. Внизу страницы — последний раздел:
+   он может быть короче экрана и до края панели не дойти. */
+var repSpyBusy = false;
+function repSpy() {
+  var el = $("view"), tool = el.querySelector(".rtool");
+  if (!tool) return;
+  var secs = el.querySelectorAll(".grp.rep");
+  if (!secs.length) return;
+  var edge = tool.getBoundingClientRect().bottom + 6, id = secs[0].id;
+  var scrolls = el.scrollHeight > el.clientHeight + 8;
+  if (scrolls && el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+    id = secs[secs.length - 1].id;
+  } else {
+    // Текущий — тот раздел, который пересекает нижний край панели; если под
+    // краем пусто (щелчок по оглавлению оставляет зазор), берем ближайший
+    // раздел ниже, а не предыдущий.
+    var best = Infinity;
+    for (var i = 0; i < secs.length; i++) {
+      var r = secs[i].getBoundingClientRect();
+      if (r.bottom <= edge) continue;
+      var d = r.top <= edge ? 0 : r.top - edge;
+      if (d < best) { best = d; id = secs[i].id; }
+    }
+  }
+  Array.prototype.forEach.call(tool.querySelectorAll(".toc a"), function (a) {
+    a.classList.toggle("on", "sec-" + a.dataset.sec === id);
+  });
+}
+$("view").addEventListener("scroll", function () {
+  if (view !== "sum" || repSpyBusy) return;
+  repSpyBusy = true;
+  requestAnimationFrame(function () { repSpyBusy = false; repSpy(); });
+});
+
+/* Открыть раздел: остальные скрыты, поэтому таблица занимает всю площадь. */
+function showSection(n) {
+  repSec = n;
+  var el = $("view");
+  Array.prototype.forEach.call(el.querySelectorAll(".grp.rep"), function (g) {
+    g.classList.toggle("active", g.id === "sec-" + n);
+  });
+  Array.prototype.forEach.call(el.querySelectorAll(".repnav a"), function (a) {
+    a.classList.toggle("on", +a.dataset.sec === n);
+  });
+  var sel = el.querySelector('select[data-sel="sec"]');
+  if (sel) sel.value = String(n);
+  el.scrollTop = 0;
+  // Сразу и ещё раз после кадра: в скрытой вкладке кадры не приходят, и
+  // масштаб оставался непосчитанным до первого щелчка.
+  applyZoom();
+  requestAnimationFrame(applyZoom);
+}
+
+/* Масштаб отчёта: уменьшенный шрифт и клетки вместо прокрутки вбок. Считаем
+   по открытому разделу и не мельчим ниже 60 %: дальше числа не читаются. */
+function applyZoom() {
+  var body = $("view").querySelector(".repbody");
+  if (!body) return;
+  var tool = $("view").querySelector(".rtool");
+  if (tool) {
+    // Панель липкая, и всё, что липнет ниже, должно знать её высоту.
+    var pad = parseFloat(getComputedStyle($("view")).paddingTop) || 0;
+    $("view").style.setProperty("--toolh",
+      Math.round(tool.getBoundingClientRect().height - pad) + "px");
+  }
+  // Масштаб получают только таблицы: заголовки раздела и его переключатели
+  // остаются в размере панели, иначе органы управления разных уровней
+  // выходили разного роста.
+  var grids = body.querySelectorAll(".grp.rep.active .grid");
+  var setZoom = function (z) {
+    body.style.zoom = z;   // на .repbody держим для старых измерений
+    Array.prototype.forEach.call(grids, function (g) { g.style.zoom = z; g.style.setProperty("--gz", z); });
+    body.style.zoom = 1;
+  };
+  if (repZoom === "fit") {
+    body.classList.add("compact");
+    setZoom(1);
+    var worst = 1;
+    Array.prototype.forEach.call(grids, function (g) {
+      if (g.scrollWidth > g.clientWidth + 2) worst = Math.max(worst, g.scrollWidth / g.clientWidth);
+    });
+    // Ниже 0,6 числа не читаются, но и полоса прокрутки ради пяти процентов
+    // ширины хуже: таблица тогда ездит целиком. Если не хватило немного —
+    // дожимаем до 0,52, если много — оставляем 0,6 и прокрутку.
+    // Запас в два процента: кнопки в шапке округляются по-разному на разных
+    // масштабах, и без запаса оставалась полоса прокрутки в пару пикселей.
+    var need = worst <= 1 ? 1 : 0.98 / worst;
+    setZoom(Math.floor((need >= 0.52 ? need : 0.6) * 100) / 100);
+  } else {
+    body.classList.remove("compact");
+    setZoom(repZoom / 100);
+  }
+  body.dataset.zoom = grids.length ? grids[0].style.zoom : "1";
+  // Высота заголовка раздела зависит от отметок в нём — липкой шапке таблицы
+  // нужна фактическая.
+  var sec = body.querySelector(".grp.rep.active"), sech = sec && sec.querySelector(".sech");
+  if (sech) sec.style.setProperty("--sech", Math.round(sech.getBoundingClientRect().height) + "px");
+  fixCols();
+}
+
+/* Закрепленным графам нужен отступ слева: он равен ширине граф перед ними и
+   известен только после раскладки таблицы. */
+function fixCols() {
+  Array.prototype.forEach.call($("view").querySelectorAll(".grid"), function (g) {
+    // Высота верхнего яруса шапки в масштабе таблицы — для липкого второго яруса.
+    var g1 = g.querySelector("thead tr.g1");
+    if (g1) {
+      var z = parseFloat(g.style.zoom) || 1;
+      g.style.setProperty("--g1h", (g1.getBoundingClientRect().height / z).toFixed(2) + "px");
+    }
+    var n = +(g.dataset.fix || 0);
+    if (!n) { g.classList.toggle("fit", g.scrollWidth <= g.clientWidth + 2); return; }
+    // Отступ берём из раскладки таблицы, а не из экранных координат: при
+    // масштабе и прокрутке вбок экранные врут, а offsetLeft — нет.
+    // Берём строку заголовков граф, а не верхний ярус с месяцами: у него
+    // ячейки объединённые, и отступы по ним уезжали.
+    var ths = g.querySelectorAll("thead tr:not(.g1) th"), lefts = [];
+    // Отступ отсчитываем от первой графы таблицы: offsetLeft сам по себе
+    // меряется от страницы и сдвигал закреплённые графы на её поля.
+    for (var i = 0; i < n && i < ths.length; i++) {
+      lefts[i] = ths[i].offsetLeft - ths[0].offsetLeft;
+    }
+    // Таблица помещается по ширине — снимаем свою прокрутку: тогда шапка
+    // граф липнет к странице, а не к невидимой полосе внутри таблицы.
+    var fits = g.scrollWidth <= g.clientWidth + 2;
+    g.classList.toggle("fit", fits);
+    Array.prototype.forEach.call(g.querySelectorAll(".fx"), function (c) {
+      var ci = +c.dataset.c;
+      c.style.left = fits ? "" : (lefts[ci] || 0) + "px";
+      c.classList.toggle("fxl", !fits && ci + (c.colSpan || 1) >= n);
+    });
+  });
+}
+window.addEventListener("resize", function () { if (view === "sum") fixCols(); });
+/* Месяцы, показанные в помесячных таблицах. Двенадцать месяцев по три графы
+   не помещаются ни в один экран, и экономист возит таблицу вправо-влево.
+   Полугодие или квартал помещается целиком. */
+var repMon = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+var repEven = false, repOst = false;
+/* Масштаб отчёта. «Уместить» подбирает его сам под самую широкую таблицу:
+   двенадцать месяцев целиком читать мелко, но лучше, чем возить вбок. */
+var repZoom = "fit";
+/* Открытый раздел. Отчёт показывает одну таблицу во всю площадь: полотно из
+   тринадцати таблиц читалось только при мелком масштабе. */
+var repSec = 1;
+var ZOOMS = [["100 %", 100], ["90 %", 90], ["80 %", 80], ["70 %", 70], ["по ширине", "fit"]];
+var MON_SETS = [["год", [1,2,3,4,5,6,7,8,9,10,11,12]],
+                ["I полугодие", [1,2,3,4,5,6]], ["II полугодие", [7,8,9,10,11,12]],
+                ["I квартал", [1,2,3]], ["II квартал", [4,5,6]],
+                ["III квартал", [7,8,9]], ["IV квартал", [10,11,12]]];
+function monSetName() {
+  for (var i = 0; i < MON_SETS.length; i++) {
+    if (MON_SETS[i][1].join() === repMon.join()) return MON_SETS[i][0];
+  }
+  return "";
+}
+function monHead(fn) {
+  return repMon.map(function (m) { return { t: fn ? fn(MON[m - 1], m - 1) : MON[m - 1] }; });
+}
+function repGoalsHtml() {
+  var run = (state.runs || []).filter(function (r) { return r.id === vrun; })[0];
+  var s = (run && run.summary) || {};
+  // Только взвешенные цели: у них единицы понятны экономисту (штуки, рубли).
+  // Значения стадий-правил — внутренние суммы штрафов, их не показываем.
+  var goals = (s["цели"] || []).filter(function (g) { return g["приоритет"] === "вес"; });
+  var settings = (vrep && vrep["настройки"]) || [];
+  var h = "";
+  if (goals.length || settings.length) {
+    var rows = goals.map(function (g) {
+      return [g["цель"], nc(g["единица"] === "₽" ? rmi(g["значение"]) : fmtGoal(g["значение"])),
+              g["единица"] || "", nc(g["вес"] != null ? fmtGoal(g["вес"]) : null)];
+    });
+    // Настройки расчёта — теми же строками: экономист меняет их в чате и
+    // должен видеть, с чем считался этот план.
+    settings.forEach(function (x) {
+      var v = x["значение"], name = x["имя"], txt = String(v), unit = "";
+      if (name === "допуск трудоёмкости") { txt = rpn(Number(v)); unit = "%"; }
+      else if (name === "макс договоров оклада в год") unit = "шт";
+      rows.push([{ v: esc(name), cls: "set" }, nc(txt), unit, ""]);
+    });
+    h += secH(13, "Цели и настройки расчета") + repT(
+      ["Цель", { t: "Значение" }, "Единица", { t: "Вес" }], rows) + "</div>";
+  }
+  var def = (vrep && vrep["дефицит"]) || [];
+  if (def.length) {
+    var total = 0;
+    def.forEach(function (d) { total += d["дефицит"] || 0; });
+    h += secH(14, "Дефицит выплат", chip(rm(total) + " ₽", "er")) + repT(
+      ["Табельный", "Сотрудник", "Месяц", { t: "Положено, ₽" }, { t: "Выплачено, ₽" }, { t: "Дефицит, ₽" }, "Причина"],
+      def.map(function (d) {
+        return [d["табельный"], d["фио"], MON[d["месяц"] - 1], nc(rm(d["положено"])),
+                nc(rm(d["выплачено"])), nc(rm(d["дефицит"]), "err"), d["причина"] || ""];
+      }), null, { fix: 2, tall: true, merge: [0, 1] }) + "</div>";
+  }
+  return h;
+}
+
+function repSummary() {
+  var r = vrep, t = r["итоги"], fot = t["ФОТ"] || 0;
+  var h = secH(1, "Итоги за год") + repT(
+    ["Показатель", { t: "За год, ₽" }, { t: "Доля от ФОТ, %" }],
+    [["ФОТ договоров на " + (r["год"] || "") + " год", nc(rm(t["ФОТ"])), nc(rpn(fot ? 1 : null))],
+     ["Поступило на счета за год", nc(rm(t["поступило"])), nc(rpn(fot ? t["поступило"] / fot : null))],
+     ["Выплачено по плану за год", nc(rm(t["выплачено"])), nc(rpn(fot ? t["выплачено"] / fot : null))],
+     ["Остаток ФОТ на 31.12." + (r["год"] || ""), nc(rm(t["остаток ФОТ"])), nc(rpn(fot ? t["остаток ФОТ"] / fot : null))],
+     ["Остаток на счетах на 31.12." + (r["год"] || ""), nc(rm(t["остаток на счетах"])), nc(rpn(fot ? t["остаток на счетах"] / fot : null))]]) + "</div>";
+
+  var yy = String(r["год"] || "").slice(2);
+  var stc = { ok: 0, wr: 0, er: 0 };
+  r["договоры"].forEach(function (c) {
+    var st = c["статус"]; stc[st === "в срок" ? "ok" : (/после|нет выплат/.test(st) ? "er" : "wr")]++;
+  });
+  // Одна графа — одно поле, поэтому условия договора и итог за год стоят
+  // двумя таблицами: восемнадцать граф в один экран не помещаются.
+  h += secH(2, "Договоры",
+            (stc.ok ? chip(stc.ok + " в срок", "ok") : "") + (stc.wr ? chip(stc.wr + " не освоен", "wr") : "") +
+            (stc.er ? chip(stc.er + " с нарушением", "er") : "")) +
+    subH("2.1", "Условия договоров") + repT(
+    ["Договор", "Наименование", "Подразделение", "Признак", "Лицевой счёт", "Дата начала",
+     "Дата окончания", "Срок выплат", "Разрешённые выплаты"],
+    r["договоры"].map(function (c) {
+      // Признак — одно поле в словаре экономистов (грант, внебюджет, план,
+      // ГОЗ, приоритет); пока в реестре нет своего поля, у обычного договора
+      // здесь стоит вид работы.
+      return [c["код"], c["название"] || "—", c["подразделение"] || "—", c["признак"] || "—",
+              c["счет"] || "—",
+              c["дата начала"], c["дата окончания"], c["срок выплат"], c["выплаты"] || "—"];
+    }), null, { fix: 1 }) +
+    subH("2.2", "Состояние на конец года") + repT(
+    ["Договор", { t: "Месяцев с выплатами" },
+     { t: "Месяцев действия" }, { t: "ФОТ за год, ₽" }, { t: "Поступило за год, ₽" },
+     { t: "Выплачено за год, ₽" }, { t: "Остаток на 31.12, ₽" },
+     { t: "Освоение за год, %" }, "Статус за год"],
+    r["договоры"].map(function (c) {
+      var st = c["статус"], scls = st === "в срок" ? "ok" : (/после|нет выплат/.test(st) ? "er" : "wr");
+      return [c["код"], nc(c["месяцев с выплатами"]), nc(c["месяцев в окне"]),
+              nc(rm(c["ФОТ"])), nc(rm(c["поступило"])), nc(rm(c["выплачено"])),
+              nc(rm(c["остаток"]), c["остаток"] > 0 ? "tight" : ""), nc(rpn(c["освоение"])),
+              { v: esc(st), cls: scls }];
+    }), null, { fix: 1 }) + "</div>";
+
+  // Дополнительные показатели идут строками, а не графами: графа на каждый
+  // месяц утраивала ширину, и таблица снова начинала ездить вбок.
+  var u = r["освоение"];
+  // Все три показателя в таблице; лишние экономист убирает автофильтром по
+  // графе «Показатель», как в Excel.
+  var mets = [["Выплачено по плану, ₽", "факт"], ["Равномерное освоение, ₽", "план"],
+              ["Остаток ФОТ на конец, ₽", "остатки"]];
+  var head = ["Договор", "Признак", "Лицевой счёт", "Показатель"].concat(monHead());
+  var val = function (src, key, i) {
+    return key === "остатки" ? src["остатки"][i + 1] : src[key][i];
+  };
+  var urows = [];
+  u["договоры"].forEach(function (c) {
+    mets.forEach(function (mt) {
+      urows.push([c["код"], c["признак"] || "—", c["счет"] || "—", mt[0]]
+        .concat(repMon.map(function (mn) {
+          var i = mn - 1, v = val(c, mt[1], i);
+          if (v == null) return gc();
+          var pl = c["план"][i];
+          var off = mt[1] === "факт" && pl != null &&
+                    Math.abs(v - pl) > Math.max(1, 0.05 * Math.abs(pl));
+          return nc(rm(v), off ? "tight" : "");
+        })));
+    });
+  });
+  mets.forEach(function (mt, mi) {
+    urows.push({ cls: "sum all", cells: [{ v: "Итого по организации", cs: 3 }, { skip: true }, { skip: true }, mt[0]]
+      .concat(repMon.map(function (mn) {
+        var v = val(u["итого"], mt[1], mn - 1);
+        return v == null ? gc() : nc(rm(v));
+      })) });
+  });
+  h += secH(3, "Освоение ФОТ по договорам") +
+       repT(head, urows, null,
+            { fix: 4, tall: true, groups: monGroupRow(4, 1, 0, "quarter"), merge: [0, 1, 2] }) +
+       '<div class="lg"><i class="tight"></i>отличие от равномерного освоения более 5 %</div>' + "</div>";
+  return h;
+}
+
+function repCash() {
+  var rows = [];
+  var names = [["начало", "Остаток на начало, ₽"], ["поступление", "Поступление, ₽"],
+               ["доступно", "Доступно, ₽"], ["выплаты", "Выплаты, ₽"],
+               ["конец", "Остаток на конец, ₽"], ["освоено", "Освоено нарастающим итогом, %"]];
+  vrep["касса"].forEach(function (c) {
+    names.forEach(function (n) {
+      var arr = c["строки"][n[0]];
+      var year = n[0] === "поступление" ? rm(c["год"]["поступление"])
+               : (n[0] === "выплаты" ? rm(c["год"]["выплаты"])
+               : (n[0] === "конец" ? rm(c["год"]["конец"]) : null));
+      rows.push({ cls: n[0] === "освоено" ? "sum" : "",
+        cells: [c["код"], n[1]].concat(repMon.map(function (mn) {
+          var v = arr[mn - 1];
+          if (v == null) return gc();
+          if (v === "запрет") return gc("запрет");
+          return nc(n[0] === "освоено" ? rpn(v) : rmi(v), (n[0] === "конец" && v < 0) ? "err" : "");
+        }), [year == null ? gc("—") : nc(year)]) });
+    });
+  });
+  return secH(4, "Касса договоров по месяцам") +
+    repT(["Договор", "Показатель"].concat(monHead(), [{ t: "За год" }]), rows, null,
+         { fix: 2, tall: true, groups: monGroupRow(2, 1, 1, "quarter"), merge: [0] }) + "</div>";
+}
+
+function repRegisterRows() {
+  var out = [];
+  vrep["регистр"].forEach(function (s) {
+    var months = [];
+    s["периоды"].forEach(function (p) {
+      for (var m = p["с"]; m <= p["по"]; m++) months.push({ m: m, p: p });
+    });
+    if (repPeriod === "month") {
+      months = months.filter(function (x) { return repMon.indexOf(x.m) >= 0; });
+    }
+    var parts = [];
+    months.forEach(function (x) {
+      var last = parts[parts.length - 1];
+      if (last && last.p === x.p && last.to === x.m - 1) { last.to = x.m; last.k++; }
+      else parts.push({ from: x.m, to: x.m, k: 1, p: x.p });
+    });
+    parts.forEach(function (q) {
+      var p = q.p, total = (p["фонд зп"] + p["фонд надбавок"]) * q.k;
+      out.push({ s: s, p: p, q: q, total: total,
+        key: repGroup === "e" ? s["табельный"] + "\u0001" + s["договор"] : s["договор"] + "\u0001" + s["табельный"] });
+    });
+  });
+  out.sort(function (a, b) { return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0); });
+  return out;
+}
+
+/* Регистр как в учетной форме: строка-группа — сотрудник (или договор) с
+   итогом, под ней строки по договорам (или людям) и периодам. */
+function repRegisterGrid() {
+  var regs = repRegisterRows(), grand = 0, rows = [], byE = repGroup === "e";
+  var head = byE
+    ? ["Договор", "Лицевой счёт оклада"]
+    : ["Табельный", "ФИО", "Должность", "Лицевой счёт оклада"];
+  head = head.concat(["Занятость", { t: "Ставка" }, "Период", { t: "Месяцев" },
+    { t: "Фонд заработной платы в месяц, ₽" }, { t: "Фонд надбавок в месяц, ₽" },
+    "Лицевой счёт надбавки", "Код надбавки", { t: "Итого за период, ₽" },
+    { t: "Лимит на ставку, ₽" }, { t: "Запас до лимита, ₽" }]);
+  var idn = byE ? 2 : 4, ncol = head.length;
+  var gkey = null, gsum = 0, gi = -1;
+  var flush = function () { if (gi >= 0) rows[gi].cells[1] = nc(rm(gsum)); };
+  regs.forEach(function (x) {
+    var s = x.s, p = x.p, q = x.q, k = byE ? s["табельный"] : s["договор"];
+    if (k !== gkey) {
+      flush(); gkey = k; gsum = 0; gi = rows.length;
+      var label = byE ? "<b>" + esc(s["фио"]) + "</b>" : ctrHead(s["договор"]);
+      rows.push({ grp: true, g: k, cells: [{ v: label, cs: ncol - 3 }, nc(""), { v: "", cs: 2 }] });
+    }
+    gsum += x.total; grand += x.total;
+    var cells = byE
+      ? [s["договор"], s["лицевой счет оклада"] || ""]
+      : [s["табельный"], s["фио"], s["должность"], s["лицевой счет оклада"] || ""];
+    cells = cells.concat([p["занятость"] || "", nc(p["ставка"] ? rf(p["ставка"]) : ""),
+      q.from === q.to ? MON[q.from - 1] : MON[q.from - 1] + "–" + MON[q.to - 1], nc(q.k),
+      nc(rm(p["фонд зп"])), nc(rm(p["фонд надбавок"])),
+      s["лицевой счет надбавки"] || "", s["код надбавки"] || "", nc(rm(x.total)),
+      nc(rm(p["лимит"])), nc(rm(p["запас"]), p["запас"] != null && p["запас"] <= 0 ? "err" : "")]);
+    rows.push({ g: k, cells: cells });
+  });
+  flush();
+  rows.push({ cls: "sum", cells: [{ v: esc("Итого" + (repPeriod === "year" ? " за год" : (repMon.length === 1
+              ? " за " + MON[repMon[0] - 1] : " за выбранные месяцы"))), cs: ncol - 3 }, nc(rm(grand)), { v: "", cs: 2 }] });
+  return grid(head, rows, { fix: idn, tall: true });
+}
+
+function repPlan() {
+  var h = secH(5, "Выплаты по договорам и видам") + repT(
+    ["Договор", "Вид выплаты", { t: "Сумма за год, ₽" }, { t: "Доля договора, %" },
+     { t: "Доля фонда, %" }, { t: "Месяцев" }],
+    vrep["виды"].map(function (k) {
+      return [k["договор"], k["вид"], nc(rm(k["сумма"])), nc(rpn(k["доля договора"])),
+              nc(rpn(k["доля фонда"])), nc(k["месяцев"])];
+    }), null, { merge: [0] }) + "</div>";
+
+  // Группировка одна на обе таблицы раздела; выбор строк — только регистра.
+  var ctlG = '<div class="ctl"><label class="fld">Группировка<select data-rg>' +
+    '<option value="e"' + (repGroup === "e" ? " selected" : "") + ">по сотрудникам</option>" +
+    '<option value="c"' + (repGroup === "c" ? " selected" : "") + ">по договорам</option></select></label></div>";
+  var ctl = '<div class="ctl"><label class="fld">Строки<select data-rp>' +
+    '<option value="year"' + (repPeriod === "year" ? " selected" : "") + ">за год</option>" +
+    '<option value="month"' + (repPeriod === "month" ? " selected" : "") + ">по выбранному периоду</option>" +
+    "</select></label></div>";
+  // 6.1 — план выплат по месяцам: сотрудник → договор → вид выплаты.
+  var pm = vrep["помесячно"] || { "сотрудники": [], "итого": [], "год": 0 };
+  var mrows = [], byE = repGroup === "e";
+  var mcells = function (arr) {
+    return repMon.map(function (mn) { var v = arr[mn - 1]; return v ? nc(rmi(v)) : gc("—"); });
+  };
+  var KIND_ORDER = ["оклад", "120", "122", "124", "152", "приказ"];
+  if (byE) {
+    // Договоры человека идут подряд, внутри договора оклад первым; строки
+    // оклада выделены, чтобы находить их глазами, не разбивая договоры.
+    pm["сотрудники"].forEach(function (p) {
+      p["строки"].forEach(function (l) {
+        mrows.push({ cls: l["вид"] === "оклад" ? "okl" : "",
+          cells: [p["табельный"], p["фио"], l["договор"], l["вид"]].concat(mcells(l["месяцы"]), [nc(rmi(l["год"]))]) });
+      });
+      mrows.push({ cls: "sum", cells: [p["табельный"], p["фио"], { v: "Итого по сотруднику", cs: 2 }, { skip: true }]
+        .concat(mcells(p["итого"]), [nc(rmi(p["год"]))]) });
+    });
+  } else {
+    // По договорам: те же строки, перегруппированные; итог по договору по месяцам.
+    var byC = {};
+    pm["сотрудники"].forEach(function (p) {
+      p["строки"].forEach(function (l) {
+        (byC[l["договор"]] = byC[l["договор"]] || []).push({ p: p, l: l });
+      });
+    });
+    Object.keys(byC).sort().forEach(function (code) {
+      var tot = [], year = 0;
+      byC[code].forEach(function (x) {
+        mrows.push({ cls: x.l["вид"] === "оклад" ? "okl" : "",
+          cells: [code, x.p["табельный"], x.p["фио"], x.l["вид"]].concat(mcells(x.l["месяцы"]), [nc(rmi(x.l["год"]))]) });
+        x.l["месяцы"].forEach(function (v, i) { if (v) tot[i] = (tot[i] || 0) + v; });
+        year += x.l["год"] || 0;
+      });
+      mrows.push({ cls: "sum", cells: [code, { v: "Итого по договору", cs: 3 }, { skip: true }, { skip: true }]
+        .concat(mcells(tot), [nc(rmi(year))]) });
+    });
+  }
+  if (mrows.length) {
+    mrows.push({ cls: "sum all", cells: [{ v: "Итого по организации", cs: 4 }, { skip: true }, { skip: true }, { skip: true }].concat(
+      repMon.map(function (mn) { var v = pm["итого"][mn - 1]; return v ? nc(rmi(v)) : gc("—"); }),
+      [nc(rmi(pm["год"]))]) });
+  }
+  h += secH(6, "Выплаты сотрудникам") + ctlG +
+    subH("6.1", "По месяцам") + (mrows.length ? repT(
+      (byE ? ["Табельный", "ФИО", "Договор", "Вид выплаты"] : ["Договор", "Табельный", "ФИО", "Вид выплаты"])
+        .concat(monHead(), [{ t: "За год, ₽" }]),
+      mrows, null, { fix: 4, tall: true, groups: monGroupRow(4, 1, 1, "quarter"), merge: [0, 1, 2] })
+      : '<div class="none">выплат нет</div>') +
+    subH("6.2", "Регистр по периодам") + ctl + repRegisterGrid() + "</div>";
+
+  var srows = [];
+  vrep["ставки"].forEach(function (p) {
+    p["договоры"].forEach(function (c, ci) {
+      [["основное", true], ["совместительство", false]].forEach(function (kind) {
+        var vals = repMon.map(function (mn) {
+          var mi = mn - 1, v = c["месяцы"][mi];
+          return v && !!c["основное"][mi] === kind[1] ? v : null;
+        });
+        var all = c["месяцы"].filter(function (v, mi) { return v && !!c["основное"][mi] === kind[1]; });
+        if (!all.length) return;
+        var mx = Math.max.apply(null, all);
+        srows.push([p["табельный"], p["фио"], c["код"], kind[0]].concat(
+          vals.map(function (v) {
+            return v == null ? gc("—") : nc(rf(v), (!kind[1] && v >= 0.5 - 0.001) ? "tight" : "");
+          }), [nc(rf(mx), (!kind[1] && mx >= 0.5 - 0.001) ? "tight" : "")]));
+      });
+    });
+    srows.push({ cls: "sum", cells: [p["табельный"], p["фио"], "Всего", gc("—")].concat(
+      repMon.map(function (mn) {
+        var v = p["всего"][mn - 1];
+        return v == null ? gc("—") : nc(rf(v), v >= p["предел"] - 0.001 ? "tight" : "");
+      }), [nc(rf(p["макс"]), p["макс"] >= p["предел"] - 0.001 ? "tight" : "")]) });
+  });
+  // Сведения о человеке — должность, подразделение, категория, тип
+  // занятости — стоят здесь один раз: регистр и ставки называют человека
+  // табельным номером и ФИО, как договор в других разделах — шифром.
+  var pinfo = {};
+  (vrep["регистр"] || []).forEach(function (s) {
+    if (!pinfo[s["табельный"]]) pinfo[s["табельный"]] = s;
+  });
+  var prows = vrep["ставки"].map(function (p) {
+    var s = pinfo[p["табельный"]] || {};
+    return [p["табельный"], p["фио"], s["должность"] || "—", s["отдел"] || "—",
+            s["категория персонала"] || "—", p["тип занятости"] || s["тип занятости"] || "—",
+            p["категория занятости"] || "—", nc(rf(p["штатная"])), nc(rf(p["предел"]))];
+  });
+  h += secH(7, "Сотрудники и ставки") +
+    subH("7.1", "Сотрудники") + repT(
+    ["Табельный", "ФИО", "Должность", "Подразделение", "Категория персонала", "Тип занятости",
+     "Категория занятости", { t: "Штатная ставка" }, { t: "Предел ставки" }], prows, null, { fix: 1 }) +
+    subH("7.2", "Ставки по месяцам") + repT(
+    ["Табельный", "ФИО", "Договор", "Занятость"].concat(monHead(), [{ t: "Макс в плане" }]),
+    srows, null,
+    { fix: 3, tall: true, groups: monGroupRow(4, 1, 1, "quarter"), merge: [0, 1] }) +
+    '<div class="lg"><i class="tight"></i>на пределе</div></div>';
+  return h;
+}
+
+function repLimits() {
+  var dev = function (v) {
+    return { v: v == null ? "—" : rs(v * 100, true), cls: "n " + (v == null ? "" : (v > 0.0005 ? "er" : (v < -0.0005 ? "ok" : ""))) };
+  };
+  var bepBad = vrep["бэп"].filter(function (b) { return b["отклонение"] > 0.0005; }).length;
+  var h = secH(8, "БЭП по ГОЗ-договорам", vrep["бэп"].length
+             ? (bepBad ? chip(bepBad + " выше БЭП", "er") : chip("в пределах", "ok")) : "") + (vrep["бэп"].length ? repT(
+    ["Договор", "Месяц", { t: "Сумма оклада и 122, ₽" }, { t: "Сумма ставок" },
+     { t: "Средняя на ставку, ₽" }, { t: "БЭП, ₽" }, { t: "Запас, ₽" }, { t: "Отклонение от БЭП, %" }],
+    vrep["бэп"].map(function (b) {
+      return [b["договор"], MON[b["месяц"] - 1], nc(rm(b["сумма"])), nc(rf(b["ставок"])),
+              nc(rm(b["средняя"])), nc(rm(b["БЭП"])), nc(rm(b["запас"])), dev(b["отклонение"])];
+    }), null, { fix: 1, tall: true, merge: [0] }) : '<div class="none">ГОЗ-договоров в плане нет</div>') + "</div>";
+
+  var p4Bad = vrep["п4"].filter(function (b) { return b["отклонение"] > 0.0005; }).length;
+  h += secH(9, "П4 при надбавке за интенсивность", vrep["п4"].length
+            ? (p4Bad ? chip(p4Bad + " выше предела", "er") : chip("в пределах", "ok")) : "") + (vrep["п4"].length ? repT(
+    ["Табельный", "ФИО", "Месяц", { t: "Оклад, ₽" }, { t: "122, ₽" }, { t: "124, ₽" }, { t: "Итого по П4, ₽" },
+     { t: "Суммарная ставка" }, { t: "Предел П4 на ставку, ₽" }, { t: "Запас, ₽" }, { t: "Отклонение от предела, %" }],
+    vrep["п4"].map(function (b) {
+      return [b["табельный"], b["фио"], MON[b["месяц"] - 1], nc(rm(b["оклад"])), nc(rm(b["122"])),
+              nc(rm(b["124"])), nc(rm(b["итого"])), nc(rf(b["ставка"])), nc(rm(b["предел"])),
+              nc(rm(b["запас"])), dev(b["отклонение"])];
+    }), null, { fix: 2, tall: true, merge: [0, 1] }) : '<div class="none">надбавка 124 в этом плане не назначалась</div>') + "</div>";
+
+  var lbBad = vrep["трудоемкость"].filter(function (l) { return l["статус"] !== "сходится"; }).length;
+  var lbTol = vrep["трудоемкость"].length ? vrep["трудоемкость"][0]["допуск"] : null;
+  h += secH(10, "Трудоёмкость договоров", vrep["трудоемкость"].length
+            ? (lbBad ? chip(lbBad + " не сходится", "wr") : chip("сходится", "ok")) +
+              (lbTol != null ? chip("допуск " + rp(lbTol)) : "") : "") + (vrep["трудоемкость"].length ? repT(
+    ["Договор", "Строка РКМ", { t: "План, чел.-мес." }, { t: "Факт, чел.-мес." }, { t: "Отклонение, чел.-мес." },
+     { t: "План, ₽" }, { t: "Факт, ₽" }, { t: "Отклонение, ₽" }, { t: "Средняя план, ₽" }, { t: "Средняя факт, ₽" },
+     { t: "Отклонение средней, ₽" }, { t: "Предел людей" }, { t: "Людей в месяц, макс" }, "Статус"],
+    vrep["трудоемкость"].map(function (l) {
+      var bad = l["статус"] !== "сходится", out = l["вне допуска"] || {};
+      // Отклонение внутри допуска — обычное число; вне допуска — красным.
+      var dv = function (txt, over) { return { v: txt, cls: "n" + (over ? " er" : "") }; };
+      return [l["договор"], l["строка"], nc(rf(l["план чел-мес"])), nc(rf(l["факт чел-мес"])),
+              dv(rs(l["д чел-мес"], true), out["чел-мес"]), nc(rm(l["план сумма"])),
+              nc(rm(l["факт сумма"])), dv(rs(l["д сумма"]), out["сумма"]), nc(rm(l["средняя план"])),
+              nc(rm(l["средняя факт"])), dv(rs(l["д средней"]), out["средняя"]),
+              nc(l["людей предел"] == null ? "—" : l["людей предел"]),
+              nc(l["людей макс"], l["людей предел"] && l["людей макс"] >= l["людей предел"] ? "tight" : ""),
+              { v: esc(l["статус"]), cls: bad ? "wr" : "ok" }];
+    }), null, { fix: 2, merge: [0] }) : '<div class="none">трудоёмкость в РКМ не задана</div>') + "</div>";
+
+  // Вопрос этой таблицы — кто именно и какой своей должностью закрывает
+  // строку РКМ договора. Поэтому уровни: договор → строка РКМ → люди, а в
+  // клетках только чел.-мес.; деньги по строке — в разделе 10, по людям — в
+  // регистре. Шапка группы делится на закреплённую часть и остаток: цельная
+  // ячейка на всю ширину уезжала при прокрутке вбок вместе с подписью.
+  var wrows = [], wtail = repMon.length + 1, wneed = {};
+  vrep["трудоемкость"].forEach(function (l) { wneed[l["договор"] + "\u0001" + l["строка"]] = l; });
+  var prev = null;
+  vrep["кто"].forEach(function (w) {
+    if (w["договор"] !== prev) {
+      prev = w["договор"];
+      wrows.push({ grp: true, cls: "lvl1", k: prev, cells: [
+        { v: ctrHead(w["договор"]), cs: 2 },
+        { skip: true }, { v: "", cs: wtail }] });
+    }
+    var need = wneed[w["договор"] + "\u0001" + w["строка"]] || {};
+    var bad = need["статус"] && need["статус"] !== "сходится";
+    var wkey = w["договор"] + "\u0001" + w["строка"];
+    wrows.push({ grp: true, g: w["договор"], k: wkey, cells: [
+      { v: esc(w["строка"]), cs: 2 }, { skip: true },
+      { v: "", cs: repMon.length },
+      need["план чел-мес"] != null ? nc(rf(need["план чел-мес"])) : { v: "" }] });
+    w["люди"].forEach(function (p) {
+      wrows.push({ g: wkey, cells: [p["фио"], p["должность"]].concat(
+        repMon.map(function (mn) { var v = p["ставка"][mn - 1]; return v ? nc(rf(v)) : gc("—"); }),
+        [nc(rf(p["ставка год"]))]) });
+    });
+    wrows.push({ cls: "sum", g: wkey, cells: [{ v: "Закрыто по строке", cs: 2 }, { skip: true }].concat(
+      repMon.map(function (mn) { var v = w["итого ставка"][mn - 1]; return v ? nc(rf(v)) : gc("—"); }),
+      [nc(rf(w["итого ставка год"]), bad ? "er" : "")]) });
+  });
+  h += secH(11, "Распределение трудоёмкости по исполнителям") + (wrows.length ? repT(
+    ["ФИО", "Должность"].concat(monHead(function (m) { return m; }), [{ t: "За год" }]),
+    wrows, null,
+    { fix: 2, tall: true, groups: monGroupRow(2, 1, 1, "quarter") }) : '<div class="none">трудоёмкость в РКМ не задана</div>') + "</div>";
+
+  if (vrep["незакрыто"].length) {
+    var g = vrep["незакрыто"], gs = 0;
+    g.forEach(function (x) { gs += x["не закрыто"] || 0; });
+    var grows = g.map(function (x) {
+      return [x["договор"], x["должность"], nc(rf(x["нужно"])), nc(rf(x["закрыто"])),
+              nc(rf(x["не закрыто"]), "err"), nc(x["месяцев"]), nc(rf(x["ставок в месяц"]))];
+    });
+    grows.push({ cls: "sum all", cells: [{ v: "Итого не закрыто", cs: 4 }, { skip: true }, { skip: true }, { skip: true }, nc(rf(gs), "err"), "", ""] });
+    h += secH(12, "Нехватка людей по строкам РКМ", chip(rf(gs) + " чел.-мес.", "er")) + repT(
+      ["Договор", "Должность", { t: "Нужно, чел.-мес." }, { t: "Закрыли люди" }, { t: "Не закрыто" },
+       { t: "Месяцев" }, { t: "Ставок в месяц" }], grows) + "</div>";
+  }
+  return h + repGoalsHtml();
+}
+
+/* Меню автофильтра графы: сортировка, поиск, список значений с флажками.
+   Значения — те, что остаются после отбора по другим графам, как в Excel. */
+function closeFilterMenu() {
+  var m = document.querySelector(".fmenu");
+  if (m) m.remove();
+}
+function openFilterMenu(tid, c, anchor) {
+  closeFilterMenu();
+  var data = GRID_DATA[tid];
+  if (!data) return;
+  var colf = repColFilter[tid] || {}, cur = colf[c] || null;
+  var seen = {}, vals = [];
+  data.rows.forEach(function (r) {
+    if (!r.d) return;
+    var fake = { cells: r.t.map(function (t) { return t; }) };
+    if (!rowPasses(fake, colf, c)) return;
+    var key = r.t[c];
+    if (seen[key]) return;
+    seen[key] = true;
+    vals.push({ k: key, s: r.v[c] || "(пусто)" });
+  });
+  vals.sort(function (a, b) {
+    var na = numOf(a.k), nb = numOf(b.k);
+    return (na != null && nb != null) ? na - nb : a.k.localeCompare(b.k, "ru");
+  });
+  var srt = repSort[tid], isNum = vals.length && vals.every(function (v) { return numOf(v.k) != null; });
+  var m = document.createElement("div");
+  m.className = "fmenu";
+  m.dataset.tid = tid; m.dataset.c = c;
+  m.innerHTML =
+    (data.sortable
+      ? '<button type="button" class="fmi' + (srt && srt.c === c && srt.d === "a" ? " on" : "") + '" data-fm="asc">' +
+        (isNum ? "Сортировка по возрастанию" : "Сортировка от А до Я") + "</button>" +
+        '<button type="button" class="fmi' + (srt && srt.c === c && srt.d === "d" ? " on" : "") + '" data-fm="desc">' +
+        (isNum ? "Сортировка по убыванию" : "Сортировка от Я до А") + "</button>"
+      : "") +
+    '<button type="button" class="fmi" data-fm="clear"' + (cur ? "" : " disabled") + ">Снять отбор с графы</button>" +
+    '<button type="button" class="fmi" data-fm="hide">Скрыть графу</button>' +
+    (data.hidden ? '<button type="button" class="fmi" data-fm="unhide">Показать скрытые графы (' + data.hidden + ")</button>" : "") +
+    '<div class="fsep"></div>' +
+    '<input type="search" class="fsearch" placeholder="Поиск" aria-label="Поиск значения">' +
+    '<div class="flist"><label><input type="checkbox" data-all' +
+    (!cur ? " checked" : "") + '> (Выделить все)</label>' +
+    vals.map(function (v) {
+      return '<label><input type="checkbox" value="' + esc(v.k) + '"' +
+             (!cur || cur[v.k] ? " checked" : "") + "> " + esc(v.s) + "</label>";
+    }).join("") + "</div>" +
+    '<div class="fbtns"><button type="button" class="pri" data-fm="ok">ОК</button>' +
+    '<button type="button" data-fm="cancel">Отмена</button></div>';
+  document.body.appendChild(m);
+  var r = anchor.getBoundingClientRect(), mw = 250;
+  var left = Math.min(r.right - mw, window.innerWidth - mw - 8), top = r.bottom + 4;
+  if (left < 8) left = 8;
+  m.style.left = left + "px";
+  m.style.top = Math.min(top, window.innerHeight - 40) + "px";
+  var maxH = window.innerHeight - top - 16;
+  m.querySelector(".flist").style.maxHeight = Math.max(120, Math.min(280, maxH - 150)) + "px";
+  m.querySelector(".fsearch").focus();
+}
+document.addEventListener("click", function (e) {
+  var m = document.querySelector(".fmenu");
+  if (!m) return;
+  if (!m.contains(e.target)) { closeFilterMenu(); return; }
+  var b = e.target.closest("button[data-fm]");
+  if (!b) return;
+  var tid = m.dataset.tid, c = +m.dataset.c;
+  if (b.dataset.fm === "asc" || b.dataset.fm === "desc") {
+    repSort[tid] = { c: c, d: b.dataset.fm === "asc" ? "a" : "d" };
+  } else if (b.dataset.fm === "hide") {
+    (repHideCol[tid] = repHideCol[tid] || {})[c] = true;
+  } else if (b.dataset.fm === "unhide") {
+    delete repHideCol[tid];
+  } else if (b.dataset.fm === "clear") {
+    if (repColFilter[tid]) { delete repColFilter[tid][c]; if (!Object.keys(repColFilter[tid]).length) delete repColFilter[tid]; }
+  } else if (b.dataset.fm === "ok") {
+    var boxes = Array.prototype.slice.call(m.querySelectorAll('.flist input[type="checkbox"]:not([data-all])'));
+    var chosen = boxes.filter(function (x) { return x.checked; });
+    if (chosen.length === boxes.length) {
+      if (repColFilter[tid]) { delete repColFilter[tid][c]; if (!Object.keys(repColFilter[tid]).length) delete repColFilter[tid]; }
+    } else {
+      var set = {};
+      chosen.forEach(function (x) { set[x.value] = true; });
+      (repColFilter[tid] = repColFilter[tid] || {})[c] = set;
+    }
+  }
+  closeFilterMenu();
+  if (b.dataset.fm !== "cancel") renderView();
+});
+document.addEventListener("input", function (e) {
+  var m = document.querySelector(".fmenu");
+  if (!m || !m.contains(e.target)) return;
+  if (e.target.classList.contains("fsearch")) {
+    var q = e.target.value.trim().toLowerCase();
+    Array.prototype.forEach.call(m.querySelectorAll(".flist label"), function (l) {
+      if (l.querySelector("[data-all]")) return;
+      l.hidden = q && l.textContent.toLowerCase().indexOf(q) < 0;
+    });
+  }
+});
+document.addEventListener("change", function (e) {
+  var m = document.querySelector(".fmenu");
+  if (!m || !m.contains(e.target)) return;
+  var all = m.querySelector("[data-all]");
+  var boxes = Array.prototype.slice.call(m.querySelectorAll('.flist input[type="checkbox"]:not([data-all])'));
+  if (e.target === all) {
+    boxes.forEach(function (x) { if (!x.closest("label").hidden) x.checked = all.checked; });
+  } else {
+    all.checked = boxes.every(function (x) { return x.checked; });
+  }
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") closeFilterMenu();
+});
+
+$("view").addEventListener("change", function (e) {
+  if (view !== "sum") return;
+  if (e.target.matches('select[data-sel="sec"]')) { showSection(+e.target.value); return; }
+  if (e.target.matches('select[data-sel="run"]')) {
+    chosenRun = +e.target.value; vrun = null; vrep = null;
+    renderRuns();
+    setView("sum");
+    return;
+  }
+  var cb = e.target.closest("input[type=checkbox]");
+  if (cb) {
+    if (cb.hasAttribute("data-ost")) repOst = cb.checked;
+    if (cb.hasAttribute("data-even")) repEven = cb.checked;
+    renderView();
+    return;
+  }
+  var ps = e.target.closest("select[data-rg],select[data-rp]");
+  if (ps) {
+    if (ps.hasAttribute("data-rg")) repGroup = ps.value;
+    if (ps.hasAttribute("data-rp")) repPeriod = ps.value;
+    renderView();
+    return;
+  }
+  var s = e.target.closest("select[data-sel]");
+  if (!s) return;
+  if (s.dataset.sel === "mset") { repMon = s.value.split(",").map(Number); renderView(); }
+  else { repZoom = s.value === "fit" ? "fit" : +s.value; applyZoom(); }
+});
+
+$("view").addEventListener("click", function (e) {
+  if (view !== "sum" || !vrep) return;
+  var nav = e.target.closest(".repnav a[data-sec]");
+  if (nav) {
+    e.preventDefault();
+    showSection(+nav.dataset.sec);
+    return;
+  }
+  var fb = e.target.closest(".grid th .fbtn");
+  if (fb) {
+    e.stopPropagation();
+    openFilterMenu(fb.closest(".grid").dataset.tid, +fb.dataset.fc, fb);
+    return;
+  }
+  var ra = e.target.closest(".rtool button[data-ra]");
+  if (ra) {
+    if (ra.dataset.ra === "full") {
+      fullReport(!document.querySelector(".shell").classList.contains("full"));
+    }
+    return;
+  }
+  var gr = e.target.closest("tr.grp");
+  if (gr) {
+    var closed = gr.classList.toggle("closed"), key = gr.dataset.k || gr.dataset.g;
+    Array.prototype.forEach.call(gr.parentNode.querySelectorAll("tr[data-g]"), function (tr) {
+      if (tr === gr) return;
+      var g = tr.dataset.g;
+      if (g === key || g.indexOf(key + "\u0001") === 0) {
+        tr.classList.toggle("hide", closed);
+        if (tr.classList.contains("grp")) tr.classList.toggle("closed", closed);
+      }
+    });
+    return;
+  }
+  var tr = e.target.closest(".grid tbody tr");
+  if (tr && !e.target.closest("a,button")) {
+    var was = tr.classList.contains("sel");
+    Array.prototype.forEach.call(tr.parentNode.querySelectorAll("tr.sel"), function (x) { x.classList.remove("sel"); });
+    tr.classList.toggle("sel", !was);
+  }
+
+  var b = e.target.closest("button[data-rp],button[data-rg]");
+  if (!b) return;
+  if (b.dataset.rp) repPeriod = b.dataset.rp;
+  if (b.dataset.rg) repGroup = b.dataset.rg;
+  renderView();
+});
+
 function renderView() {
   var el = $("view");
 
@@ -1492,12 +2704,32 @@ function renderView() {
   }
 
   if (view === "sum") {
-    el.innerHTML = failBanner() + summaryView();
+    // Весь план ФОТ одной страницей, разделы по порядку — как в согласованном
+    // прототипе. Вкладки резали нумерацию и прятали разделы друг от друга.
+    if (vrep) {
+      REP_SECTIONS = [];
+      GRID_SEQ = 0;
+      var body = repSummary() + repCash() + repPlan() + repLimits();
+      if (!REP_SECTIONS.some(function (x) { return x.n === repSec; })) {
+        repSec = REP_SECTIONS.length ? REP_SECTIONS[0].n : 1;
+      }
+      el.innerHTML = failBanner() + repToolbar() +
+        '<div class="repwrap">' + repNav() + '<div class="repbody">' + body + "</div></div>";
+      showSection(repSec);
+    } else {
+      el.innerHTML = failBanner() + summaryView();
+    }
     return;
   }
 
   if (view === "plan") {
-    el.innerHTML = payrollView() + payrollFull() + '<div id="plandetail"></div>';
+    el.innerHTML = vrep ? failBanner() + repPlan()
+                        : payrollView() + payrollFull() + '<div id="plandetail"></div>';
+    return;
+  }
+
+  if (view === "cash" && vrep) {
+    el.innerHTML = failBanner() + repCash();
     return;
   }
 
@@ -1538,6 +2770,11 @@ function renderView() {
       table([{ v: "Договор", cls: "key" }, "Показатель"].concat(
               MONTHS.map(function (m) { return { t: m }; }), [{ t: "за год, ₽" }]),
             crows, "");
+    return;
+  }
+
+  if (view === "lim" && vrep) {
+    el.innerHTML = failBanner() + repLimits();
     return;
   }
 
@@ -1713,6 +2950,10 @@ function produced(made) {
     "договоров": ["договор", "договора", "договоров"],
     "правил замещения": ["правило замещения", "правила замещения",
                          "правил замещения"],
+    "поступлений": ["поступление", "поступления", "поступлений"],
+    "строк трудоемкости": ["строка трудоемкости", "строки трудоемкости",
+                           "строк трудоемкости"],
+    "надбавок 120": ["надбавка 120", "надбавки 120", "надбавок 120"],
   };
   return Object.keys(made || {}).filter(function (k) { return made[k]; })
     .map(function (k) {
@@ -2029,6 +3270,19 @@ function openDocument(id) {
    граф. Прячем на время и возвращаем, как было, при возврате к плану. */
 var sideWasOpen = null;
 
+/* Отчет на весь экран: обе боковые колонки убраны, Esc возвращает. */
+function fullReport(on) {
+  document.querySelector(".shell").classList.toggle("full", on);
+  var b = document.querySelector(".rtool .full");
+  if (b) {
+    b.classList.toggle("on", on);
+    b.title = on ? "Выйти из полного экрана (Esc)" : "Отчет на весь экран";
+    b.setAttribute("aria-label", b.title);
+  }
+}
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && document.querySelector(".shell.full")) fullReport(false);
+});
 function wideScreen(on) {
   var shell = document.querySelector(".shell");
   if (on) {
@@ -2068,7 +3322,7 @@ function openAgents() {
   document.querySelector(".tabs").hidden = true;
   document.querySelector(".phead").hidden = true;
   document.querySelector(".composer").hidden = true;
-  $("openagents").classList.add("on");
+  if ($("openagents")) $("openagents").classList.add("on");
   $("openreg").classList.remove("on");
   Array.prototype.forEach.call(document.querySelectorAll(".case"), function (el) {
     el.classList.remove("on");
@@ -2091,7 +3345,7 @@ function leaveAgents() {
   document.querySelector(".tabs").hidden = false;
   document.querySelector(".phead").hidden = false;
   document.querySelector(".composer").hidden = false;
-  $("openagents").classList.remove("on");
+  if ($("openagents")) $("openagents").classList.remove("on");
 }
 
 /* Карточка плана: пять этапов чипами, под ними — что мешает. Щелчок по
@@ -2464,15 +3718,14 @@ function renderRegistry() {
     // платить 120 без оклада, приоритет — на каком договоре держать оклад,
     // а основное место и совместительство — можно ли открыть ставку.
     body = table([{ v: "Шифр", cls: "key" }, "наименование", "номер", "вид",
-                  "счет", "ГОЗ",
-                  { t: "фонд, ₽" }, "срок", "разрешенные выплаты", "приоритет",
+                  "подразделение", "счет", "ГОЗ",
+                  { t: "фонд, ₽" }, "начало", "окончание", "разрешенные выплаты", "приоритет",
                   "основное", "совмест.", "оклад до", "надбавки до"],
       pgc.rows.map(function (x) {
-        var term = [x.from, x.to].filter(Boolean).join(" — ");
-        return [{ v: esc(x.code), cls: "key" }, x.name, x.number, x.kind, x.account,
+        return [{ v: esc(x.code), cls: "key" }, x.name, x.number, x.kind, x.department, x.account,
                 { v: x.goz ? '<span class="tag goz">' + esc(x.goz) + "</span>" : null },
                 { v: x.fund == null ? null : mo(x.fund), cls: "n" },
-                term, x.kinds, x.priority, x.allow_main, x.allow_part,
+                x.from, x.to, x.kinds, x.priority, x.allow_main, x.allow_part,
                 x.salary_deadline, x.allowance_deadline];
       }),
       "", { startNum: pgc.from }) + pager("ctr", pgc);
@@ -2484,20 +3737,20 @@ function renderRegistry() {
     body = table([{ v: "Табельный", cls: "key" }, "ФИО", "должность",
                   "подразделение",
                   { t: "ставка" }, "занятость", "категория", { t: "зарплата, ₽" },
-                  "срок", "разрешены", "запрещены"],
+                  "начало", "окончание", "разрешены", "запрещены"],
       pge.rows.map(function (x) {
-        var term = [x.from, x.to].filter(Boolean).join(" — ");
         return [{ v: esc(x.code), cls: "key" }, x.fio, x.position, x.department,
                 { v: x.rate == null ? null : String(x.rate).replace(".", ","), cls: "n" },
                 x.employment, x.category,
                 { v: x.salary == null ? null : mo(x.salary), cls: "n" },
-                term, x.allowed, x.forbidden];
+                x.from, x.to, x.allowed, x.forbidden];
       }),
       "", { startNum: pge.from }) + pager("emp", pge);
   } else if (regTab === "labor") {
     var pgl = paged("labor", d.labor || []);
     body = table(["договор", { t: "год" }, "должность", "окладная группа",
-                  { t: "чел.-мес." }, { t: "средняя стоимость, ₽" }],
+                  { t: "чел.-мес." }, { t: "средняя стоимость, ₽" }, { t: "людей" },
+                  "источник"],
       pgl.rows.map(function (x) {
         var grp = [x.page, x.group, x.level].filter(function (v) {
           return v != null && v !== "";
@@ -2506,11 +3759,11 @@ function renderRegistry() {
                 x.position, grp || null,
                 { v: x.person_months == null ? null
                      : String(x.person_months).replace(".", ","), cls: "n" },
-                { v: x.avg_cost == null ? null : mo(x.avg_cost), cls: "n" }];
+                { v: x.avg_cost == null ? null : mo(x.avg_cost), cls: "n" },
+                { v: x.headcount == null ? null : String(x.headcount).replace(".0", ""), cls: "n" },
+                x.source || null];
       }),
-      "План договора в человеко-месяцах и стоимость одного месяца. Главное " +
-      "содержание расчетно-калькуляционных материалов и Формы 9д.",
-      { startNum: pgl.from }) + pager("labor", pgl);
+      "", { startNum: pgl.from }) + pager("labor", pgl);
   } else if (regTab === "inflow") {
     // График поступлений читают строкой по месяцам, а не списком из двух
     // десятков записей: девятнадцать строк «договор, год, месяц, сумма» — это
@@ -2549,10 +3802,7 @@ function renderRegistry() {
                 { v: years[key][1] == null ? null : String(years[key][1]), cls: "n" }]
           .concat(cells, [{ v: mo(total), cls: "n tot" }]);
       }),
-      "Когда деньги приходят на договор. Решатель не может потратить их " +
-      "раньше поступления; без графика фонд раскладывается ровно по месяцам " +
-      "действия, и об этом говорится перед расчетом.",
-      { startNum: pgi.from }) + pager("inflow", pgi);
+      "", { startNum: pgi.from }) + pager("inflow", pgi);
   } else if (regTab === "secret") {
     var pgs2 = paged("secret", d.secret || []);
     body = table(["сотрудник", "договор секретности", { t: "ставка 120" }],
@@ -2561,9 +3811,7 @@ function renderRegistry() {
                 { v: x.rate == null ? null : String(x.rate).replace(".", ","),
                   cls: "n" }];
       }),
-      "Кому платится 120 и какой договор задает период секретности. Сумма " +
-      "считается процентом от оклада.",
-      { startNum: pgs2.from }) + pager("secret", pgs2);
+      "", { startNum: pgs2.from }) + pager("secret", pgs2);
   } else if (regTab === "ref") {
     var pgr = paged("ref", d.reference || []);
     // Окладной группы здесь нет: взаимозаменяемость задают правила замещения,
@@ -2580,15 +3828,12 @@ function renderRegistry() {
                 { v: x.p4 == null ? null : mo(x.p4), cls: "n" },
                 { v: x.bep == null ? null : mo(x.bep), cls: "n" }, x.note];
       }),
-      "Прочерк — отдельной строки для должности в источнике нет.",
-      { startNum: pgr.from }) + pager("ref", pgr);
+      "", { startNum: pgr.from }) + pager("ref", pgr);
   } else if (regTab === "sub") {
     var pgs = paged("sub", d.substitutions || []);
     body = table(["должность", "может быть замещена"],
       pgs.rows.map(function (x) { return [x.position, x.replaced_by]; }),
-      "Правила направленные: кого кем можно заменить, не наоборот. " +
-      "Уходят в расчет отдельным листом входного файла.",
-      { startNum: pgs.from }) + pager("sub", pgs);
+      "", { startNum: pgs.from }) + pager("sub", pgs);
   }
 
   var tabsRow =
@@ -2620,10 +3865,22 @@ function renderRegistry() {
 }
 
 /* ── опрос ────────────────────────────────────────────────── */
+var runWas = {};
 function tick() {
   if (!caseId) return Promise.resolve();
   return api("/api/case/" + caseId).then(function (s) {
     state = s;
+    // Расчет закончился удачно — открываем отчет сами: экономист ждет
+    // результат, а не сообщение о нем.
+    var finished = s.runs.some(function (r) {
+      return r.status === "OPTIMAL" && runWas[r.id] === "идет";
+    });
+    runWas = {};
+    s.runs.forEach(function (r) { runWas[r.id] = r.status; });
+    if (finished && !inRegistry && !inAgents) {
+      vrun = null; vrep = null; chosenRun = null;
+      setTimeout(function () { setView("sum"); }, 300);
+    }
     // Перерисовываем только когда что-то изменилось: иначе прыгает прокрутка
     // и слетает набранный текст.
     var sig = JSON.stringify([s.case.stage, s.case.updated, s.messages.length,
@@ -2667,9 +3924,32 @@ $("toggleside").addEventListener("click", function () {
   this.setAttribute("aria-label", this.title);
 });
 
-$("openagents").addEventListener("click", openAgents);
+if ($("openagents")) $("openagents").addEventListener("click", openAgents);
 
 $("openreg").addEventListener("click", openRegistry);
+$("opencurrent").addEventListener("click", openCurrent);
+
+/* Версия расчета: щелчок открывает ее отчет. */
+$("runs").addEventListener("click", function (e) {
+  var v = e.target.closest(".ver");
+  if (!v || e.target.closest("a")) return;
+  var id = +v.getAttribute("data-ver");
+  var r = (state.runs || []).filter(function (x) { return x.id === id; })[0];
+  if (!r || r.status !== "OPTIMAL") return;
+  chosenRun = id; vrun = null; vrep = null;
+  renderRuns();
+  setView("sum");
+});
+
+/* Флажок документа: снят — чат этого плана документ не смотрит. */
+$("docs").addEventListener("change", function (e) {
+  var cb = e.target.closest("input[data-mute]");
+  if (!cb) return;
+  api("/api/case/" + caseId + "/doc/" + cb.getAttribute("data-mute") + "/mute", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ muted: !cb.checked })
+  }).then(tick);
+});
 if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
 
 document.addEventListener("keydown", function (e) {
@@ -2838,11 +4118,13 @@ $("regview").addEventListener("click", function (e) {
   if (!b) return;
   var row = b.closest("tr");
   var name = row ? row.children[1].textContent : "документ";
-  showMenu(b, [{ label: "Удалить документ", danger: true, run: function () {
-    removeDoc(b.getAttribute("data-docmenu"), name, function () {
-      loadRegistry(); tick();
-    });
-  } }]);
+  showMenu(b, [
+    { label: "Открыть", run: function () { openDocument(+b.getAttribute("data-docmenu")); } },
+    { label: "Удалить документ", danger: true, run: function () {
+      removeDoc(b.getAttribute("data-docmenu"), name, function () {
+        loadRegistry(); tick();
+      });
+    } }]);
 });
 
 /* Страницы в разделах плана переключаются так же, как в реестре. */
@@ -2875,9 +4157,11 @@ $("docs").addEventListener("click", function (e) {
   var b = e.target.closest(".more");
   if (!b) return;
   var card = b.closest(".doc"), name = card.querySelector(".nm").textContent;
-  showMenu(b, [{ label: "Удалить документ", danger: true, run: function () {
-    removeDoc(b.getAttribute("data-docmenu"), name, tick);
-  } }]);
+  showMenu(b, [
+    { label: "Открыть", run: function () { openDocument(+b.getAttribute("data-docmenu")); } },
+    { label: "Удалить документ", danger: true, run: function () {
+      removeDoc(b.getAttribute("data-docmenu"), name, tick);
+    } }]);
 });
 
 function removeDoc(id, name, done) {
@@ -2889,7 +4173,7 @@ function removeDoc(id, name, done) {
   });
 }
 
-$("agents").addEventListener("click", function (e) {
+if ($("agents")) $("agents").addEventListener("click", function (e) {
   var el = e.target.closest(".ag");
   if (!el) return;
   var key = el.getAttribute("data-agent");
@@ -2904,6 +4188,15 @@ $("tabs").addEventListener("click", function (e) {
 
 $("newcase").addEventListener("click", newCase);
 
+/* Куда класть файл из чата: в реестр организации (общие данные) или только
+ * в этот план (песочница). Вопрос задается до выбора файла. */
+var uploadScope = null;
+$("attach").addEventListener("click", function () {
+  showMenu($("attach"), [
+    { label: "В реестр организации", run: function () { uploadScope = "реестр"; $("files").click(); } },
+    { label: "Только в этот план", run: function () { uploadScope = "план"; $("files").click(); } },
+  ]);
+});
 $("files").addEventListener("change", function () {
   // Список файлов у поля живой: как только поле очищено, он пуст. Поэтому
   // сначала копия, потом очистка — иначе отправлять оказывалось нечего, и
@@ -2929,6 +4222,10 @@ function sendFiles(list) {
   }
   var fd = new FormData();
   Array.prototype.forEach.call(list, function (f) { fd.append("files", f); });
+  // Из реестра — в реестр организации; из чата — как ответил экономист на
+  // вопрос кнопки «+» (по умолчанию тоже в реестр).
+  fd.append("scope", inRegistry ? "реестр" : (uploadScope || "реестр"));
+  uploadScope = null;
   var box = document.querySelector("#regview .regup");
   if (box) box.classList.add("busy");
   return api("/api/case/" + caseId + "/upload", { method: "POST", body: fd })
@@ -3013,7 +4310,10 @@ $("solve").addEventListener("click", solve);
 
 /* старт: открываем последнее дело или заводим первое */
 loadCases().then(function (rows) {
-  if (rows.length) open(rows[0].id);
+  // Вход в сервис — текущий план сводкой; лента нужна, только когда план
+  // еще не посчитан.
+  if (rows.some(function (c) { return c.run_id; })) openCurrent();
+  else if (rows.length) open(rows[0].id);
   else newCase();
   polling = setInterval(tick, 1500);
 });

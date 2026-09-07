@@ -14,6 +14,7 @@ from fot_planner.fot_schedule import (
     month_inflow_amount,
     monthly_spend_targets,
 )
+from fot_planner.position_reference import normalize_position
 from fot_planner.labor_rules import (
     contract_has_labor_plan,
     employee_can_place_on_contract,
@@ -83,7 +84,9 @@ UNIFORM_SPEND_TOLERANCE_RATIO = 0.01
 # Минимальная длительность блока оклада на одном договоре (между сменами — не меньше N месяцев).
 MIN_SALARY_BLOCK_MONTHS = 3
 DEFICIT_TOTAL_TOLERANCE = 1.0
-LEX_STAGE_TOLERANCE = 0.01
+LABOR_CLOSE_TIEBREAK = 0.01
+LEX_STAGE_TOLERANCE = 1.0   # рубль: стадии считаются в рублях и усл. ед., а нулевую стадию с допуском 0,01 MIP не удерживал
+MIP_REL_GAP = 0.005
 
 
 def _month_inflow(ctx: PlanningContext, contract_id: str, month: int) -> float:
@@ -207,7 +210,14 @@ def _employee_has_active_secret_allowance(
 
 
 def _contract_can_pay_secret_allowance(contract, year: int, month: int) -> bool:
-    if contract.allow_salary and contract_allows_payment_month(
+    """120 идёт с договора оклада, и только если договор её разрешает.
+
+    Графа «120 разрешена» — выключатель экономиста: гостайну с этого источника
+    платить нельзя, значит оклад человека из листа 120 должен сидеть на другом
+    договоре. Раньше графа для договора оклада не проверялась и 120 платилась
+    всегда. Счёт «23…» — исключение: 120 без оклада на нём.
+    """
+    if contract.allow_salary and contract.allow_secret and contract_allows_payment_month(
         contract,
         year,
         month,
@@ -215,13 +225,6 @@ def _contract_can_pay_secret_allowance(contract, year: int, month: int) -> bool:
     ):
         return True
     if _account_starts_with_23(contract) and contract_payment_window_includes_month(
-        contract,
-        year,
-        month,
-        PaymentKind.K120,
-    ):
-        return True
-    if contract.allow_secret and contract_payment_window_includes_month(
         contract,
         year,
         month,
@@ -323,6 +326,12 @@ def _create_solver(time_limit_sec: int):
         solver.config.time_limit = time_limit_sec
     else:
         solver.options["time_limit"] = time_limit_sec
+    # Доказывать оптимальность до последней копейки незачем: стадии
+    # фиксируются с относительным допуском 1e-4, зазор 0,1 % его не превышает.
+    try:
+        solver.highs_options = {"mip_rel_gap": MIP_REL_GAP}
+    except Exception:  # noqa: BLE001
+        pass
     return solver
 
 
@@ -433,6 +442,100 @@ def _expr_model_var_sum(model, attr_name: str):
     return _sum_terms(terms) if terms else None
 
 
+def _taste_goal_terms(
+    model,
+    w,
+    *,
+    employee_contract_keys,
+    scheme_change_keys,
+    salary_change_keys,
+    alloc_keys,
+    uses,
+    uniform_dev_keys,
+    uniform_penalty_params,
+    n_employees: int,
+    total_fot: float,
+) -> list[dict]:
+    """Цели взвешенной стадии: сырое выражение, масштаб, вес, взвешенный член.
+
+    Сырое выражение — в естественных единицах (переводов, рублей), масштаб
+    переводит его в долю: переводы на число людей, рубли на ФОТ. Взвешенный
+    член = вес × сырое / масштаб; из них складывается целевая функция стадии.
+    Те же записи после решения дают метрики для листа «цели».
+    """
+    people = max(1, n_employees)
+    fot = max(1.0, total_fot)
+    out = []
+
+    switch_raw = (
+        _sum_terms(model.salary_change[k] for k in salary_change_keys)
+        if salary_change_keys and hasattr(model, "salary_change") else None
+    )
+    # Считается любая смена набора договоров оклада от месяца к месяцу: и
+    # перевод, и открытие второго договора. Для финансиста это одно и то же
+    # «дёрнули человека», но название должно это говорить.
+    out.append({"code": "switch", "name": "Смены договора оклада (переводы и открытия)",
+                "unit": "шт", "raw": switch_raw, "scale": people,
+                "weight": w.salary_contract_switch})
+
+    admin_raw = _expr_admin_complexity(
+        model,
+        employee_contract_keys=employee_contract_keys,
+        scheme_change_keys=scheme_change_keys,
+        alloc_keys=alloc_keys,
+        uses=uses,
+        admin_weight=1.0,
+    )
+    out.append({"code": "admin", "name": "Административная сложность выплат",
+                "unit": "усл. ед.", "raw": admin_raw, "scale": people,
+                "weight": w.admin_complexity})
+
+    uniform_raw = None
+    if uniform_dev_keys and hasattr(model, "uniform_penalty_pos"):
+        uniform_raw = _sum_terms(
+            model.uniform_penalty_pos[k] + model.uniform_penalty_neg[k]
+            for k in uniform_dev_keys
+        )
+    out.append({"code": "uniform", "name": "Отклонение от равномерного освоения",
+                "unit": "₽", "raw": uniform_raw, "scale": fot,
+                "weight": w.uniform_spend_deviation})
+
+    out.append({"code": "payment_change", "name": "Изменение сумм выплат между месяцами",
+                "unit": "₽", "raw": _expr_model_var_sum(model, "payment_change"),
+                "scale": fot, "weight": w.payment_change})
+
+    for t in out:
+        t["weighted"] = (
+            t["weight"] * t["raw"] / t["scale"]
+            if t["raw"] is not None and t["weight"] and t["weight"] > 0 else None
+        )
+    return out
+
+
+def _goal_metrics(stage_values: dict[str, float], taste: list[dict]) -> list:
+    """Лист «цели»: стадии-правила со значениями и взвешенные цели с вкладом."""
+    from fot_planner.models import GoalMetric
+
+    goals = []
+    rubles = {"сумма приказов"}
+    for no, (label, value) in enumerate(stage_values.items(), start=1):
+        goals.append(GoalMetric(
+            code="stage%d" % no, name=label, value=round(value, 2),
+            unit="₽" if label in rubles else "усл. ед.", priority="стадия %d" % no,
+        ))
+    for t in taste:
+        if t["raw"] is None:
+            continue
+        raw = _value(t["raw"])
+        norm = raw / t["scale"]
+        goals.append(GoalMetric(
+            code=t["code"], name=t["name"], value=round(raw, 2), unit=t["unit"],
+            priority="вес", weight=t["weight"], normalized=round(norm, 6),
+            contribution=round((t["weight"] or 0.0) * norm, 4),
+        ))
+    return goals
+
+
 def _expr_non_anchor_salary_penalty(
     uses, alloc_keys, preferred_anchor_id: str | None, weight: float
 ):
@@ -462,6 +565,10 @@ def _expr_labor_deviations(
     for k in labor_dev_keys:
         if k in labor_soft_indices:
             terms.append(weight * model.labor_dev[k])
+            # Недобор внутри допуска: стоит в сто раз меньше настоящего
+            # отклонения, поэтому только разрешает ничью в пользу полного
+            # закрытия строки и никогда не перевешивает само отклонение.
+            terms.append(weight * LABOR_CLOSE_TIEBREAK * model.labor_gap[k])
     for k in labor_amount_dev_keys:
         if k in labor_soft_indices:
             scale = max(labor_plan_amount.get(k, 0.0), 1.0)
@@ -518,13 +625,32 @@ def _run_minimize_stage(
     if hasattr(model, "lex_stage_obj"):
         model.del_component("lex_stage_obj")
     model.lex_stage_obj = pyo.Objective(expr=expr, sense=pyo.minimize)
-    _, status_name, elapsed = _run_solver(model, time_limit_sec)
-    if status_name not in ("OPTIMAL", "FEASIBLE"):
+    # Фиксации прежних стадий: (ограничение, выражение, значение, допуск).
+    # Если стадия вдруг неразрешима — а модель с теми же ограничениями только
+    # что решалась, — виновата погрешность фиксации; ослабляем последнюю
+    # в десять раз и пробуем ещё раз.
+    fixes = model.__dict__.setdefault("_lex_fixes", [])
+    elapsed = 0.0
+    for attempt in range(3):
+        _, status_name, dt = _run_solver(model, time_limit_sec)
+        elapsed += dt
+        if status_name in ("OPTIMAL", "FEASIBLE"):
+            break
+        if status_name == "INFEASIBLE" and fixes and attempt < 2:
+            con, fexpr, fbest, ftol = fixes[-1]
+            con.deactivate()
+            ftol *= 10
+            fixes[-1] = (model.cons.add(fexpr <= fbest + ftol), fexpr, fbest, ftol)
+            continue
         model.lex_stage_obj.deactivate()
         return status_name, elapsed, None
     best = _value(expr)
     model.lex_stage_obj.deactivate()
-    model.cons.add(expr <= best + tolerance)
+    # Допуск относительный: значения стадий — сотни тысяч рублей, а у MIP
+    # есть собственная погрешность целочисленности. С абсолютным 0,01
+    # следующая стадия иногда получала неразрешимую модель на ровном месте.
+    tol = max(tolerance, abs(best) * 1e-4)
+    fixes.append((model.cons.add(expr <= best + tol), expr, best, tol))
     return status_name, elapsed, best
 
 
@@ -864,6 +990,7 @@ def solve(
             payment_change_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
         )
     model.labor_dev = pyo.Var(labor_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M))
+    model.labor_gap = pyo.Var(labor_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M))
     if labor_amount_dev_keys:
         model.labor_amount_dev = pyo.Var(
             labor_amount_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
@@ -1047,10 +1174,13 @@ def solve(
                 model.cons.add(w == 0)
             if not c.allow_part_time:
                 model.cons.add(q <= MAIN_QUARTERS_MAX * w)
-            if e.employment_type == "main":
-                model.cons.add(q <= MAIN_QUARTERS_MAX * w)
-            elif e.employment_type == "part_time":
-                model.cons.add(w == 0)
+            if e.employment_type == "part_time":
+                # Совместитель тоже занимает основное место: работа по
+                # совместительству — это его трудовой договор здесь, просто
+                # ставка не больше половины. Запрет основного оставлял
+                # человека в плане с одним совместительством и без ставки,
+                # к которой привязан оклад.
+                model.cons.add(q <= PART_QUARTERS_MAX * w + PART_QUARTERS_MAX * (1 - w))
 
             # Бизнес-правило: открытая ставка на договоре подразумевает оклад с этого договора.
             if employee_monthly_payment_due(e) > 0:
@@ -1079,20 +1209,21 @@ def solve(
                 model.cons.add(
                     _sum_terms(open_rate_q[k] for k in keys_em) <= max_q
                 )
-                if has_salary_month and e.employment_type == "part_time":
-                    # Совместительство не уменьшаем ниже входной ставки, но можем
-                    # увеличить его до 0.5 по строке, если это помогает освоить ФОТ.
+                if has_salary_month:
+                    # Основное место — у человека, а не у каждой его строки:
+                    # у второй строки (например, аналитик на 0,25 сверх
+                    # инженера) основного быть не может. Здесь только «не
+                    # больше одного», равенство единице требуется ниже, по
+                    # человеку целиком.
+                    is_main_row = _sum_terms(is_main[k] for k in main_keys)
+                    model.cons.add(is_main_row <= 1)
+                    main_q_expr = _sum_terms(rate_on_main_q[k] for k in keys_em)
+                    # Если строка основная, её основная ставка равна штатной;
+                    # если нет — вся ставка строки идёт совместительством.
+                    model.cons.add(main_q_expr == staff_q_min * is_main_row)
                     model.cons.add(
                         _sum_terms(open_rate_q[k] for k in keys_em) >= staff_q_min
                     )
-                    for k in keys_em:
-                        model.cons.add(is_main[k] == 0)
-                elif has_salary_month:
-                    model.cons.add(_sum_terms(is_main[k] for k in main_keys) == 1)
-                    main_q_expr = _sum_terms(rate_on_main_q[k] for k in keys_em)
-                    # Основная ставка фиксирована исходной ставкой из штатной строки.
-                    # Дополнительные ставки могут появляться только как совместительство.
-                    model.cons.add(main_q_expr == staff_q_min)
                     model.cons.add(
                         _sum_terms(open_rate_q[k] for k in keys_em) - main_q_expr
                         <= PART_QUARTERS_MAX
@@ -1122,7 +1253,18 @@ def solve(
                 )
                 person_main_keys = [k for k in person_keys if k in main_eligible_keys]
                 if person_main_keys:
-                    model.cons.add(_sum_terms(is_main[k] for k in person_main_keys) <= 1)
+                    # Совместительство только поверх основного: если человек в
+                    # этом месяце получает оклад, ровно одна его ставка —
+                    # основное место, остальные идут сверх неё.
+                    needs_main = any(
+                        employee_monthly_payment_due(employee) > 0
+                        and any(k[0] == employee.id for k in person_main_keys)
+                        for employee in person_employees
+                    )
+                    model.cons.add(
+                        _sum_terms(is_main[k] for k in person_main_keys)
+                        == (1 if needs_main else 0)
+                    )
 
         for key in salary_open_q_keys:
             salary_key = (key[0], key[1], key[2], PaymentKind.SALARY)
@@ -1327,6 +1469,108 @@ def solve(
                 if group_terms:
                     model.cons.add(_sum_terms(group_terms) <= max_rate)
 
+    # Число привлекаемых специалистов по строке РКМ: людей, чьи человеко-месяцы
+    # или выплаты отнесены на строку, в каждом месяце не больше, чем задано.
+    # Жёсткое условие: РКМ обосновывает штат, а не только человеко-месяцы.
+    # Считаем именно отнесённых на строку, а не всех подходящих под неё с
+    # окладом на договоре: ведущий инженер, закрывающий свою строку, подходит
+    # и под строку инженеров, но место в ней не занимает.
+    # Человек в месяце закрывает одну строку РКМ. Без этого решатель делил
+    # месяц ведущего инженера между его строкой и строкой инженеров (0,48 и
+    # 0,52), подгоняя среднюю стоимость, — в отчёте экономиста такой строки
+    # быть не может: ставка на договоре стоит на одной должности.
+    # Новые двоичные переменные заводим только там, где у человека на договоре
+    # в месяце больше одной подходящей строки; с одной строкой признаком
+    # «занят на строке» служит уже существующий uses[оклад] — лишние
+    # двоичные переменные заметно замедляли решатель.
+    if labor_pm_keys:
+        rows_by_ecm: dict[tuple[str, str, int], list] = defaultdict(list)
+        for k in labor_pm_keys:
+            rows_by_ecm[(k[0], k[1], k[2])].append(k)
+        multi_keys = [k for k in labor_pm_keys if len(rows_by_ecm[(k[0], k[1], k[2])]) > 1]
+        multi_set = set(multi_keys)
+        if multi_keys:
+            model.labor_on = pyo.Var(multi_keys, domain=pyo.Binary)
+        labor_on: dict = {}
+        for k in labor_pm_keys:
+            if k in multi_set:
+                labor_on[k] = model.labor_on[k]
+                model.cons.add(labor_pm[k] <= TOTAL_RATE_MAX_REGULAR * model.labor_on[k])
+                for kind in LABOR_PAYMENT_KINDS:
+                    pay_key = (k[0], k[1], k[2], kind, k[3])
+                    if pay_key in labor_payment_key_set:
+                        model.cons.add(labor_pay[pay_key] <= BIG_M * model.labor_on[k])
+            else:
+                salary_key = (k[0], k[1], k[2], PaymentKind.SALARY)
+                labor_on[k] = uses[salary_key] if salary_key in alloc_key_set else None
+        for ecm_keys in rows_by_ecm.values():
+            if len(ecm_keys) > 1:
+                model.cons.add(_sum_terms(model.labor_on[k] for k in ecm_keys) <= 1)
+        for lp_idx, lp in enumerate(ctx.labor_plans):
+            if not lp.headcount or lp.year != year:
+                continue
+            for m in months:
+                on = [labor_on[k] for k in labor_pm_keys
+                      if k[3] == lp_idx and k[2] == m and labor_on.get(k) is not None]
+                if on:
+                    model.cons.add(_sum_terms(on) <= lp.headcount)
+
+    # Чужую строку РКМ (по правилам замещения) человек закрывает любой своей
+    # ставкой — основной или открытым совместительством: «либо открыть 0,5
+    # по совместительству, либо закрыть 1,0». Должность и оклад при этом
+    # остаются своими; в выгрузке основное место всегда своей должностью.
+
+    # Одна должность в одном подразделении у человека бывает только один раз.
+    # Инженер на ставку в отделе не откроет там же совместительство инженером:
+    # в своём подразделении вторая ставка идёт по соседней должности из правил
+    # замещения, а инженером — только на договоре другого подразделения.
+    # Договор без подразделения под правило не попадает.
+    if open_rate_keys:
+        for e in ctx.employees:
+            e_dep = (e.department or "").strip().lower()
+            if not e_dep:
+                continue
+            for c in ctx.contracts:
+                c_dep = (getattr(c, "department", "") or "").strip().lower()
+                if not c_dep or c_dep != e_dep:
+                    continue
+                # Под какие строки РКМ этого договора человек вообще подходит
+                # и есть ли среди них чужая должность. Если чужой нет, вторая
+                # ставка здесь была бы второй ставкой по своей же должности в
+                # своём подразделении — такой не бывает. Ограничиваем саму
+                # ставку, а не только закрытие строки: иначе человек открывал
+                # совместительство и просто не закрывал им строку.
+                fit_rows = [
+                    lp_idx for lp_idx in labor_row_indices
+                    if ctx.labor_plans[lp_idx].contract_id == c.id
+                    and employee_compatible_with_labor_row(e, ctx.labor_plans[lp_idx])
+                ]
+                own_only = all(
+                    normalize_position(ctx.labor_plans[lp_idx].position)
+                    == normalize_position(e.position)
+                    for lp_idx in fit_rows
+                )
+                for m in months:
+                    key = (e.id, c.id, m)
+                    if key not in open_rate_key_set:
+                        continue
+                    if own_only:
+                        # Своя должность (или РКМ нет вовсе) — ставка на этом
+                        # договоре возможна только как основное место.
+                        model.cons.add(open_rate_q[key] <= MAIN_QUARTERS_MAX * is_main[key])
+                        continue
+                    # Есть чужая строка: совместительство можно, но закрывать
+                    # им строку своей должности нельзя.
+                    for lp_idx in fit_rows:
+                        pm_key = (e.id, c.id, m, lp_idx)
+                        if pm_key not in labor_pm_key_set:
+                            continue
+                        if (normalize_position(ctx.labor_plans[lp_idx].position)
+                                == normalize_position(e.position)):
+                            model.cons.add(
+                                labor_pm[pm_key] <= TOTAL_RATE_MAX_REGULAR * is_main[key]
+                            )
+
     if employee_contract_keys:
         for e_id, c_id in employee_contract_keys:
             related_uses = [uses[k] for k in alloc_keys if k[0] == e_id and k[1] == c_id]
@@ -1435,6 +1679,7 @@ def solve(
         if pm_expr is not None and lp_idx in labor_dev_keys:
             model.cons.add(model.labor_dev[lp_idx] >= pm_expr - pm_high)
             model.cons.add(model.labor_dev[lp_idx] >= pm_low - pm_expr)
+            model.cons.add(model.labor_gap[lp_idx] >= plan_pm - pm_expr)
         if amount_expr is not None and lp_idx in labor_amount_dev_keys and plan_amount > 0:
             amt_low = (1.0 - tol) * plan_amount
             amt_high = (1.0 + tol) * plan_amount
@@ -1571,38 +1816,49 @@ def solve(
     p4_under_part = _expr_model_var_sum(model, "p4_group_under_limit")
     if p4_under_part is not None:
         soft_stage_exprs.append((p4_under_part, "недобор средней П4"))
+    # Предел П4 не потолок, а норма: месяц с надбавкой 124 режется ровно по
+    # пределу на ставку. Превышение запрещено жёстко, а эта стадия убирает
+    # недобор — вместе они дают в отчёте нулевое отклонение.
     p4_deviation_part = _expr_model_var_sum(model, "p4_employee_limit_deviation")
     if p4_deviation_part is not None:
         soft_stage_exprs.append((p4_deviation_part, "отклонение сотрудников от П4"))
-    admin_part = _expr_admin_complexity(
-        model,
-        employee_contract_keys=employee_contract_keys,
-        scheme_change_keys=scheme_change_keys,
-        alloc_keys=alloc_keys,
-        uses=uses,
-        admin_weight=1.0,
-    )
-    if admin_part is not None and w.admin_complexity:
-        soft_stage_exprs.append((w.admin_complexity * admin_part, "административная сложность"))
-    switch_part = _expr_salary_switch(model, salary_change_keys, w.salary_contract_switch)
-    if switch_part is not None:
-        soft_stage_exprs.append((switch_part, "смена договора оклада"))
-    uniform_part = _expr_uniform_deviation(
-        model, uniform_dev_keys, uniform_penalty_params, w.uniform_spend_deviation
-    )
-    if uniform_part is not None:
-        soft_stage_exprs.append((uniform_part, "равномерное освоение"))
-    payment_change_part = _expr_model_var_sum(model, "payment_change")
-    if payment_change_part is not None:
-        soft_stage_exprs.append((payment_change_part, "стабильность сумм выплат"))
-
-    for expr, stage_label in soft_stage_exprs:
+    # Стадии выше — правила: трудоёмкость, приказы, лимиты. Их порядок задан
+    # здесь и финансистом не обсуждается.
+    stage_values: dict[str, float] = {}
+    for stage_no, (expr, stage_label) in enumerate(soft_stage_exprs, start=1):
         status_name, elapsed, stage_obj = _run_minimize_stage(model, expr, per_stage_limit)
         solve_time += elapsed
         if stage_obj is not None:
             last_objective_value = stage_obj
+            stage_values[stage_label] = stage_obj
         if status_name not in ("OPTIMAL", "FEASIBLE"):
             return _solver_failed(stage_label)
+
+    # Одна взвешенная стадия для «вкусовых» целей — того, на что финансист
+    # даёт претензии. Каждое слагаемое нормировано на свой масштаб, поэтому
+    # веса — чистые приоритеты: значимо только их отношение друг к другу.
+    taste = _taste_goal_terms(
+        model, w,
+        employee_contract_keys=employee_contract_keys,
+        scheme_change_keys=scheme_change_keys,
+        salary_change_keys=salary_change_keys,
+        alloc_keys=alloc_keys,
+        uses=uses,
+        uniform_dev_keys=uniform_dev_keys,
+        uniform_penalty_params=uniform_penalty_params,
+        n_employees=len(ctx.employees),
+        total_fot=sum(c.total_fot for c in ctx.contracts),
+    )
+    weighted = [t["weighted"] for t in taste if t["weighted"] is not None]
+    if weighted:
+        status_name, elapsed, stage_obj = _run_minimize_stage(
+            model, _sum_terms(weighted), per_stage_limit
+        )
+        solve_time += elapsed
+        if stage_obj is not None:
+            last_objective_value = stage_obj
+        if status_name not in ("OPTIMAL", "FEASIBLE"):
+            return _solver_failed("взвешенные цели")
 
     if baseline_dev_keys and w.plan_deviation:
         baseline_expr = _sum_terms(w.plan_deviation * model.baseline_dev[k] for k in baseline_dev_keys)
@@ -1751,6 +2007,7 @@ def solve(
                 not assigned_from_position_rule
                 and labor_pm_keys
                 and hasattr(model, "labor_pm")
+                and not bool(round(_value(is_main[key])))
             ):
                 best_labor_value = 0.0
                 for lp_key in labor_pm_keys:
@@ -1797,6 +2054,7 @@ def solve(
         )
 
     objective_value = last_objective_value if status_name in ("OPTIMAL", "FEASIBLE") else 0.0
+    goals = _goal_metrics(stage_values, taste) if status_name in ("OPTIMAL", "FEASIBLE") else []
     return PlanningResult(
         year=year,
         allocations=allocations,
@@ -1810,6 +2068,7 @@ def solve(
         labor_pm_attributions=labor_pm_attributions,
         labor_payment_attributions=labor_payment_attributions,
         open_rate_attributions=open_rate_attributions,
+        goals=goals,
     )
 
 

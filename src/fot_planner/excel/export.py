@@ -33,6 +33,23 @@ def export_result(path: str | Path, ctx: PlanningContext, result: PlanningResult
         if any(d.amount > 0.005 for d in result.deficits):
             report.deficits.to_excel(writer, sheet_name=SHEET_DEFICITS, index=False)
             report.deficit_by_month.to_excel(writer, sheet_name=SHEET_DEFICIT_MONTH, index=False)
+        if result.goals:
+            # Цели решателя: чем план заплатил за правила и что держали веса.
+            pd.DataFrame([{
+                "цель": g.name, "значение": g.value, "единица": g.unit,
+                "приоритет": g.priority, "вес": g.weight,
+                "нормировано": g.normalized, "вклад": g.contribution,
+            } for g in result.goals]).to_excel(writer, sheet_name="цели", index=False)
+        if result.open_rate_attributions:
+            # Открытые ставки с признаком основного места — как их видит
+            # решатель. Отчёт раньше восстанавливал признак по наибольшей
+            # ставке и при двух равных ставках мог подписать не ту.
+            pd.DataFrame([{
+                "код строки": a.employee_id, "договор": a.contract_id, "месяц": a.month,
+                "ставка": a.open_rate, "основное": "да" if a.is_main else "нет",
+                "должность": a.position or "",
+            } for a in result.open_rate_attributions]).to_excel(
+                writer, sheet_name="открытые_ставки", index=False)
 
     format_user_workbook(path)
     write_labor_control_sheet(path, ctx, result)

@@ -32,6 +32,15 @@
        «это запись». -->
   <aside class="cases">
     <nav class="nav">
+      <!-- Точка входа: последний посчитанный план сразу сводкой, без ленты. -->
+      <button type="button" class="navi" id="opencurrent">
+        <span class="ic" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 13.5h11M4 11V7.5M7.3 11V4.5M10.6 11V6.2M13 11V3"/>
+          </svg>
+        </span>
+        Текущий план
+      </button>
       <button type="button" class="navi" id="openreg">
         <span class="ic" aria-hidden="true">
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
@@ -40,16 +49,6 @@
           </svg>
         </span>
         Реестр организации
-      </button>
-      <button type="button" class="navi" id="openagents">
-        <span class="ic" aria-hidden="true">
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
-               stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="5.5" width="10" height="7.5" rx="1.6"/>
-            <path d="M8 3v2.5M5.8 9h.01M10.2 9h.01"/>
-          </svg>
-        </span>
-        Ход работы
       </button>
     </nav>
 
@@ -76,10 +75,7 @@
          посмотреть данные, которые агенты собрали, и результат расчета. -->
     <nav class="tabs" id="tabs">
       <button type="button" class="tab on" data-view="feed">Лента</button>
-      <button type="button" class="tab" data-view="sum">Сводка года</button>
-      <button type="button" class="tab" data-view="plan">План выплат</button>
-      <button type="button" class="tab" data-view="cash">Освоение</button>
-      <button type="button" class="tab" data-view="lim">Ограничения</button>
+      <button type="button" class="tab" data-view="sum">План ФОТ</button>
     </nav>
 
     <div class="feed" id="feed"></div>
@@ -91,32 +87,30 @@
 
 
     <form class="composer" id="composer">
-      <label class="attach" title="Загрузить документы">
-        <input type="file" id="files" multiple accept=".xlsx,.xlsm,.xls,.pdf,.doc,.docx" hidden>
+      <!-- Кнопка спрашивает, куда класть файл: в реестр организации или
+           только в этот план. Само поле выбора файла открывается после ответа. -->
+      <button type="button" class="attach" id="attach" title="Загрузить документы">
         <span>+</span>
-      </label>
+      </button>
+      <input type="file" id="files" multiple accept=".xlsx,.xlsm,.xls,.pdf,.doc,.docx" hidden>
       <input type="text" id="text" placeholder="Ответьте агенту или напишите, что поправить"
              autocomplete="off">
       <button type="submit" id="send">Отправить</button>
     </form>
   </main>
 
-  <!-- кто сейчас работает -->
+  <!-- Контекст плана: версии расчета и документы. Агенты живут в ленте
+       как авторы реплик, отдельной панели им не нужно. -->
   <aside class="side">
     <section>
-      <h3>Агенты</h3>
-      <div id="agents" class="agents"></div>
+      <h3>Версии</h3>
+      <div id="runs" class="vers"></div>
     </section>
 
     <section>
       <h3>Документы</h3>
       <div id="docs" class="docs"></div>
       <button type="button" class="ghost" id="toreg">Весь реестр организации</button>
-    </section>
-
-    <section>
-      <h3>Расчет</h3>
-      <div id="runs" class="runs"></div>
     </section>
   </aside>
 

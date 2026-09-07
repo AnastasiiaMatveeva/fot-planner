@@ -62,6 +62,12 @@ class Case(Base):
     # Собранные из документов данные договоров, JSON. Лежат в деле, а не в
     # памяти процесса: экономист уходит и возвращается через день.
     passport: Mapped[str | None] = mapped_column(Text, default=None)
+    # Документы, которые чат этого плана не смотрит: снятые флажки, JSON-список id.
+    muted_docs: Mapped[str | None] = mapped_column(Text, default=None)
+    # Переменные проектирования, которые экономист задал сам: закрепления
+    # (ручные назначения), запреты и настройки расчёта. JSON, живёт с планом
+    # и уходит в каждый расчёт, пока экономист не снимет.
+    plan_settings: Mapped[str | None] = mapped_column(Text, default=None)
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="case",
                                                        cascade="all, delete-orphan")
@@ -146,6 +152,9 @@ class Contract(Base):
     # договор со счетом на «23» платит 120 без оклада на этом же договоре —
     # правило в модели есть, а данных для него не было.
     account: Mapped[str | None] = mapped_column(String(60), default=None)
+    # Подразделение договора: вторая ставка по той же должности открывается
+    # только на договоре другого подразделения.
+    department: Mapped[str | None] = mapped_column(String(200), default=None)
     priority: Mapped[str | None] = mapped_column(String(60), default=None)
     allow_main: Mapped[str | None] = mapped_column(String(10), default=None)
     allow_part_time: Mapped[str | None] = mapped_column(String(10), default=None)
@@ -217,6 +226,10 @@ class Document(Base):
     # истории. Цепочка версий — по supersedes_id.
     version: Mapped[int] = mapped_column(Integer, default=1)
     supersedes_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    # «реестр» — общий документ организации, строки идут в реестр;
+    # «план» — песочница этого плана: чат его видит, разбор дает только
+    # предложения, в реестр ничего не пишется.
+    scope: Mapped[str] = mapped_column(String(20), default="реестр")
     # Отпечаток содержимого (SHA-256). Строка реестра ссылается на документ;
     # отпечаток дает проверить, что документ с тех пор не подменяли, и
     # отличить исправленную редакцию от того же файла, загруженного дважды.
@@ -334,6 +347,8 @@ class LaborRow(Base):
     position_level: Mapped[int | None] = mapped_column(Integer, default=None)
     person_months: Mapped[float | None] = mapped_column(Float, default=None)
     avg_cost: Mapped[float | None] = mapped_column(Float, default=None)
+    # Число привлекаемых специалистов из РКМ — предел людей на строке в месяц.
+    headcount: Mapped[float | None] = mapped_column(Float, default=None)
     source: Mapped[str | None] = mapped_column(String(300), default=None)
     document_id: Mapped[int | None] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), default=None)
@@ -462,10 +477,13 @@ _ADDED_COLUMNS = {
     # Переписка по документу живет в тех же сообщениях, что и лента плана,
     # только с ссылкой на документ вместо плана.
     "messages": [("document_id", "INTEGER")],
+    "cases": [("muted_docs", "TEXT"), ("plan_settings", "TEXT")],
     "documents": [("version", "INTEGER"), ("supersedes_id", "INTEGER"),
+                  ("scope", "VARCHAR(20)"),
                   ("sha256", "VARCHAR(64)")],
     "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
     "runs": [("sources", "TEXT")],
+    "labor_rows": [("headcount", "FLOAT")],
     "verdicts": [("grade", "VARCHAR(20)")],
     "employees": [
         ("department", "VARCHAR(200)"),
@@ -476,6 +494,7 @@ _ADDED_COLUMNS = {
     ],
     "contracts": [
         ("account", "VARCHAR(60)"),
+        ("department", "VARCHAR(200)"),
         ("priority", "VARCHAR(60)"),
         ("allow_main", "VARCHAR(10)"),
         ("allow_part_time", "VARCHAR(10)"),

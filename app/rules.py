@@ -179,6 +179,34 @@ def _read_result(path):
             "month": month, "contract": str(row.get("договор") or ""),
             "kind": _kind_of(row.get("вид выплаты")), "amount": amount,
         })
+    # Дефицит выплат: если экономист разрешил дефицит, решатель пишет, кому и
+    # сколько недоплачено; отчёт должен это показать, а не спрятать.
+    if "Дефициты" in wb.sheetnames:
+        out["deficits"] = []
+        for row in _rows_of(wb["Дефициты"]):
+            code = row.get("код строки")
+            month = RU_MONTH.get(str(row.get("месяц") or "").strip()) or _num(row.get("месяц"))
+            if not code or not month:
+                continue
+            out["deficits"].append({
+                "emp": str(code), "fio": row.get("ФИО") or str(code), "month": int(month),
+                "due": _num(row.get("требовалось выплатить")) or 0.0,
+                "paid": _num(row.get("выплачено")) or 0.0,
+                "gap": _num(row.get("дефицит")) or 0.0,
+                "why": row.get("причина") or "",
+            })
+    # Открытые ставки решателя: ставка и признак основного места по месяцам.
+    if "открытые_ставки" in wb.sheetnames:
+        out["rates"] = []
+        for row in _rows_of(wb["открытые_ставки"]):
+            code, month = row.get("код строки"), _num(row.get("месяц"))
+            if not code or not month:
+                continue
+            out["rates"].append({
+                "emp": str(code), "contract": str(row.get("договор") or ""),
+                "month": int(month), "rate": _num(row.get("ставка")) or 0.0,
+                "main": _yes(row.get("основное")),
+            })
     if "Контроль трудоёмкости" in wb.sheetnames:
         ws = wb["Контроль трудоёмкости"]
         current, in_rules = None, False
@@ -192,6 +220,20 @@ def _read_result(path):
                 continue
             if text == "Показатель" or not text:
                 in_rules = False
+                continue
+            # Разбивка решателя: кто и сколько закрыл по каждой строке.
+            if text == "Договор" and str(ws.cell(r, 4).value or "").strip() == "Сотрудник":
+                in_rules = False
+                continue
+            ind = str(ws.cell(r, 6).value or "").strip()
+            if ind in ("Закрыто чел.-мес.", "Всего денег на строку"):
+                vals = [_num(ws.cell(r, 7 + i).value) or 0.0 for i in range(12)]
+                out.setdefault("labor_people", []).append({
+                    "contract": text, "row": str(ws.cell(r, 2).value or "").strip(),
+                    "fio": str(ws.cell(r, 4).value or "").strip(),
+                    "position": str(ws.cell(r, 5).value or "").strip(),
+                    "kind": "pm" if ind.startswith("Закрыто") else "pay", "months": vals,
+                })
                 continue
             if in_rules:
                 out["labor_control"].append({
@@ -505,19 +547,19 @@ def check(input_path, result_path):
         contract = ctr.get(c)
         if not contract or not contract["goz"]:
             continue
-        beps, staff, rates = [], 0.0, 0.0
+        cap, staff, rates = 0.0, 0.0, 0.0
         for (code,), er in _by(rr, "emp").items():
             b = (lim.get(norm(er[0]["position"])) or {}).get("БЭП")
-            if b:
-                beps.append(b)
             r = rate_of(er)
+            if b and r:
+                cap += b * r
             if r:
                 rates += r
             staff += _sum(er, {"оклад", "122"})
-        if not beps or not rates:
+        if not cap or not rates:
             continue
         rows.append({"объект": "%s, %s" % (c, SHORT[m - 1]),
-                     "факт": staff / rates, "предел": min(beps)})
+                     "факт": staff / rates, "предел": cap / rates})
         series.setdefault(c, [None] * 12)[m - 1] = round(staff / rates, 2)
     bep = _limit_rule(
         "БЭП: средняя зарплата по ГОЗ-договору в пределах базовой",

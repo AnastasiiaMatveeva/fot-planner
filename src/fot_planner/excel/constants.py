@@ -44,6 +44,7 @@ CONTRACT_COLUMN_ALIASES: dict[str, str] = {
     "номер": "number",
     "тип договора": "contract_type",
     "счет": "account",
+    "подразделение": "department",
     "гоз": "is_goz_defense_order",
     "дата начала": "start_date",
     "дата окончания": "end_date",
@@ -55,6 +56,10 @@ CONTRACT_COLUMN_ALIASES: dict[str, str] = {
     "152 разрешена": "allow_extra_work",
     "стимулирующая приказом разрешена": "allow_order_incentive",
     "проект приоритет": "priority_payment_mode",
+    # Так графа называется в шаблоне сервиса и в файлах экономистов. Без
+    # этого имени «Приоритет: да» до решателя не доходил, и правила
+    # приоритета не включались.
+    "приоритет": "priority_payment_mode",
     "основное место разрешено": "allow_main_employment",
     "совместительство разрешено": "allow_part_time",
     "конечная дата выплат оклада": "salary_payment_deadline",
@@ -107,6 +112,9 @@ CONTRACT_LABOR_COLUMN_ALIASES: dict[str, str] = {
     "средняя зарплата": "avg_monthly_labor_cost",
     "стоимость 1 чел-мес": "avg_monthly_labor_cost",
     "стоимость чел мес": "avg_monthly_labor_cost",
+    "количество человек": "headcount",
+    "кол-во человек": "headcount",
+    "количество привлекаемых специалистов": "headcount",
 }
 
 MANUAL_RULE_COLUMN_ALIASES: dict[str, str] = {
@@ -166,6 +174,7 @@ SETTINGS_COLUMN_ALIASES: dict[str, str] = {
     "штраф использования приказа": "weight_order_incentive_use",
     "допуск трудоемкости": "goz_labor_tolerance",
     "штраф отклонения трудоемкости": "weight_labor_deviation",
+    "штраф нестабильности сумм выплат": "weight_payment_change",
 }
 
 COLUMN_ALIASES_BY_SHEET: dict[str, dict[str, str]] = {

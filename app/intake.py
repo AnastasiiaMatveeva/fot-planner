@@ -238,6 +238,9 @@ def _store_passport(db, case, passport, doc):
     for e in passport.get("employees") or []:
         db.add(Employee(code=str(e.get("code") or ""),
                         fio=e.get("fio"), position=e.get("pos"),
+                        department=e.get("department"),
+                        employment_type=e.get("employment_type"),
+                        employment_category=e.get("employment_category"),
                         rate=e.get("rate"), salary=e.get("sal"),
                         date_from=_excel_date(e.get("from")),
                         date_to=_excel_date(e.get("to")),
@@ -246,14 +249,42 @@ def _store_passport(db, case, passport, doc):
         kinds = c.get("kinds")
         db.add(Contract(code=str(c.get("code") or ""),
                         name=c.get("name"), number=c.get("num"), kind=c.get("type"),
+                        account=c.get("account"), department=c.get("department"),
                         goz=c.get("goz"), fund=c.get("fot"),
                         kinds=", ".join(kinds) if isinstance(kinds, list) else kinds,
+                        priority=c.get("priority"), allow_main=c.get("allow_main"),
+                        allow_part_time=c.get("allow_part_time"),
+                        salary_deadline=_excel_date(c.get("salary_deadline")),
+                        allowance_deadline=_excel_date(c.get("allowance_deadline")),
                         date_from=_excel_date(c.get("from")),
                         date_to=_excel_date(c.get("to")),
                         source=doc.name, document_id=doc.id))
+    inflows = 0
+    year = _num(passport.get("settings", {}).get("год")) if passport.get("settings") else None
+    for code, months in (passport.get("inflow") or {}).items():
+        for m, amount in enumerate(months or [], start=1):
+            if amount:
+                db.add(Inflow(contract_code=str(code), year=int(year) if year else None,
+                              month=m, amount=float(amount),
+                              source=doc.name, document_id=doc.id))
+                inflows += 1
+    # Трудоёмкость из форм: Ф9 и «Расшифровка ФОТ» дают строки по должностям.
+    for lp in passport.get("labor") or []:
+        if not lp.get("person_months"):
+            continue
+        db.add(LaborRow(contract_code=str(lp.get("contract") or ""),
+                        year=int(lp["year"]) if lp.get("year") else (int(year) if year else None),
+                        position=lp.get("position") or None,
+                        person_months=lp.get("person_months"),
+                        avg_cost=lp.get("avg_cost"), headcount=lp.get("headcount"),
+                        source=doc.name, document_id=doc.id))
     db.commit()
-    return {"сотрудников": len(passport.get("employees") or []),
-            "договоров": len(passport.get("contracts") or [])}
+    counts = {"сотрудников": len(passport.get("employees") or []),
+              "договоров": len(passport.get("contracts") or []),
+              "поступлений": inflows,
+              "строк трудоемкости": len([x for x in passport.get("labor") or []
+                                         if x.get("person_months")])}
+    return {k: v for k, v in counts.items() if v}
 
 
 def _solver_context(path):
@@ -299,6 +330,7 @@ def _store_context(db, ctx, doc):
         kinds = [name for flag, name in _KIND_FLAGS if getattr(c, flag)]
         db.add(Contract(code=c.id, name=c.name or None, number=c.number or None,
                         kind=c.contract_type or None, account=c.account or None,
+                        department=c.department or None,
                         goz=yn(c.is_goz_defense_order), fund=c.total_fot,
                         kinds=", ".join(kinds), priority=yn(c.priority_payment_mode),
                         allow_main=yn(c.allow_main_employment),
@@ -324,6 +356,7 @@ def _store_context(db, ctx, doc):
                                         if isinstance(lp.position_level, int) else None),
                         person_months=lp.person_months,
                         avg_cost=lp.avg_monthly_labor_cost,
+                        headcount=getattr(lp, "headcount", None),
                         source=doc.name, document_id=doc.id))
     counts["строк трудоемкости"] = len(ctx.labor_plans or [])
     for s in ctx.secret_allowances or []:
@@ -727,7 +760,18 @@ def run_intake(db, case, doc):
                          "готово к расчету": bool((out.get("ready") or {}).get("ok"))}
         db.commit()
 
-    ready = out.get("ready") or {}
+    # Готовность считается по реестру организации, а не по одному документу:
+    # штатка и договоры приходят разными файлами, и после каждого сервис
+    # раньше жаловался, что «не хватает сотрудников».
+    missing = []
+    if not db.query(Employee).count():
+        missing.append("сотрудники")
+    if not db.query(Contract).count():
+        missing.append("договоры")
+    if not db.query(Inflow).count():
+        missing.append("поступления по месяцам")
+    ready = {"ok": not missing, "missing": missing,
+             "hint": "Загрузите документ с этими данными." if missing else ""}
     say(db, case.id,
         "Разобрал «%s»: %s.%s" % (doc.name, doc.summary or "строк реестра нет",
                                   (" Настройки расчета — из этого файла."
@@ -743,9 +787,13 @@ def run_intake(db, case, doc):
     db.commit()
 
     if ready.get("ok"):
+        # Предложение считать — один раз, когда данных стало достаточно; после
+        # каждого следующего документа оно повторялось в ленте.
+        was_ready = case.stage in ("готово к расчету", "посчитано")
         case.stage = "готово к расчету"
-        say(db, case.id, "Данных достаточно для расчета. Могу считать.",
-            agent="intake", payload={"kind": "offer_solve"})
+        if not was_ready:
+            say(db, case.id, "Данных достаточно для расчета. Могу считать.",
+                agent="intake", payload={"kind": "offer_solve"})
     else:
         missing = ", ".join(ready.get("missing") or []) or "часть показателей"
         say(db, case.id, "Для расчета не хватает: %s. %s" % (missing, ready.get("hint") or ""),

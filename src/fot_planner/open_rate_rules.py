@@ -91,9 +91,10 @@ def row_max_total_quarters(
     position: str | None,
 ) -> int:
     """Максимальная суммарная открытая ставка по строке сотрудника."""
-    if employment_type == "main":
-        max_q = MAIN_QUARTERS_MAX
-    elif employment_type == "part_time":
+    # «Основное» в штатке говорит, что эта строка — основное место, а не что
+    # совместительства сверх неё быть не может: инженер на ставку может взять
+    # 0,5 в другом отделе. Предел суммарной ставки — по категории.
+    if employment_type == "part_time":
         max_q = PART_QUARTERS_MAX
     else:
         max_q = max_total_quarters(category)

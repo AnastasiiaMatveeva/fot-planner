@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import llm
 from agents import AGENTS
@@ -21,7 +22,26 @@ from agents import AGENTS
 #: Что агент умеет сделать по итогам разговора. Список закрытый: модель
 #: выбирает из него, а выполняет сервис.
 ACTIONS = ("ничего", "переразобрать документ", "запустить расчет",
-           "ответить на вопрос агента", "заполнить поле")
+           "ответить на вопрос агента", "заполнить поле", "претензия к плану",
+           "исключить документ", "вернуть документ")
+
+#: Цели взвешенной стадии решателя: слово претензии → графа листа «настройки».
+#: Веса нормированы, значимо только их отношение, поэтому претензия меняет
+#: вес во столько-то раз, а не на столько-то.
+GOALS = {
+    "переводы": "штраф смены договора оклада",
+    "административная сложность": "штраф административной сложности выплат",
+    "равномерность": "штраф отклонения от равномерного освоения",
+    "стабильность сумм": "штраф нестабильности сумм выплат",
+}
+#: Цели, названные плохим явлением: «меньше» значит поднять вес.
+GOALS_BAD = {"переводы", "административная сложность"}
+GOAL_DEFAULTS = {
+    "штраф смены договора оклада": 500_000,
+    "штраф административной сложности выплат": 50_000,
+    "штраф отклонения от равномерного освоения": 10_000,
+    "штраф нестабильности сумм выплат": 10_000,
+}
 
 #: Что экономист может продиктовать в чате. Список закрытый и по одной
 #: причине: модель называет поле словами, а писать в базу по слову от модели
@@ -94,6 +114,44 @@ SYSTEM = """Ты — агент сервиса планирования фонд
 - перевод оклада на другой договор и смена набора надбавок штрафуются: сервис
   старается не дергать схему без нужды.
 
+Документы делятся на реестр организации и песочницу этого плана; у каждого
+есть флажок — снятый документ ты не учитываешь. Если экономист просит не
+смотреть на документ («не бери прошлогоднюю штатку»), выбери действие
+«исключить документ» и назови его имя в document; «верни», «снова учитывай»
+— действие «вернуть документ».
+
+Претензия к готовому плану — это не правка данных, а сдвиг приоритетов
+решателя. Если экономист говорит про сам план — «слишком много переводов»,
+«всё потрачено в первые месяцы», «зачем столько связок с договорами»,
+«суммы скачут от месяца к месяцу», — выбери действие «претензия к плану» и
+опиши в claims, чего экономист хочет в плане меньше или больше и во сколько
+раз это важнее прежнего (обычно 2). direction — про само явление, не про вес:
+«слишком много переводов» — goal «переводы», direction «меньше»; «освоение
+рваное» — goal «равномерность», direction «больше». Цели: «переводы» — смена
+договора оклада; «административная сложность» — связки сотрудник–договор,
+смены схемы, дробления; «равномерность» — освоение денег договора по
+месяцам; «стабильность сумм» — одинаковые суммы одной выплаты из месяца в
+месяц. В reply назови перевод претензии одной фразой: чего меньше или больше
+и во сколько раз. Претензия, упирающаяся в правило (зарплата целиком, срок договора, П2556),
+весом не лечится — назови правило.
+
+Экономист может сам задать переменные решателя — закрепить или запретить:
+«оставь Петрова на гранте с июня по декабрь», «Иванову с ГОЗ только оклад»,
+«Сидорову на C_BASE не сажать», «сними закрепление Петрова». Это не вес и
+не правка данных: перечисли такие указания в fixes. mode «назначить» —
+человек на договоре в эти месяцы получает этот вид выплаты (если вид не
+назван — оклад, то есть его ставка там); «запретить» — не получает;
+«снять» — убрать прежнее закрепление или запрет. Месяцы — числами 1–12; если
+экономист их не назвал, оставь null — сервис сам спросит, на какие месяцы.
+amount — фиксированная сумма в месяц, только если названа. Должность и
+размер ставки через закрепление не задаются, они из штатного расписания —
+если экономист их называет, скажи это в reply.
+
+Настройки расчёта тоже меняются словами: «допуск трудоёмкости 10 %»,
+«разреши дефицит», «не больше трёх договоров оклада в год». Перечисли их в
+settings: name — одно из «допуск трудоёмкости» (доля, 0,1 для 10 %),
+«разрешить дефицит» (да/нет), «макс договоров оклада в год» (число).
+
 Форма бывает не по шаблону, и тогда часть величин из нее не извлеклась. Если
 экономист сам называет величину — «договор 1234 ГОЗ», «по 0421 фонд 3 млн»,
 «у Петрова оклад 90 000», — выбери действие «заполнить поле» и перечисли
@@ -121,7 +179,18 @@ SHAPE = """Ответь одним объектом JSON:
  "edits": [{"entity": "договор | сотрудник",
             "key": "шифр договора или табельный номер",
             "field": "название поля из списка выше",
-            "value": "значение словами или числом"}]}"""
+            "value": "значение словами или числом"}],
+ "claims": [{"goal": "переводы | административная сложность | равномерность | стабильность сумм",
+             "direction": "меньше | больше — чего экономист хочет в плане: меньше переводов, больше равномерности",
+             "factor": 2}],
+ "fixes": [{"employee": "ФИО или табельный номер, как назвал экономист",
+            "contract": "шифр или название договора",
+            "month_from": 6, "month_to": 12,
+            "kind": "оклад | 120 | 122 | 124 | 152 | приказ | null",
+            "amount": null,
+            "mode": "назначить | запретить | снять"}],
+ "settings": [{"name": "допуск трудоёмкости | разрешить дефицит | макс договоров оклада в год",
+               "value": "значение"}]}"""
 
 SCHEMA = {
     "type": "object",
@@ -142,6 +211,49 @@ SCHEMA = {
                     "value": {"type": "string"},
                 },
                 "required": ["entity", "key", "field", "value"],
+                "additionalProperties": False,
+            },
+        },
+        "claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "goal": {"type": "string", "enum": list(GOALS)},
+                    "direction": {"type": "string", "enum": ["меньше", "больше"]},
+                    "factor": {"type": "number"},
+                },
+                "required": ["goal", "direction", "factor"],
+                "additionalProperties": False,
+            },
+        },
+        "fixes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "employee": {"type": "string"},
+                    "contract": {"type": ["string", "null"]},
+                    "month_from": {"type": ["integer", "null"]},
+                    "month_to": {"type": ["integer", "null"]},
+                    "kind": {"type": ["string", "null"]},
+                    "amount": {"type": ["number", "null"]},
+                    "mode": {"type": "string", "enum": ["назначить", "запретить", "снять"]},
+                },
+                "required": ["employee", "mode"],
+                "additionalProperties": False,
+            },
+        },
+        "settings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "enum": ["допуск трудоёмкости", "разрешить дефицит",
+                                                        "макс договоров оклада в год"]},
+                    "value": {"type": ["string", "number", "boolean"]},
+                },
+                "required": ["name", "value"],
                 "additionalProperties": False,
             },
         },
@@ -313,14 +425,32 @@ def context(db, case):
     # не по тому, что пришло именно в этот план. Замененные версии молчат.
     docs = (db.query(Document).filter(Document.state != "заменен")
             .order_by(Document.id).all())
-    if docs:
-        lines.append("Загруженные документы:")
-        for d in docs[:12]:
-            lines.append("- «%s»: %s%s%s" % (
-                d.name, d.state,
-                ", вид: %s" % d.kind if d.kind else "",
-                ", %s" % d.summary if d.summary else ""))
-    else:
+    # Снятые флажки: документ есть, но этот план его не смотрит.
+    try:
+        muted = set(json.loads(case.muted_docs) if case.muted_docs else [])
+    except (TypeError, ValueError):
+        muted = set()
+    # Весь реестр организации, а не только документы этого плана: договор
+    # на три года и штатка лежат один раз и служат всем планам. Песочница —
+    # только документы этого плана.
+    reg = [d for d in docs if d.scope != "план" and d.id not in muted]
+    box = [d for d in docs if d.scope == "план" and d.case_id == case.id and d.id not in muted]
+    off = [d for d in docs if d.id in muted and (d.scope != "план" or d.case_id == case.id)]
+
+    def _doc_line(d):
+        return "- «%s»: %s%s%s" % (d.name, d.state,
+                                   ", вид: %s" % d.kind if d.kind else "",
+                                   ", %s" % d.summary if d.summary else "")
+    if reg:
+        lines.append("Документы реестра организации:")
+        lines += [_doc_line(d) for d in reg[:40]]
+    if box:
+        lines.append("Документы в этом плане (песочница, в реестр не идут):")
+        lines += [_doc_line(d) for d in box[:20]]
+    if off:
+        lines.append("Исключены из рассмотрения по просьбе экономиста: " +
+                     ", ".join("«%s»" % d.name for d in off[:20]) + ".")
+    if not reg and not box:
         lines.append("Документов пока нет.")
 
     # Реестр общий для организации: договор живет несколько лет, штатка
@@ -465,7 +595,10 @@ def reply(db, case, text):
             "document": raw.get("document") or None,
             "as_kind": raw.get("as_kind") or None,
             "answer": raw.get("answer") or None,
-            "edits": edits if isinstance(edits, list) else []}
+            "edits": edits if isinstance(edits, list) else [],
+            "claims": raw.get("claims") if isinstance(raw.get("claims"), list) else [],
+            "fixes": raw.get("fixes") if isinstance(raw.get("fixes"), list) else [],
+            "settings": raw.get("settings") if isinstance(raw.get("settings"), list) else []}
 
 
 def _ask_anthropic(user, model, system=None):
@@ -586,6 +719,222 @@ def _shown(v):
     if isinstance(v, float):
         return ("%.2f" % v).rstrip("0").rstrip(".").replace(".", ",")
     return str(v)
+
+
+def claim_settings(base, claims, text):
+    """Претензия → новые настройки расчета. Возвращает (настройки, строки эха).
+
+    Вес цели умножается или делится на множитель претензии: веса нормированы,
+    значимо только их отношение, поэтому «вдвое важнее» — это ×2, а не +N.
+    Сама претензия записывается в настройки прогона: план должен помнить,
+    по каким претензиям он такой.
+    """
+    out = dict(base or {})
+    history = list(out.get("претензии") or [])
+    lines = []
+    for c in claims or []:
+        goal = (c.get("goal") or "").strip()
+        column = GOALS.get(goal)
+        if column is None:
+            lines.append("Цели «%s» у решателя нет." % goal)
+            continue
+        try:
+            factor = float(c.get("factor") or 2)
+        except (TypeError, ValueError):
+            factor = 2.0
+        factor = max(1.01, min(factor, 100.0))
+        was = out.get(column, GOAL_DEFAULTS[column])
+        try:
+            was = float(was)
+        except (TypeError, ValueError):
+            was = float(GOAL_DEFAULTS[column])
+        # Претензия говорит о явлении, а не о весе: «меньше переводов» —
+        # вес цели растёт; «меньше равномерности» — падает. Цель названа
+        # либо плохим («переводы»), либо хорошим («равномерность»).
+        want_less = (c.get("direction") or "меньше") == "меньше"
+        up = want_less if goal in GOALS_BAD else not want_less
+        new = was * factor if up else was / factor
+        out[column] = round(new, 2)
+        history.append({"текст": text, "цель": goal,
+                        "направление": "меньше" if want_less else "больше",
+                        "множитель": factor, "вес": out[column]})
+        lines.append("%s «%s» — вес цели %s ×%s: %s → %s."
+                     % ("Меньше" if want_less else "Больше", goal,
+                        "вверх" if up else "вниз", _shown(factor),
+                        _shown(was), _shown(new)))
+    out["претензии"] = history
+    return out, lines
+
+
+KINDS = ("оклад", "120", "122", "124", "152", "приказ")
+SETTING_NAMES = ("допуск трудоёмкости", "разрешить дефицит", "макс договоров оклада в год")
+
+
+def plan_settings(case):
+    """Переменные, заданные экономистом: закрепления, запреты, настройки."""
+    try:
+        d = json.loads(case.plan_settings) if case.plan_settings else {}
+    except (TypeError, ValueError):
+        d = {}
+    d.setdefault("назначения", [])
+    d.setdefault("запреты", [])
+    d.setdefault("настройки", {})
+    return d
+
+
+MON_SHORT = ("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+
+
+_MONTH_STEMS = ("янв", "фев", "мар", "апр", "ма", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+
+
+def parse_months(text):
+    """«с июня по декабрь», «июнь–декабрь», «в марте» → (6, 12), (3, 3); иначе None."""
+    t = (text or "").lower().replace("ё", "е")
+    found = []
+    for m in re.finditer(r"[а-я]+", t):
+        w = m.group(0)
+        for i, stem in enumerate(_MONTH_STEMS):
+            if w.startswith(stem) and (stem != "ма" or w.startswith(("мая", "май", "мае"))):
+                found.append(i + 1)
+                break
+    if not found:
+        return None
+    return (found[0], found[-1]) if len(found) > 1 else (found[0], found[0])
+
+
+def parse_settings(text):
+    """Настройки словами: «допуск трудоёмкости 10 %», «разреши дефицит»,
+    «не больше трёх договоров оклада». Возвращает список как от модели."""
+    t = (text or "").lower().replace("ё", "е")
+    out = []
+    m = re.search(r"допуск[а-я ]*?(\d+(?:[.,]\d+)?)\s*%?", t)
+    if m and "трудо" in t:
+        out.append({"name": "допуск трудоёмкости", "value": m.group(1).replace(",", ".")})
+    if "дефицит" in t:
+        out.append({"name": "разрешить дефицит",
+                    "value": "нет" if re.search(r"запрет|не разреш|нельзя|без дефицит", t) else "да"})
+    m = re.search(r"(\d+|одн|дв|тр|четыр|пят)[а-я]*\s+договор[а-я]*\s+оклад", t)
+    if m:
+        words = {"одн": 1, "дв": 2, "тр": 3, "четыр": 4, "пят": 5}
+        v = m.group(1)
+        out.append({"name": "макс договоров оклада в год", "value": words.get(v, v)})
+    return out
+
+
+def _months_text(a, b):
+    return MON_SHORT[a - 1] if a == b else "%s–%s" % (MON_SHORT[a - 1], MON_SHORT[b - 1])
+
+
+def apply_fixes(db, case, fixes, text=""):
+    """Закрепить, запретить или снять. Возвращает (строки эха, вопросы).
+
+    Закрепление — это переменная решателя, зафиксированная рукой экономиста:
+    человек на договоре в эти месяцы с этим видом выплаты. Запрет — та же
+    переменная, но обнулённая. Без месяцев ничего не пишем: спрашиваем.
+    """
+    d = plan_settings(case)
+    lines, questions = [], []
+    for f in fixes or []:
+        emp = _find_employee(db, case.id, f.get("employee"))
+        if emp is None:
+            lines.append("Не нашел сотрудника «%s» в реестре." % f.get("employee"))
+            continue
+        mode = f.get("mode") or "назначить"
+        ctr = _find_contract(db, case.id, f.get("contract")) if f.get("contract") else None
+        if f.get("contract") and ctr is None:
+            lines.append("Не нашел договор «%s» в реестре." % f.get("contract"))
+            continue
+        kind = (str(f.get("kind") or "оклад")).strip().lower()
+        if kind not in KINDS:
+            kind = "оклад"
+        if mode == "снять":
+            before = len(d["назначения"]) + len(d["запреты"])
+            for key in ("назначения", "запреты"):
+                d[key] = [x for x in d[key]
+                          if not (x["сотрудник"] == emp.code and (ctr is None or x["договор"] == ctr.code))]
+            gone = before - len(d["назначения"]) - len(d["запреты"])
+            lines.append("Снял закрепления и запреты: %s%s — %d." % (
+                emp.fio or emp.code, (" на " + ctr.code) if ctr else "", gone))
+            continue
+        if ctr is None:
+            lines.append("Для %s не назван договор — уточните, на каком договоре." % (emp.fio or emp.code))
+            continue
+        a, b = f.get("month_from"), f.get("month_to")
+        note = ""
+        if not a and not b:
+            said = parse_months(text)
+            if said:
+                a, b = said
+            else:
+                # Месяцы не названы — берём срок договора в году плана и
+                # говорим об этом вслух: экономист поправит одной фразой.
+                a = _month_of(ctr.date_from, 1)
+                b = _month_of(ctr.date_to, 12)
+                note = " (срок договора)"
+        a = int(a or b); b = int(b or a)
+        a, b = max(1, min(a, 12)), max(1, min(b, 12))
+        if a > b:
+            a, b = b, a
+        rec = {"сотрудник": emp.code, "фио": emp.fio, "договор": ctr.code, "с": a, "по": b,
+               "вид": kind, "сумма": f.get("amount")}
+        key = "назначения" if mode == "назначить" else "запреты"
+        other = "запреты" if key == "назначения" else "назначения"
+        d[other] = [x for x in d[other] if not (x["сотрудник"] == emp.code and x["договор"] == ctr.code
+                                                and x["вид"] == kind)]
+        d[key] = [x for x in d[key] if not (x["сотрудник"] == emp.code and x["договор"] == ctr.code
+                                            and x["вид"] == kind)] + [rec]
+        lines.append("%s: %s на %s, %s%s, %s%s." % (
+            "Закрепил" if key == "назначения" else "Запретил", emp.fio or emp.code, ctr.code,
+            _months_text(a, b), note, kind,
+            (", %s ₽ в месяц" % _shown(rec["сумма"])) if rec["сумма"] else ""))
+    case.plan_settings = json.dumps(d, ensure_ascii=False)
+    return lines, questions
+
+
+def _month_of(date_text, default):
+    """Месяц из «dd.mm.yyyy»; без даты — значение по умолчанию."""
+    try:
+        return max(1, min(12, int(str(date_text).split(".")[1])))
+    except (AttributeError, IndexError, ValueError):
+        return default
+
+
+def apply_settings(db, case, settings, text=""):
+    """Настройки расчёта словами: допуск, дефицит, число договоров оклада."""
+    d = plan_settings(case)
+    lines = []
+    seen = {s.get("name") for s in (settings or [])}
+    settings = list(settings or []) + [s for s in parse_settings(text) if s["name"] not in seen]
+    for s in settings or []:
+        name = (s.get("name") or "").strip()
+        if name not in SETTING_NAMES:
+            continue
+        v = s.get("value")
+        if name == "допуск трудоёмкости":
+            try:
+                v = float(str(v).replace("%", "").replace(",", "."))
+            except (TypeError, ValueError):
+                lines.append("Допуск трудоёмкости не понял: «%s»." % s.get("value"))
+                continue
+            if v > 1:
+                v = v / 100.0
+            d["настройки"][name] = round(v, 4)
+            lines.append("Допуск трудоёмкости — %s %%." % _shown(round(v * 100, 2)))
+        elif name == "разрешить дефицит":
+            yes = str(v).strip().lower() in ("да", "true", "1", "yes", "разрешить")
+            d["настройки"][name] = "да" if yes else "нет"
+            lines.append("Дефицит выплат %s." % ("разрешен" if yes else "запрещен"))
+        else:
+            try:
+                n = int(float(str(v)))
+            except (TypeError, ValueError):
+                lines.append("Число договоров оклада не понял: «%s»." % s.get("value"))
+                continue
+            d["настройки"][name] = max(1, n)
+            lines.append("Договоров оклада в год — не больше %d." % max(1, n))
+    case.plan_settings = json.dumps(d, ensure_ascii=False)
+    return lines
 
 
 def apply_edits(db, case, edits):

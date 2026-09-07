@@ -93,6 +93,23 @@ def _check_none(case, res, out):
                     "%s: должно быть пусто, найдено %d" % (key, got)))
 
 
+class _Stub:
+    """Документ с диска, не из реестра: только имя и путь."""
+
+    id = None
+
+    def __init__(self, name, path):
+        self.name, self.path = name, path
+
+
+def _file_stub(name):
+    for sub in ("harness", "demo", os.path.join("demo", "forms"), "use_cases"):
+        path = os.path.join(ROOT, "data", sub, name)
+        if os.path.exists(path):
+            return _Stub(name, path)
+    return None
+
+
 def run_case(case, doc, cache):
     """Прогнать один случай. Возвращает список (вердикт, пояснение)."""
     out = []
@@ -123,9 +140,24 @@ def run_case(case, doc, cache):
     if not any(k in case for k in ("counts", "must", "none", "max_cut")):
         return out
 
-    if doc.name not in cache:
-        cache[doc.name] = llm.freeform(doc.path, doc.name)
-    res = cache[doc.name]
+    if case.get("extract"):
+        # Якорный разбор форм без модели: детерминированный, поэтому и
+        # допуски здесь нулевые. Проверяет то, что реально идет в реестр.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "extract", os.path.join(ROOT, "docs", "ui", "extract.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        p = mod.extract(doc.path)["passport"]
+        res = {"ok": True, "employees": p["employees"], "contracts": p["contracts"],
+               "inflows": [{"contract": c, "month": m + 1, "amount": v}
+                           for c, row in p["inflow"].items()
+                           for m, v in enumerate(row) if v],
+               "labor": p["labor"]}
+    else:
+        if doc.name not in cache:
+            cache[doc.name] = llm.freeform(doc.path, doc.name)
+        res = cache[doc.name]
     if not res.get("ok"):
         out.append((FAIL, "разбор не удался: %s" % res.get("error")))
         return out
@@ -313,7 +345,12 @@ def main_():
         title = case["doc"] if len(case["doc"]) <= 60 else case["doc"][:57] + "…"
         print("── %s\n   %s" % (title, case["why"]))
         if doc is None or not os.path.exists(doc.path):
-            print("   %s: документа нет в реестре\n" % SKIP)
+            # Документа нет в реестре — берем файл с диска: демо-набор,
+            # образцы форм и сценарии лежат в репозитории. Сквозная проверка
+            # через реестр для такого файла невозможна, остальное — можно.
+            doc = _file_stub(case["doc"])
+        if doc is None:
+            print("   %s: документа нет ни в реестре, ни на диске\n" % SKIP)
             continue
         t0 = time.time()
         try:

@@ -40,7 +40,7 @@ class Passport(dict):
 def extract(path):
     wb = openpyxl.load_workbook(path, data_only=True)
     log, questions = [], []
-    passport = {"employees": [], "contracts": [], "inflow": {},
+    passport = {"employees": [], "contracts": [], "inflow": {}, "labor": [],
                 "settings": {}, "source": path.split("\\")[-1].split("/")[-1]}
     recognized = 0
 
@@ -60,6 +60,7 @@ def extract(path):
             "price": _read_price,
             "fot_detail": _read_fot_detail,
             "form9": _read_form9,
+            "labor": _read_labor,
         }[kind]
         handler(ws, passport, log, questions)
 
@@ -81,8 +82,10 @@ def _classify(ws):
         return "inflow"
     if t in ("настройки",):
         return "settings"
+    if t in ("трудоемкость_по_договорам", "трудоёмкость_по_договорам"):
+        return "labor"
     if t in ("запуск", "лимиты_по_должностям", "120_надбавка",
-             "трудоемкость_по_договорам", "фиксация_фот_по_месяцам",
+             "фиксация_фот_по_месяцам",
              "минимальные_остатки", "ручные_назначения", "ручные_запреты"):
         return "skip"
     head = " ".join(str(ws.cell(r, c).value or "")
@@ -109,13 +112,21 @@ def _read_employees(ws, p, log, q):
         code = ws.cell(r, hdr["код строки"]).value
         if not code:
             continue
+        def text(name):
+            v = ws.cell(r, hdr[name]).value if name in hdr else None
+            return None if v in (None, "") else str(v).strip()
+
         p["employees"].append({
             "code": str(code),
             "fio": str(ws.cell(r, hdr["фио"]).value or ""),
             "pos": str(ws.cell(r, hdr["должность"]).value or ""),
             "rate": _num(ws.cell(r, hdr["ставка"]).value) or 1.0,
             "sal": _num(ws.cell(r, hdr["зарплата"]).value) or 0.0,
-            "from": str(ws.cell(r, hdr.get("дата начала", 9)).value or "")[:10],
+            "from": (text("дата начала") or "")[:10] or None,
+            "to": (text("дата окончания") or "")[:10] or None,
+            "department": text("подразделение"),
+            "employment_type": text("тип занятости"),
+            "employment_category": text("категория занятости"),
         })
         n += 1
     log.append(f"Лист «сотрудники»: шаблон fot-planner, извлечено строк: {n}")
@@ -138,12 +149,31 @@ def _read_contracts(ws, p, log, q):
             continue
         kinds = [nm for col, nm in kinds_cols
                  if col in hdr and str(ws.cell(r, hdr[col]).value or "").strip().lower() == "да"]
+
+        def cell(name):
+            return ws.cell(r, hdr[name]).value if name in hdr else None
+
+        def text(name):
+            v = cell(name)
+            return None if v in (None, "") else str(v).strip()
+
         p["contracts"].append({
             "code": str(code),
             "name": str(ws.cell(r, hdr.get("название", 2)).value or ""),
             "goz": str(ws.cell(r, hdr.get("гоз", 6)).value or "нет"),
             "fot": _num(ws.cell(r, hdr["фот"]).value) or 0.0,
             "kinds": kinds,
+            # Графы шаблона, без которых договор в реестре неполный: срок,
+            # предел выплат, счёт, номер, тип. Раньше разбор брал шесть граф
+            # из двадцати, и договор «с июня» действовал весь год.
+            "num": text("номер"), "type": text("тип договора"), "account": text("счет"),
+            "department": text("подразделение"),
+            "from": text("дата начала"), "to": text("дата окончания"),
+            "salary_deadline": text("конечная дата выплат оклада"),
+            "allowance_deadline": text("конечная дата выплат надбавок"),
+            "priority": text("приоритет"),
+            "allow_main": text("основное место разрешено"),
+            "allow_part_time": text("совместительство разрешено"),
         })
         n += 1
     log.append(f"Лист «договоры»: шаблон fot-planner, извлечено договоров: {n}")
@@ -208,9 +238,85 @@ def _read_price(ws, p, log, q):
                    "строка 1.3.1 не обнаружена")
 
 
+def _contract_code(ws, p):
+    """Шифр договора из шапки формы: «шифр C_GOZ-26», «договор № 12/26».
+
+    Форма ФАС и структура цены называют тему и шифр в первых строках. Если в
+    шапке шифра нет, строка трудоёмкости получает единственный договор
+    паспорта, а если и его нет — остаётся без договора, и это видно в реестре.
+    """
+    head = " ".join(str(ws.cell(r, c).value or "")
+                    for r in range(1, min(14, ws.max_row) + 1)
+                    for c in range(1, min(12, ws.max_column) + 1))
+    m = (re.search(r"шифр[^A-Za-zА-Яа-я0-9]{0,4}([A-Za-z][A-Za-z0-9_\-./]{1,30})", head, re.I)
+         or re.search(r"договор[а-я]*\s*№?\s*([A-Za-z0-9][A-Za-z0-9_\-./]{1,30})", head, re.I))
+    if m:
+        return m.group(1).strip(".,;")
+    if len(p.get("contracts") or []) == 1:
+        return p["contracts"][0]["code"]
+    return None
+
+
+def _year_of(text, default=None):
+    m = re.search(r"(20\d\d)", str(text or ""))
+    return int(m.group(1)) if m else default
+
+
+def _add_labor(p, code, year, position, cm, cost, headcount, where):
+    """Строка трудоёмкости паспорта; одинаковые должности одного договора
+    складываются: в «Расшифровке ФОТ» одна должность идёт по этапам."""
+    key = (code, year, (position or "").strip().lower())
+    for row in p["labor"]:
+        if (row["contract"], row["year"], (row["position"] or "").strip().lower()) == key:
+            total = row["person_months"] + cm
+            row["avg_cost"] = ((row["avg_cost"] or 0) * row["person_months"] + cost * cm) / total
+            row["person_months"] = total
+            row["headcount"] = max(row["headcount"] or 0, headcount or 0) or None
+            return
+    p["labor"].append({"contract": code, "year": year, "position": (position or "").strip(),
+                       "person_months": cm, "avg_cost": cost,
+                       "headcount": headcount or None, "место": where})
+
+
+def _read_labor(ws, p, log, q):
+    """Лист «трудоемкость_по_договорам» шаблона: строка = договор, должность,
+    чел.-мес., стоимость чел.-мес., количество человек."""
+    hdr = {str(ws.cell(1, c).value or "").strip().lower(): c
+           for c in range(1, ws.max_column + 1)}
+    pm_col = hdr.get("трудоемкость") or hdr.get("трудоёмкость") or hdr.get("чел-мес")
+    cost_col = (hdr.get("средняя стоимость выполнения работ в месяц")
+                or hdr.get("средняя зарплата") or hdr.get("стоимость 1 чел-мес"))
+    if "договор" not in hdr or not pm_col:
+        log.append(f"Лист «{ws.title}»: заголовки не совпали с шаблоном, пропущен")
+        return
+    n = 0
+    for r in range(2, ws.max_row + 1):
+        code = ws.cell(r, hdr["договор"]).value
+        cm = _num(ws.cell(r, pm_col).value)
+        if not code or not cm:
+            continue
+        head_col = hdr.get("количество человек") or hdr.get("кол-во человек")
+        _add_labor(p, str(code), _year_of(ws.cell(r, hdr["год"]).value) if "год" in hdr else None,
+                   str(ws.cell(r, hdr["должность"]).value or "") if "должность" in hdr else "",
+                   cm, _num(ws.cell(r, cost_col).value) if cost_col else None,
+                   _num(ws.cell(r, head_col).value) if head_col else None,
+                   f"лист «{ws.title}», строка {r}")
+        n += 1
+    log.append(f"Лист «{ws.title}»: шаблон fot-planner, строк трудоёмкости: {n}")
+
+
 def _read_fot_detail(ws, p, log, q):
-    """«Расшифровка ФОТ»: строки этапов, проверка гр.6×гр.7=гр.8."""
+    """«Расшифровка ФОТ»: строки этапов, проверка гр.6×гр.7=гр.8.
+
+    Из каждой строки берётся должность, кол-во человек, чел.-мес. и месячная
+    зарплата — это трудоёмкость договора по должностям; этапы одной должности
+    складываются. Год — из дат этапа, если они есть, иначе из шапки.
+    """
     rows, bad, empty = 0, 0, 0
+    code = _contract_code(ws, p)
+    head_year = _year_of(" ".join(str(ws.cell(r, c).value or "")
+                                  for r in range(1, min(6, ws.max_row) + 1)
+                                  for c in range(1, min(12, ws.max_column) + 1)))
     for r in range(1, ws.max_row + 1):
         if _is_column_numbering(ws, r):
             continue
@@ -222,6 +328,8 @@ def _read_fot_detail(ws, p, log, q):
             continue
         if cm <= 0 or sal <= 0:
             empty += 1
+            continue
+        if str(pos).strip().lower() in ("должность", "4"):
             continue
         rows += 1
         calc = cm * sal
@@ -235,12 +343,16 @@ def _read_fot_detail(ws, p, log, q):
                 "options": [f"Принять расчётное {_fmt(calc)} ₽",
                             f"Оставить из документа {_fmt(tot)} ₽"],
             })
+        year = _year_of(ws.cell(r, 10).value) or _year_of(ws.cell(r, 11).value) or head_year
+        _add_labor(p, code, year, str(pos), cm, sal, _num(ws.cell(r, 5).value),
+                   f"лист «{ws.title}», строка {r}")
     if rows == 0 and empty:
         log.append(f"Лист «{ws.title}»: форма-образец, {empty} строк без значений — "
                    "заполненных данных нет")
     else:
         log.append(f"Лист «{ws.title}»: строк трудоёмкости: {rows}, "
-                   f"несоответствий формуле: {bad}")
+                   f"несоответствий формуле: {bad}"
+                   + (f", договор {code}" if code else ", шифр договора в шапке не найден"))
 
 
 def _is_column_numbering(ws, r, width=12):
@@ -263,11 +375,23 @@ def _is_column_numbering(ws, r, width=12):
 
 
 def _read_form9(ws, p, log, q):
-    """Форма 9д: гр.6 (чел.-мес) × гр.7 (стоимость) = гр.8 (ОЗП)."""
+    """Форма 9д: гр.6 (чел.-мес) × гр.7 (стоимость) = гр.8 (ОЗП).
+
+    Строки должностей внутри года становятся трудоёмкостью договора: должность
+    (гр.5), число специалистов (гр.4), чел.-мес. (гр.6), стоимость (гр.7).
+    Итоговые строки года («Научные и инженерно-технические работники») и
+    строка темы пропускаются — их содержимое уже разложено по должностям.
+    """
     rows, bad, empty = 0, 0, 0
+    code = _contract_code(ws, p)
+    year = None
+    total_markers = ("научные и инженерно", "итого", "всего")
     for r in range(1, ws.max_row + 1):
         if _is_column_numbering(ws, r):
             continue
+        b = str(ws.cell(r, 2).value or "")
+        if re.search(r"20\d\d\s*год", b, re.I):
+            year = _year_of(b)
         grp = ws.cell(r, 5).value
         cm = _num(ws.cell(r, 6).value)
         cost = _num(ws.cell(r, 7).value)
@@ -277,7 +401,12 @@ def _read_form9(ws, p, log, q):
         if cm <= 0 or cost <= 0:
             empty += 1
             continue
+        if str(grp).strip().lower() in ("х", "x") or any(
+                m in str(grp).lower() for m in total_markers):
+            continue
         rows += 1
+        _add_labor(p, code, year, str(grp), cm, cost, _num(ws.cell(r, 4).value),
+                   f"лист «{ws.title}», строка {r}")
         calc = cm * cost
         if abs(calc - ozp) > 1:
             bad += 1

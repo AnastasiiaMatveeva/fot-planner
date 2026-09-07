@@ -442,6 +442,12 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
 
         employee_limit = p4_employee_month_limit[month_key] * active_rate
         deviation = rule_ctx.model.p4_employee_limit_deviation[month_key]
+        # Предел П4 не потолок, а норма: если в месяце начислена 124, штатная
+        # часть режется ровно по пределу на ставку. Превышение запрещено, а
+        # отклонение вниз убирает своя стадия целевой функции. Раньше
+        # превышение только штрафовалось, и надбавку получал в том числе тот,
+        # у кого оклад с 122 уже выше предела.
+        rule_ctx.model.cons.add(included == employee_limit)
         rule_ctx.model.cons.add(deviation >= included - employee_limit)
         rule_ctx.model.cons.add(deviation >= employee_limit - included)
 
@@ -462,11 +468,24 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
 
 
 def rule_goz_bep_staff_total(rule_ctx: PayrollRuleContext) -> None:
-    """ГОЗ/БЭП: средняя штатная часть по ГОЗ-договору не выше БЭП."""
+    """ГОЗ/БЭП: штатная часть по ГОЗ-договору не выше суммы БЭП должностей × ставок.
+
+    БЭП свой у каждой должности (справочник), поэтому предел договора в
+    месяце — сумма по людям «БЭП должности × открытая ставка», а не одно число
+    на всех. Раньше бралось наименьшее из справочника для всех разом.
+    Должности без БЭП получают общее значение из настроек.
+    """
 
     bep_limit = _goz_bep_average_limit(rule_ctx.ctx)
     if bep_limit is None:
         return
+    limit_by_code_position = _position_limits_by_code_and_position(rule_ctx.ctx)
+
+    def bep_of(employee) -> float:
+        row = limit_by_code_position.get(("bep", normalize_position(employee.position)))
+        if row is None or row.limit is None or row.limit <= 0:
+            return bep_limit
+        return float(row.limit)
     goz_contract_ids = {
         contract_id
         for contract_id, contract in rule_ctx.contracts.items()
@@ -535,24 +554,19 @@ def rule_goz_bep_staff_total(rule_ctx: PayrollRuleContext) -> None:
                 and key[3] in SALARY_122_KINDS
             ]
         )
-        active_rate_terms = []
+        target_terms = []
         open_rate_key_set = rule_ctx.open_rate_key_set or set()
         for employee_id, contract_id, month in active_keys_for_group:
             open_key = (employee_id, contract_id, month)
             employee = employee_by_id[employee_id]
             if open_key in open_rate_key_set:
-                active_rate_terms.append(
-                    _contract_open_rate_expr(rule_ctx, employee, contract_id, month)
-                )
+                rate_expr = _contract_open_rate_expr(rule_ctx, employee, contract_id, month)
             else:
-                active_rate_terms.append(
-                    employee.rate
-                    * rule_ctx.model.goz_bep_employee_active[
-                        (employee_id, contract_id, month)
-                    ]
-                )
-        active_rate = rule_ctx.sum_terms(active_rate_terms)
-        target = bep_limit * active_rate
+                rate_expr = employee.rate * rule_ctx.model.goz_bep_employee_active[
+                    (employee_id, contract_id, month)
+                ]
+            target_terms.append(bep_of(employee) * rate_expr)
+        target = rule_ctx.sum_terms(target_terms)
         rule_ctx.model.cons.add(included_total <= target)
         rule_ctx.model.cons.add(
             rule_ctx.model.goz_bep_average_under_limit[group_key]

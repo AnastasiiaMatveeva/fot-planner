@@ -98,6 +98,11 @@ class Contract:
     end_date: date
     total_fot: float
     account: str = ""
+    # Подразделение, в котором открываются ставки по договору. Нужно для
+    # правила «одна должность в одном подразделении у человека один раз»:
+    # вторую ставку по той же должности можно открыть только на договоре
+    # другого подразделения. Пусто — правило к договору не применяется.
+    department: str = ""
     is_goz_defense_order: bool = False
     allow_salary: bool = True
     allow_secret: bool = False
@@ -140,6 +145,10 @@ class ContractLaborPlan:
     equivalence_group: str | None = None
     position_level: int | None = None
     avg_monthly_labor_cost: float | None = None
+    # Число привлекаемых специалистов (Ф9, «Расшифровка ФОТ»): сколько людей
+    # одновременно может сидеть на строке. Не то же, что чел.-мес.: 10,5
+    # чел.-мес. закрывают и трое по 0,5, и один на 1,5.
+    headcount: float | None = None
 
 
 def labor_row_id(lp: ContractLaborPlan) -> str:
@@ -221,17 +230,38 @@ ADMIN_COMPLEXITY_FRAGMENT_FACTOR = 0.1
 
 @dataclass
 class OptimizationWeights:
-    # Штрафы в целевой функции (не жёсткие ограничения)
-    # Мягкий штраф смены договора оклада
+    # Веса «вкусовых» целей — одной взвешенной стадии после стадий-правил.
+    # Каждая цель нормирована (переводы на число людей, отклонение освоения
+    # на ФОТ), поэтому значим только масштаб весов друг относительно друга:
+    # «×2» — вдвое важнее. Абсолютные величины ничего не значат.
     salary_contract_switch: float = 500_000.0
-    # Связи сотрудник–договор и смены схемы между месяцами
+    # Связи сотрудник–договор, смены схемы между месяцами, дробления выплат
     admin_complexity: float = 200_000.0
-    plan_deviation: float = 10.0
-    # Штраф за 100% отклонения от идеала (actual−ideal)/ideal; см. optimizer.UNIFORM_SPEND_TOLERANCE_*.
+    # Отклонение месячных выплат договора от равномерного освоения
     uniform_spend_deviation: float = 50_000.0
+    # Изменение суммы одной и той же выплаты от месяца к месяцу
+    payment_change: float = 10_000.0
+    # Отклонение от прошлого плана штрафом не держим (0 — стадия выключена):
+    # финансист даёт претензию к плану, а не просит его не менять.
+    plan_deviation: float = 0.0
+    # Веса стадий-правил: там важен только ноль (стадия выключена), масштаб
+    # внутри стадии на минимум не влияет.
     labor_deviation: float = 50_000.0
-    # Приказ — крайний инструмент: сначала минимизируем сумму приказов.
     order_incentive_use: float = 1_000_000.0
+
+
+@dataclass
+class GoalMetric:
+    """Одна цель решателя в готовом плане: что вышло и какой вес держал."""
+
+    code: str
+    name: str
+    value: float          # в естественных единицах: штук, ₽, чел.-мес.
+    unit: str
+    priority: str         # «стадия 3» или «вес»
+    weight: float | None = None
+    normalized: float | None = None   # значение, поделённое на масштаб
+    contribution: float | None = None  # вес × нормированное — доля в сумме
 
 
 @dataclass
@@ -357,3 +387,5 @@ class PlanningResult:
     labor_pm_attributions: list[LaborPmAttribution] = field(default_factory=list)
     labor_payment_attributions: list[LaborPaymentAttribution] = field(default_factory=list)
     open_rate_attributions: list[OpenRateAttribution] = field(default_factory=list)
+    # Цели решателя с их значениями в готовом плане — лист «цели» в выгрузке.
+    goals: list[GoalMetric] = field(default_factory=list)
