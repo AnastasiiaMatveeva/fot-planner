@@ -42,6 +42,9 @@ SHORT = ["янв", "фев", "мар", "апр", "май", "июн",
 HARD, SOFT, INFO = "нарушать нельзя", "с допуском", "показатель"
 #: С точностью до рубля: копейки в плане ФОТ ничего не решают.
 EPS = 1.0
+#: Порог для человеко-месяцев. EPS — рублевый; с ним ставка за месяц (число
+#: около единицы) считалась нулем, и закрытая строка выглядела незакрытой.
+PM_EPS = 0.001
 #: Сколько строк показывать в таблице узких мест.
 SHOW = 8
 
@@ -88,6 +91,22 @@ def _kind_of(raw):
     if "приказ" in s:
         return "приказ"
     return None
+
+
+MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль",
+               "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
+
+
+def _months_of_row(row):
+    """План по месяцам из граф «Январь» … «Декабрь»; None — строка годовая."""
+    out = {}
+    for m, name in enumerate(MONTH_NAMES, start=1):
+        v = _num(row.get(name))
+        if v is None:
+            v = _num(row.get(name.lower()))
+        if v:
+            out[m] = v
+    return out or None
 
 
 def _rows_of(ws):
@@ -152,6 +171,7 @@ def _read_input(path):
                     "position": str(row.get("должность") or ""),
                     "person_months": _num(row.get("трудоемкость")),
                     "avg": _num(row.get("средняя стоимость выполнения работ в месяц")),
+                    "months": _months_of_row(row),
                 })
     if "настройки" in wb.sheetnames:
         for row in _rows_of(wb["настройки"]):
@@ -209,21 +229,30 @@ def _read_result(path):
             })
     if "Контроль трудоёмкости" in wb.sheetnames:
         ws = wb["Контроль трудоёмкости"]
-        current, in_rules = None, False
+        # У договора несколько строк РКМ, и под каждой — своя таблица по
+        # месяцам («Показатель»). Раньше эта таблица выключала разбор строк
+        # насовсем, и от договора читалась только первая строка: контроль
+        # человеко-месяцев проверял «Старшего научного сотрудника» и молчал
+        # про инженеров.
+        current, in_rules, in_months = None, False, False
         for r in range(1, ws.max_row + 1):
             text = str(ws.cell(r, 1).value or "").strip()
             if text.startswith("ДОГОВОР:"):
-                current, in_rules = text.replace("ДОГОВОР:", "").strip(), False
+                current, in_rules, in_months = (
+                    text.replace("ДОГОВОР:", "").strip(), False, False)
                 continue
             if text == "Строка / группа":
-                in_rules = True
+                in_rules, in_months = True, False
                 continue
-            if text == "Показатель" or not text:
-                in_rules = False
+            if text == "Показатель":
+                in_months = True
+                continue
+            if not text:
+                in_months = False
                 continue
             # Разбивка решателя: кто и сколько закрыл по каждой строке.
             if text == "Договор" and str(ws.cell(r, 4).value or "").strip() == "Сотрудник":
-                in_rules = False
+                in_rules, in_months = False, False
                 continue
             ind = str(ws.cell(r, 6).value or "").strip()
             if ind in ("Закрыто чел.-мес.", "Всего денег на строку"):
@@ -235,7 +264,9 @@ def _read_result(path):
                     "kind": "pm" if ind.startswith("Закрыто") else "pay", "months": vals,
                 })
                 continue
-            if in_rules:
+            # Заголовок разбивки («Что сформировало трудоёмкость») стоит в той
+            # же графе, что и строки, но чисел под ним нет.
+            if in_rules and not in_months and _num(ws.cell(r, 2).value) is not None:
                 out["labor_control"].append({
                     "contract": current or "", "row": text,
                     "plan_pm": _num(ws.cell(r, 2).value),
@@ -275,7 +306,7 @@ def _mark(out, section):
 
 # ── сборка условия ───────────────────────────────────────────────────
 def _limit_rule(name, meaning, where, unit, rows, kind=HARD, mode="не больше",
-                empty=""):
+                empty="", tolerance=0.0, absolute_tolerance=None):
     """Условие с числовым пределом: факт против предела в каждом случае.
 
     ``rows`` — [{"объект", "факт", "предел"}]. Считается доля предела, запас
@@ -287,7 +318,9 @@ def _limit_rule(name, meaning, where, unit, rows, kind=HARD, mode="не боль
         limit, fact = r.get("предел"), r.get("факт")
         if limit in (None, 0) or fact is None:
             continue
-        over = (fact > limit + EPS) if mode == "не больше" else abs(fact - limit) > EPS
+        allowed = max(EPS if absolute_tolerance is None else absolute_tolerance,
+                      abs(limit) * tolerance)
+        over = (fact > limit + EPS) if mode == "не больше" else abs(fact - limit) > allowed + 1e-7
         checked.append({"объект": r["объект"], "факт": round(fact, 2),
                         "предел": round(limit, 2), "доля": round(fact / limit, 4),
                         "запас": round(limit - fact, 2), "нарушено": over})
@@ -633,6 +666,7 @@ def check(input_path, result_path):
         "По строке расчетно-калькуляционных материалов на договоре должно "
         "набраться столько человеко-месяцев, сколько заложено в РКМ." + note,
         "Реестр → Трудоемкость", "чел.-мес.", pm_rows, kind=SOFT, mode="равно",
+        tolerance=tol, absolute_tolerance=0.5,
         empty="трудоемкость по договорам не задана"))
     out.append(_limit_rule(
         "Сумма трудоемкости выбрана",
@@ -640,15 +674,25 @@ def check(input_path, result_path):
         "стоимость. Столько же должно быть начислено людям, закрывающим эту "
         "строку." + note,
         "Реестр → Трудоемкость", "₽", sum_rows, kind=SOFT, mode="равно",
+        tolerance=tol, absolute_tolerance=0.0,
         empty="трудоемкость по договорам не задана"))
 
     bad = []
     for lp in inp["labor"]:
         if not lp["position"]:
             continue
+        # A labor row may be closed by an employee through an approved
+        # substitution (for example, a leading engineer performs a
+        # programmer's work).  The detailed attribution sheet is authoritative
+        # for this check; requiring an exact position here falsely reports a
+        # valid substitution as an uncovered row.
+        attributions = [p for p in res.get("labor_people", [])
+                        if p.get("contract") == lp["contract"]
+                        and p.get("kind") == "pm"
+                        and any(float(v or 0) > PM_EPS for v in (p.get("months") or []))]
         who = [p for p in plan if p["contract"] == lp["contract"]
                and norm(p["position"]) == norm(lp["position"])]
-        if not who:
+        if not who and not attributions:
             bad.append({"объект": "%s / %s" % (lp["contract"], lp["position"]),
                         "что": "на договоре нет выплат по этой должности"})
     out.append(_count_rule(
@@ -753,54 +797,67 @@ def summary(input_path, result_path):
     }
 
 
-def _why_rates(inp, people, plan):
-    """Зачем на договоре открыты ставки — счетом, а не догадкой.
+def _why_rates(inp, res):
+    """Кто закрывает строку трудоёмкости — по разбивке решателя, а не по счёту
+    должностей.
 
     Человеко-месяцы РКМ закрывает только открытая ставка сотрудника на этом
-    договоре: надбавки их не создают. Поэтому под трудоемкость нового
-    договора сервис открывает ставки. Здесь это показано арифметикой: кто,
-    по какой ставке, в какие месяцы и сколько человеко-месяцев вышло.
+    договоре: надбавки их не создают. Кого решатель отнёс к какой строке, он
+    говорит сам — лист «Контроль трудоёмкости» результата. Раньше здесь
+    считались люди с совпадающей должностью, и объяснение выходило неверным
+    сразу дважды: замещение (главный инженер проекта на строке инженера) не
+    попадало в счёт, а ставка человека на договоре приписывалась каждой
+    строке этого договора с подходящей должностью. По строке «Инженер»
+    (16 чел.-мес., закрывают трое) выходило «1 человек, 8 чел.-мес.» — и
+    агент в ленте пересказывал эту неправду.
     """
-    norm = inp["norm"]
     out = []
+    by_row = {}
+    for p in res.get("labor_people") or []:
+        if p.get("kind") != "pm":
+            continue
+        months = [(i + 1, float(v or 0)) for i, v in enumerate(p.get("months") or [])
+                  if float(v or 0) > PM_EPS]
+        if not months:
+            continue
+        code = str(p.get("contract") or "").split("—")[0].strip()
+        by_row.setdefault((code, str(p.get("row") or "")), []).append((p, months))
     for lp in inp["labor"]:
         if not lp["person_months"]:
             continue
-        code = lp["contract"]
-        want = norm(lp["position"]) if lp["position"] else None
-        groups = {}
-        for person in people:
-            if want and norm(person["должность"]) != want:
-                continue
-            for m in person["месяцы"]:
-                if not m:
-                    continue
-                for c in m["договоры"]:
-                    if c["код"] == code and c["ставка"]:
-                        groups.setdefault(c["ставка"], {}).setdefault(
-                            person["фио"], []).append(m["м"])
-        if not groups:
+        code, pos = lp["contract"], lp["position"] or ""
+        got = by_row.get((code, pos)) or []
+        if not got:
             out.append("Договор %s: трудоемкость %s чел.-мес. по должности «%s» "
                        "не закрыта — ставок на этом договоре не открыто."
-                       % (code, _mo(lp["person_months"]), lp["position"] or "любая"))
+                       % (code, _mo(lp["person_months"]), pos or "любая"))
             continue
         parts, total = [], 0.0
-        for rate in sorted(groups, reverse=True):
-            who = groups[rate]
-            months = sorted({m for ms in who.values() for m in ms})
-            span = ("%s—%s" % (SHORT[months[0] - 1], SHORT[months[-1] - 1])
-                    if len(months) > 1 else SHORT[months[0] - 1])
-            got = sum(rate * len(ms) for ms in who.values())
-            total += got
-            parts.append("%d %s по %s ставки, %s (%s × %s мес. × %s = %s чел.-мес.)"
-                         % (len(who), _px(len(who), "человек", "человека", "человек"),
-                            _mo(rate), span, len(who), len(months), _mo(rate), _mo(got)))
-        out.append("Договор %s: трудоемкость %s чел.-мес. по должности «%s». "
-                   "Человеко-месяцы закрывает только открытая ставка на этом "
-                   "договоре, поэтому открыты ставки: %s. Итого %s чел.-мес."
-                   % (code, _mo(lp["person_months"]), lp["position"] or "любая",
-                      "; ".join(parts), _mo(total)))
+        for p, months in got:
+            amount = sum(v for _m, v in months)
+            total += amount
+            nums = [m for m, _v in months]
+            span = ("%s—%s" % (SHORT[nums[0] - 1], SHORT[nums[-1] - 1])
+                    if len(nums) > 1 else SHORT[nums[0] - 1])
+            rate = amount / len(nums)
+            same = " (замещение)" if norm_position_differs(inp, p, pos) else ""
+            parts.append("%s%s — по %s ставки, %s (%s мес. × %s = %s чел.-мес.)"
+                         % (p.get("fio") or "?", same, _mo(rate), span,
+                            len(nums), _mo(rate), _mo(amount)))
+        out.append("Договор %s: трудоемкость %s чел.-мес. по должности «%s», "
+                   "закрыто %s чел.-мес. Человеко-месяцы закрывает только "
+                   "открытая ставка на этом договоре, и решатель отнёс к этой "
+                   "строке: %s."
+                   % (code, _mo(lp["person_months"]), pos or "любая",
+                      _mo(total), "; ".join(parts)))
     return out
+
+
+def norm_position_differs(inp, person, position):
+    """Человек закрывает строку по правилу замещения, а не своей должностью."""
+    norm = inp["norm"]
+    have, want = person.get("position") or "", position or ""
+    return bool(have and want and norm(have) != norm(want))
 
 
 def _px(n, one, few, many):
@@ -927,7 +984,7 @@ def payroll(input_path, result_path):
     return {
         "договоры": [{"код": c, "название": (ctr.get(c) or {}).get("name", ""),
                       "ГОЗ": bool((ctr.get(c) or {}).get("goz"))} for c in order],
-        "почему": _why_rates(inp, people, plan),
+        "почему": _why_rates(inp, res),
         "итого": {"человек": len(people),
                   "смен договора оклада": total_switch,
                   "открыто ставок": total_opened,

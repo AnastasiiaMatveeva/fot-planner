@@ -58,9 +58,11 @@ def _resolve_monthly_wage(row: pd.Series) -> float:
 
 
 def _split_list(val) -> list[str]:
+    """Перечень шифров: «C_A; C_B» или «C_A, C_B» — экономисты пишут и так,
+    и так, а запятой в шифре договора не бывает."""
     if val is None or (isinstance(val, float) and pd.isna(val)):
         return []
-    return [x.strip() for x in str(val).split(";") if x.strip()]
+    return [x.strip() for x in str(val).replace(",", ";").split(";") if x.strip()]
 
 
 def _bool(val, default: bool = False) -> bool:

@@ -128,6 +128,15 @@ def contract_has_labor_plan(ctx: PlanningContext, contract_id: str) -> bool:
     return bool(labor_rows_for_contract(ctx, contract_id))
 
 
+def labor_row_allows_month(lp: ContractLaborPlan, month: int) -> bool:
+    """Можно ли закрывать чел.-мес. строки в этом месяце.
+
+    Строка с планом по месяцам закрывается только там, где план не нулевой;
+    годовая — в любом месяце действия договора.
+    """
+    return not lp.monthly or lp.monthly.get(month, 0.0) > 0
+
+
 def labor_pm_terms_for_row(labor_pm: dict, lp_idx: int, months: list[int]):
     """Сумма человеко/месяцев за указанные месяцы."""
     terms = [

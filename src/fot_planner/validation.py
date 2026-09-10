@@ -115,14 +115,19 @@ def _employment_structure_conflicts(ctx: PlanningContext) -> list[ConflictRecord
     for e in ctx.employees:
         by_person.setdefault(_person_key(e), []).append(e)
     out: list[ConflictRecord] = []
-    for rows in by_person.values():
-        mains = [e for e in rows if e.employment_type != "part_time"]
-        parts = [e for e in rows if e.employment_type == "part_time"]
+    # The model operates by month. Consecutive appointments represent changes
+    # in employment conditions, not simultaneous additional jobs.
+    for rows, month in (
+        (rows, month) for rows in by_person.values() for month in range(1, 13)
+    ):
+        active_rows = [e for e in rows if employee_active_in_month(e, ctx.year, month)]
+        mains = [e for e in active_rows if e.employment_type != "part_time"]
+        parts = [e for e in active_rows if e.employment_type == "part_time"]
         if parts and not mains:
             for e in parts:
                 out.append(ConflictRecord(
                     code="PART_TIME_WITHOUT_MAIN",
-                    message=(f"Сотрудник {e.id}: совместительство без основного места — "
+                    message=(f"Сотрудник {e.id}, месяц {month}: совместительство без основного места — "
                              "у каждого сотрудника должна быть строка основного места"),
                     employee_id=e.id,
                 ))
@@ -130,14 +135,14 @@ def _employment_structure_conflicts(ctx: PlanningContext) -> list[ConflictRecord
             for e in mains[1:]:
                 out.append(ConflictRecord(
                     code="SECOND_MAIN_ROW",
-                    message=f"Сотрудник {e.id}: второе основное место у одного человека",
+                    message=f"Сотрудник {e.id}, месяц {month}: второе основное место у одного человека",
                     employee_id=e.id,
                 ))
         if len(parts) > 2:
             for e in parts[2:]:
                 out.append(ConflictRecord(
                     code="TOO_MANY_PART_TIME",
-                    message=f"Сотрудник {e.id}: третье совместительство — допускается не больше двух",
+                    message=f"Сотрудник {e.id}, месяц {month}: третье совместительство — допускается не больше двух",
                     employee_id=e.id,
                 ))
     return out

@@ -961,7 +961,19 @@ def _load_contract_labor(
         cid = str(r["contract_id"]).strip()
         if not cid:
             continue
-        pm = float(r["person_months"])
+        raw_pm = r.get("person_months") if "person_months" in r.index else None
+        pm = float(raw_pm) if _has_value(raw_pm) else 0.0
+        # План по месяцам: графы «Январь» … «Декабрь». Заданы — они и есть
+        # план, годовая трудоёмкость равна их сумме.
+        monthly: dict[int, float] = {}
+        for m in range(1, 13):
+            col = f"m{m}"
+            if col in r.index and _has_value(r.get(col)):
+                v = float(r[col])
+                if v > 0:
+                    monthly[m] = v
+        if monthly:
+            pm = sum(monthly.values())
         if pm <= 0:
             continue
         position = _clean_optional_text(r.get("position"))
@@ -1005,6 +1017,7 @@ def _load_contract_labor(
                 position_level=level,
                 avg_monthly_labor_cost=avg_cost,
                 headcount=headcount if headcount and headcount > 0 else None,
+                monthly=monthly or None,
             )
         )
     return rows

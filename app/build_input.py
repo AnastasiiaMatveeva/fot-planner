@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import openpyxl
 
 
@@ -217,16 +219,72 @@ def _put(ws, values):
     ws.append(row)
 
 
-def fill_labor(ws, rows, warn):
-    """Лист «трудоемкость_по_договорам» — план в чел.-мес. и стоимость."""
+#: Графы плана по месяцам на листе трудоёмкости — по именам месяцев.
+MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль",
+               "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
+
+
+def _pay_window(contract, year):
+    """Месяцы года, в которых договор может платить: срок действия, а если
+    задан предел выплат оклада — не позже его месяца."""
+    months = _months_of(contract, year)
+    parts = str(contract.salary_deadline or "").split(".")
+    try:
+        d_month, d_year = int(parts[1]), int(parts[2])
+    except (ValueError, IndexError):
+        return months
+    if year and d_year < year:
+        return []
+    if year and d_year > year:
+        return months
+    return [m for m in months if m <= d_month]
+
+
+def fill_labor(ws, rows, warn, contracts=None, year=None):
+    """Лист «трудоемкость_по_договорам» — план в чел.-мес. и стоимость.
+
+    Этап РКМ, разложенный по месяцам поровну, может заходить за предел
+    выплат договора (этап до 31.12, выплаты до 31.10). Работу, которую
+    договор уже не оплатит, планировать нельзя — эти чел.-мес. переносятся
+    поровну в месяцы окна выплат. Иначе на каждый месяц окна приходилась
+    норма 0,8 человека, а решатель ставил людей на полную ставку и закрывал
+    строку на нижней границе допуска: 15,2 из 16 при двух людях на 8 месяцев.
+    """
     if not rows:
         return
+    windows = {c.code: _pay_window(c, year) for c in (contracts or [])}
     _clear(ws)
     # Графа числа людей появилась позже шаблона приложения — дописываем
     # справа, загрузчик решателя читает лист по заголовкам.
     if _col(ws, "количество человек") is None:
         ws.cell(1, ws.max_column + 1).value = "количество человек"
+    # План по месяцам — графами «Январь» … «Декабрь», тоже по именам.
+    for name in MONTH_NAMES:
+        if _col(ws, name) is None:
+            ws.cell(1, ws.max_column + 1).value = name
     for r in rows:
+        months = {}
+        raw = getattr(r, "months", None)
+        if raw:
+            try:
+                months = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            except ValueError:
+                months = {}
+        months = {int(k): float(v) for k, v in months.items() if v}
+        window = windows.get(r.contract_code)
+        late = {m: v for m, v in months.items() if window is not None and m not in window}
+        if late:
+            keep = {m: v for m, v in months.items() if m not in late}
+            cells = sorted(keep) or sorted(window)
+            if cells:
+                extra = sum(late.values()) / len(cells)
+                months = {m: round(keep.get(m, 0.0) + extra, 4) for m in cells}
+                warn.append("Трудоёмкость %s / %s: %.2f чел.-мес. приходились на месяцы "
+                            "после предела выплат договора (%s) и перенесены в месяцы "
+                            "выплат — по %.2f в месяц."
+                            % (r.contract_code, r.position or "", sum(late.values()),
+                               ", ".join(MONTH_NAMES[m - 1].lower() for m in sorted(late)),
+                               months[cells[0]]))
         _put(ws, [
             (("договор", "проект"), r.contract_code),
             (("год",), r.year),
@@ -238,7 +296,7 @@ def fill_labor(ws, rows, warn):
             (("средняя стоимость выполнения работ в месяц", "средняя зарплата",
               "стоимость 1 чел-мес", "стоимость чел мес"), r.avg_cost),
             (("количество человек", "кол-во человек"), getattr(r, "headcount", None)),
-        ])
+        ] + [((MONTH_NAMES[m - 1].lower(),), months.get(m)) for m in range(1, 13)])
 
 
 def fill_secret(ws, rows, warn):
@@ -291,7 +349,8 @@ def build(template_path, out_path, data, warn):
     fill_inflows(wb["фот_по_месяцам"], data.get("inflows") or [],
                  data.get("contracts") or [], warn, data.get("year"))
     if "трудоемкость_по_договорам" in wb.sheetnames:
-        fill_labor(wb["трудоемкость_по_договорам"], data.get("labor") or [], warn)
+        fill_labor(wb["трудоемкость_по_договорам"], data.get("labor") or [], warn,
+                   data.get("contracts") or [], data.get("year"))
     if "120_надбавка" in wb.sheetnames:
         fill_secret(wb["120_надбавка"], data.get("secret") or [], warn)
     fill_substitutions(wb, data.get("substitutions") or [])

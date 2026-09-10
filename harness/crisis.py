@@ -34,10 +34,12 @@ from fot_planner.excel.load import load_context  # noqa: E402
 from fot_planner.models import PaymentKind as K  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATE = ROOT / "app" / "data" / "results" / "case20_input.xlsx"
+TEMPLATE = ROOT / "harness" / "crisis_template.xlsx"
 WORK = ROOT / "harness" / "_crisis"
 YEAR = 2026
 EPS = 1.0  # рубль
+MONTH_NAMES = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль",
+               "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
 
 # Справочник (лист лимиты_по_должностям демо): оклад, П2556, П4 на ставку
 REF = {
@@ -101,8 +103,17 @@ def build(name, employees, contracts, inflow, *, labor=(), secret=(), manual=(),
     for code, v in inflow.items():
         row = v if isinstance(v, (list, tuple)) else [v] * 12
         wb["фот_по_месяцам"].append([code] + list(row))
-    for code, pm, position, avg, heads in labor:
-        wb["трудоемкость_по_договорам"].append([code, YEAR, pm, position, None, None, None, avg, heads])
+    # Шестой элемент строки трудоёмкости — план по месяцам {месяц: чел.-мес.}.
+    ws_l = wb["трудоемкость_по_договорам"]
+    if any(len(row) > 5 for row in labor):
+        for name in MONTH_NAMES:
+            ws_l.cell(1, ws_l.max_column + 1).value = name
+    for row in labor:
+        code, pm, position, avg, heads = row[:5]
+        line = [code, YEAR, pm, position, None, None, None, avg, heads]
+        if len(row) > 5:
+            line += [row[5].get(m) for m in range(1, 13)]
+        ws_l.append(line)
     for e_id, c_id, rate in secret:
         wb["120_надбавка"].append([e_id, c_id, rate])
     for e_id, c_id, m1, m2, kind, fixed in manual:
@@ -830,6 +841,24 @@ def c28(limit):
         n = sum(1 for (e, c, mm, k) in p.pay if mm == m and k is K.ORDER_INCENTIVE)
         expect(n <= 1, f"м{m}: приказов {n}", out)
         expect(p.total("E1", m, {K.ORDER_INCENTIVE}) <= 110000 + EPS, f"м{m}: приказ выше П2556", out)
+    return p, out
+
+
+@case("31", "Трудоёмкость по месяцам: этап июнь–сентябрь закрывается по 1,0 в своих месяцах и никогда вне их")
+def c31(limit):
+    path = build("c31", [emp("E1", "Инженер", 100000)],
+                 [ctr("C_A", 1200000, order="да"), ctr("C_B", 500000, order="да")],
+                 {"C_A": 100000, "C_B": 100000},
+                 labor=[("C_B", 4, "Инженер", 100000, 1, {6: 1.0, 7: 1.0, 8: 1.0, 9: 1.0})])
+    ctx, res = solve(path, limit)
+    p, out = Plan(ctx, res), []
+    expect(p.status == "OPTIMAL", f"статус {p.status}", out)
+    for m in range(1, 13):
+        got = p.pm.get(("E1", "C_B", m), 0.0)
+        if 6 <= m <= 9:
+            expect(abs(got - 1.0) < 0.05, f"м{m}: закрыто {got:.2f} ≠ 1,0", out)
+        else:
+            expect(got < 1e-6, f"м{m}: {got:.2f} чел.-мес. вне этапа", out)
     return p, out
 
 

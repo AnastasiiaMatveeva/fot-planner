@@ -156,10 +156,20 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
                 ctx, employee, contract, kind, first_month, last_month
             )
             row = {header: "" for header in STAFF_DETAIL_HEADERS}
+            # Должность в форме кадров — с видом занятости и ставкой:
+            # «Инженер, 1 ставк.», «Инженер, внутр. совмест., 0,25 ставк.».
+            rate_text = ("%g" % rate).replace(".", ",")
+            position_text = "%s, %s%s ставк." % (
+                assigned_position, "" if is_main else "внутр. совмест., ", rate_text)
             row.update(
                 {
+                    "Таб.№": employee.id,
                     "Фамилия И.О., уч. ст., уч. зван.": employee.full_name,
-                    "Должность": assigned_position,
+                    "Подразделение": employee.department or "",
+                    "Должность": position_text,
+                    "Код\nшифра\nзатрат": contract.id,
+                    "Шифр \nзатрат": contract.name or "",
+                    "Лицевой \nсчет": contract.account or "",
                     "Категория\nперсонала": personnel_categories.get(
                         normalize_position(assigned_position)
                     )

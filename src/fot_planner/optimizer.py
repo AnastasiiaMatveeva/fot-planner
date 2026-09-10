@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 from collections import defaultdict
 
@@ -22,6 +24,7 @@ from fot_planner.labor_rules import (
     labor_average_balance_gap,
     labor_payment_terms_for_row,
     labor_pm_terms_for_row,
+    labor_row_allows_month,
     planned_labor_amount,
 )
 from fot_planner.payment_split import (
@@ -84,7 +87,11 @@ UNIFORM_SPEND_TOLERANCE_RATIO = 0.01
 # Минимальная длительность блока оклада на одном договоре (между сменами — не меньше N месяцев).
 MIN_SALARY_BLOCK_MONTHS = 3
 DEFICIT_TOTAL_TOLERANCE = 1.0
-LABOR_CLOSE_TIEBREAK = 0.01
+#: Цена недобора по строке РКМ внутри допуска. Была 0,01 — «решить ничью в
+#: пользу полного закрытия»; при такой цене строка спокойно закрывалась на
+#: нижней границе допуска (15,2 из 16). Экономисту нужно ровное закрытие,
+#: поэтому недобор стоит столько же, сколько отклонение сверх допуска.
+LABOR_CLOSE_TIEBREAK = 1.0
 LEX_STAGE_TOLERANCE = 1.0   # рубль: стадии считаются в рублях и усл. ед., а нулевую стадию с допуском 0,01 MIP не удерживал
 MIP_REL_GAP = 0.005
 
@@ -348,6 +355,15 @@ def _status_name(results) -> str:
         TerminationCondition.other,
     ) and status in (SolverStatus.ok, SolverStatus.warning):
         return "FEASIBLE"
+    # Лимит времени: appsi отдаёт статус «aborted», хотя допустимый план у
+    # HiGHS может быть. Признак — конечная верхняя граница целевой функции.
+    if term == TerminationCondition.maxTimeLimit:
+        try:
+            ub = float(results.problem.upper_bound)
+            if ub == ub and abs(ub) != float("inf"):
+                return "FEASIBLE"
+        except (AttributeError, TypeError, ValueError):
+            pass
     return "NOT_SOLVED"
 
 
@@ -558,6 +574,7 @@ def _expr_labor_deviations(
     labor_plan_amount: dict[int, float],
     labor_soft_indices: set[int],
     weight: float,
+    labor_month_dev_keys=(),
 ):
     if weight <= 0:
         return None
@@ -577,6 +594,9 @@ def _expr_labor_deviations(
         if k in labor_soft_indices:
             scale = max(labor_plan_amount.get(k, 0.0), 1.0)
             terms.append(weight * model.labor_balance_dev[k] / scale)
+    for k in labor_month_dev_keys:
+        if k[0] in labor_soft_indices:
+            terms.append(weight * model.labor_month_dev[k])
     return _sum_terms(terms) if terms else None
 
 
@@ -618,6 +638,7 @@ def _run_minimize_stage(
     *,
     tolerance: float = LEX_STAGE_TOLERANCE,
     label: str = "",
+    integer_objective: bool = False,
 ) -> tuple[str, float, float | None]:
     """Минимизировать expr, зафиксировать результат ограничением expr <= best + tolerance."""
     if expr is None:
@@ -625,41 +646,99 @@ def _run_minimize_stage(
     if hasattr(model, "lex_stage_obj"):
         model.del_component("lex_stage_obj")
     model.lex_stage_obj = pyo.Objective(expr=expr, sense=pyo.minimize)
+    model.__dict__["_integer_stage"] = integer_objective
     # Фиксации прежних стадий: (ограничение, выражение, значение, допуск).
     # Если стадия вдруг неразрешима — а модель с теми же ограничениями только
     # что решалась, — виновата погрешность фиксации; ослабляем последнюю
     # в десять раз и пробуем ещё раз.
     fixes = model.__dict__.setdefault("_lex_fixes", [])
     elapsed = 0.0
+    # Цели стадий — суммы неотрицательных штрафов и отклонений, ноль — их
+    # нижняя грань. Если на решении предыдущей стадии цель уже ноль,
+    # решать нечего: фиксируем ноль и идём дальше. Две стадии П4 с нулевой
+    # целью тратили по 127 с на полный перебор (09.09.2026).
+    if fixes and not integer_objective:
+        try:
+            current = _value(expr)
+        except Exception:  # noqa: BLE001 — переменная без значения: решаем как обычно
+            current = None
+        if current is not None and current <= max(tolerance, 1e-6):
+            print("[стадия] %s: уже 0 на текущем решении, без решателя" % (label or "?"),
+                  file=sys.stderr)
+            model.lex_stage_obj.deactivate()
+            fixes.append((model.cons.add(expr <= tolerance), expr, 0.0, tolerance))
+            return "OPTIMAL", 0.0, 0.0
     for attempt in range(3):
         _, status_name, dt = _run_solver(model, time_limit_sec)
         elapsed += dt
         if status_name in ("OPTIMAL", "FEASIBLE"):
             break
-        if status_name == "INFEASIBLE" and fixes and attempt < 2:
+        if status_name == "INFEASIBLE" and fixes and fixes[-1][3] > 0 and attempt < 2:
             con, fexpr, fbest, ftol = fixes[-1]
             con.deactivate()
             ftol *= 10
             fixes[-1] = (model.cons.add(fexpr <= fbest + ftol), fexpr, fbest, ftol)
             continue
         model.lex_stage_obj.deactivate()
+        print("[стадия] %s: %s, %.0f с" % (label or "?", status_name, elapsed), file=sys.stderr)
         return status_name, elapsed, None
     best = _value(expr)
+    print("[стадия] %s: %s, %.0f с, значение %.2f" % (label or "?", status_name, elapsed, best),
+          file=sys.stderr)
     model.lex_stage_obj.deactivate()
     # Допуск относительный: значения стадий — сотни тысяч рублей, а у MIP
     # есть собственная погрешность целочисленности. С абсолютным 0,01
     # следующая стадия иногда получала неразрешимую модель на ровном месте.
-    tol = max(tolerance, abs(best) * 1e-4)
+    tol = 0.0 if integer_objective else max(tolerance, abs(best) * 1e-4)
+    if integer_objective:
+        best = round(best)
     fixes.append((model.cons.add(expr <= best + tol), expr, best, tol))
     return status_name, elapsed, best
 
 
 def _run_solver(model, time_limit_sec: int):
     t0 = time.perf_counter()
-    solver = _create_solver(time_limit_sec)
+    # Один решатель на всю модель: appsi переводит модель в HiGHS один раз, а
+    # дальше передаёт только изменения — новую цель и фиксации стадий.
+    # Новый решатель на каждой стадии переводил модель заново, и на демо из
+    # восьми человек тривиальная стадия занимала минуты (09.09: 33 минуты
+    # на девять стадий вместо нескольких).
+    solver = model.__dict__.get("_lex_solver")
+    if solver is None:
+        solver = _create_solver(time_limit_sec)
+        model.__dict__["_lex_solver"] = solver
+        # Между стадиями меняются только цель и фиксации (новые или снятые
+        # ограничения); переменные, параметры и выражения старых ограничений
+        # неизменны. Проверять их заново на каждой стадии — это и есть
+        # минуты на стадию с нулевой целью.
+        if os.environ.get("FOT_APPSI_FAST", "0") == "1" and hasattr(solver, "update_config"):
+            uc = solver.update_config
+            uc.check_for_new_or_removed_constraints = True
+            uc.check_for_new_or_removed_vars = False
+            uc.check_for_new_or_removed_params = False
+            uc.check_for_new_objective = True
+            uc.update_constraints = False
+            uc.update_vars = False
+            uc.update_params = False
+            uc.update_named_expressions = False
+            uc.update_objective = False
+    if hasattr(solver, "config") and hasattr(solver.config, "time_limit"):
+        solver.config.time_limit = time_limit_sec
     if hasattr(solver, "config") and hasattr(solver.config, "load_solution"):
         solver.config.load_solution = False
-    results = solver.solve(model, load_solutions=False)
+    # Для количества договоров доказываем целочисленный минимум без зазора.
+    if hasattr(solver, "highs_options"):
+        solver.highs_options["mip_rel_gap"] = 0.0 if model.__dict__.get("_integer_stage") else MIP_REL_GAP
+    # Обёртка Pyomo (LegacySolverInterface.solve) на каждом вызове пишет в
+    # config.time_limit свой аргумент timelimit — по умолчанию None. Поэтому
+    # выставленный выше config.time_limit не действовал, и стадия с лимитом
+    # 120 с шла 230 с (09.09.2026). Лимит передаём аргументом.
+    # Тёплый старт: решение предыдущей стадии — допустимый план для
+    # следующей (фиксации только сужают область), и HiGHS начинает с него,
+    # а не ищет допустимый план заново.
+    warm = bool(model.__dict__.get("_lex_warm"))
+    results = solver.solve(model, load_solutions=False, timelimit=time_limit_sec,
+                           warmstart=warm)
     status_name = _status_name(results)
     if status_name in ("OPTIMAL", "FEASIBLE"):
         if hasattr(results, "solution_loader") and results.solution_loader is not None:
@@ -667,6 +746,7 @@ def _run_solver(model, time_limit_sec: int):
         elif hasattr(solver, "config") and hasattr(solver.config, "load_solution"):
             solver.config.load_solution = True
             solver.load_vars()
+        model.__dict__["_lex_warm"] = True
     return results, status_name, time.perf_counter() - t0
 
 
@@ -868,12 +948,22 @@ def solve(
                     continue
                 if not contract_allows_month(c, year, m):
                     continue
+                # План по месяцам: вне месяцев этапа строку закрывать нельзя.
+                if not labor_row_allows_month(lp, m):
+                    continue
                 if not employee_compatible_with_labor_row(e, lp):
                     continue
+                pay_kinds = [kind for kind in LABOR_PAYMENT_KINDS
+                             if (e.id, c_id, m, kind) in alloc_key_set]
+                # Договор человеку не разрешён (графы «разрешенные» и
+                # «запрещенные договоры») — выплат с него нет, значит нет и
+                # человеко-месяцев. Без этого переменная оставалась свободной,
+                # и строку РКМ «закрывал» тот, кого на договоре нет.
+                if not pay_kinds:
+                    continue
                 labor_pm_keys.append((e.id, c_id, m, lp_idx))
-                for kind in LABOR_PAYMENT_KINDS:
-                    if (e.id, c_id, m, kind) in alloc_key_set:
-                        labor_payment_keys.append((e.id, c_id, m, kind, lp_idx))
+                for kind in pay_kinds:
+                    labor_payment_keys.append((e.id, c_id, m, kind, lp_idx))
 
     labor_pm_key_set = set(labor_pm_keys)
     labor_payment_key_set = set(labor_payment_keys)
@@ -882,6 +972,16 @@ def solve(
     labor_dev_keys = list(labor_row_indices)
     labor_amount_dev_keys = list(labor_dev_keys)
     labor_balance_dev_keys = list(labor_dev_keys)
+    # План по месяцам: отклонение считается и в каждом месяце — иначе 4
+    # чел.-мес. на июнь–сентябрь закрылись бы как 2+2+0+0.
+    labor_month_dev_keys = [
+        (lp_idx, m)
+        for lp_idx in labor_row_indices
+        if ctx.labor_plans[lp_idx].monthly
+        for m in months
+        if ctx.labor_plans[lp_idx].monthly.get(m, 0.0) > 0
+    ]
+    labor_month_dev_key_set = set(labor_month_dev_keys)
     labor_employee_balance_keys = [
         key
         for key in labor_pm_keys
@@ -991,6 +1091,10 @@ def solve(
         )
     model.labor_dev = pyo.Var(labor_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M))
     model.labor_gap = pyo.Var(labor_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M))
+    if labor_month_dev_keys:
+        model.labor_month_dev = pyo.Var(
+            labor_month_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
+        )
     if labor_amount_dev_keys:
         model.labor_amount_dev = pyo.Var(
             labor_amount_dev_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
@@ -1157,6 +1261,11 @@ def solve(
         elif _must_use_pair(ctx.manual_assignments, e_id, c_id, m, kind):
             model.cons.add(uses[key] == 1)
 
+    # У кого из людей есть строка, которая может быть основным местом.
+    persons_with_main_row = {
+        _employee_person_key(x) for x in ctx.employees
+        if getattr(x, "employment_type", None) != "part_time"
+    }
     if open_rate_keys:
         for key in open_rate_keys:
             e_id, c_id, m = key
@@ -1175,12 +1284,15 @@ def solve(
             if not c.allow_part_time:
                 model.cons.add(q <= MAIN_QUARTERS_MAX * w)
             if e.employment_type == "part_time":
-                # Совместитель тоже занимает основное место: работа по
-                # совместительству — это его трудовой договор здесь, просто
-                # ставка не больше половины. Запрет основного оставлял
-                # человека в плане с одним совместительством и без ставки,
-                # к которой привязан оклад.
-                model.cons.add(q <= PART_QUARTERS_MAX * w + PART_QUARTERS_MAX * (1 - w))
+                # Строка совместительства не становится основным местом —
+                # но только если основное у человека есть в другой строке.
+                # Безусловный запрет делал модель неразрешимой там, где все
+                # строки человека помечены совместительством: правило «у
+                # получающего оклад ровно одно основное место» тогда не
+                # выполнить (кризис-стенд, случаи 09 и 26).
+                if _employee_person_key(e) in persons_with_main_row:
+                    model.cons.add(w == 0)
+                model.cons.add(q <= PART_QUARTERS_MAX)
 
             # Бизнес-правило: открытая ставка на договоре подразумевает оклад с этого договора.
             if employee_monthly_payment_due(e) > 0:
@@ -1318,11 +1430,22 @@ def solve(
                 for kind in LABOR_PAYMENT_KINDS
                 if (e_id, c_id, m, kind) in uses
             ]
-            if not pay_uses:
-                continue
             payment_pm_linked.add(link_key)
+            if not pay_uses:
+                # Договор человеку не разрешён — выплат с него нет вовсе.
+                # Раньше такая пара просто пропускалась, и человеко-месяцы
+                # оставались свободной переменной: строку РКМ «закрывал» тот,
+                # кого на договоре нет (Орлов, 0,4 чел.-мес. и 0 ₽).
+                model.cons.add(_sum_terms(pm_on_contract) == 0)
+                continue
             pay_sum = _sum_terms(pay_uses)
             if link_key in open_rate_key_set:
+                # Чел.-мес. строк договора не больше открытой на нём ставки.
+                # Жёсткое равенство («ставка вся уходит в строки») закрывало
+                # строки ровно, но делало модель неразрешимой там, где строка
+                # уже занята по числу специалистов: кризис-стенд ловил это
+                # случаями 09 и 26. Полноту закрытия обеспечивает не запрет, а
+                # цена недобора — вес LABOR_CLOSE_TIEBREAK в целевой функции.
                 model.cons.add(
                     _sum_terms(pm_on_contract)
                     <= OPEN_RATE_STEP * open_rate_q[link_key]
@@ -1527,12 +1650,14 @@ def solve(
     # Договор без подразделения под правило не попадает.
     if open_rate_keys:
         for e in ctx.employees:
-            e_dep = (e.department or "").strip().lower()
-            if not e_dep:
-                continue
+            primary_rows = [
+                row for row in employees_by_person[_employee_person_key(e)]
+                if row.employment_type != "part_time"
+                and normalize_position(row.position) == normalize_position(e.position)
+            ]
             for c in ctx.contracts:
                 c_dep = (getattr(c, "department", "") or "").strip().lower()
-                if not c_dep or c_dep != e_dep:
+                if not c_dep:
                     continue
                 # Под какие строки РКМ этого договора человек вообще подходит
                 # и есть ли среди них чужая должность. Если чужой нет, вторая
@@ -1553,6 +1678,14 @@ def solve(
                 for m in months:
                     key = (e.id, c.id, m)
                     if key not in open_rate_key_set:
+                        continue
+                    # Compare with the person's active PRIMARY appointment,
+                    # not with the department written on their part-time row.
+                    if not any(
+                        (row.department or "").strip().lower() == c_dep
+                        and employee_active_in_month(row, year, m)
+                        for row in primary_rows
+                    ):
                         continue
                     if own_only:
                         # Своя должность (или РКМ нет вовсе) — ставка на этом
@@ -1680,6 +1813,17 @@ def solve(
             model.cons.add(model.labor_dev[lp_idx] >= pm_expr - pm_high)
             model.cons.add(model.labor_dev[lp_idx] >= pm_low - pm_expr)
             model.cons.add(model.labor_gap[lp_idx] >= plan_pm - pm_expr)
+        if pm_expr is not None and lp.monthly:
+            for m in months:
+                key = (lp_idx, m)
+                if key not in labor_month_dev_key_set:
+                    continue
+                plan_m = lp.monthly.get(m, 0.0)
+                month_expr = labor_pm_terms_for_row(labor_pm, lp_idx, [m])
+                if month_expr is None:
+                    continue
+                model.cons.add(model.labor_month_dev[key] >= month_expr - (1.0 + tol) * plan_m)
+                model.cons.add(model.labor_month_dev[key] >= (1.0 - tol) * plan_m - month_expr)
         if amount_expr is not None and lp_idx in labor_amount_dev_keys and plan_amount > 0:
             amt_low = (1.0 - tol) * plan_amount
             amt_high = (1.0 + tol) * plan_amount
@@ -1710,7 +1854,11 @@ def solve(
     solve_time = 0.0
     status_name = "NOT_SOLVED"
     last_objective_value = 0.0
-    per_stage_limit = max(20, time_limit_sec // 8)
+    # Лимит — на стадию, как и написано в справке CLI («--time-limit»).
+    # Раньше делился на восемь, но до 09.09.2026 обёртка Pyomo его вовсе не
+    # передавала в HiGHS; когда лимит заработал, 20 с на стадию давали
+    # заведомо плохой план (стадия обрывалась до оптимума и фиксировалась).
+    per_stage_limit = max(20, time_limit_sec)
 
     def _solver_failed(stage_label: str) -> PlanningResult:
         return PlanningResult(
@@ -1741,6 +1889,7 @@ def solve(
             deficit_total_expr,
             per_stage_limit,
             tolerance=DEFICIT_TOTAL_TOLERANCE,
+            label="сумма дефицита",
         )
         solve_time += elapsed
         if stage_obj is not None:
@@ -1753,6 +1902,7 @@ def solve(
             early_expr,
             per_stage_limit,
             tolerance=DEFICIT_TOTAL_TOLERANCE,
+            label="ранний дефицит",
         )
         solve_time += elapsed
         if stage_obj is not None:
@@ -1769,6 +1919,7 @@ def solve(
         labor_plan_amount=labor_plan_amount,
         labor_soft_indices=labor_soft_indices,
         weight=w.labor_deviation,
+        labor_month_dev_keys=labor_month_dev_keys,
     )
     if labor_part is not None:
         soft_stage_exprs.append((labor_part, "отклонения трудоёмкости"))
@@ -1826,7 +1977,8 @@ def solve(
     # здесь и финансистом не обсуждается.
     stage_values: dict[str, float] = {}
     for stage_no, (expr, stage_label) in enumerate(soft_stage_exprs, start=1):
-        status_name, elapsed, stage_obj = _run_minimize_stage(model, expr, per_stage_limit)
+        status_name, elapsed, stage_obj = _run_minimize_stage(
+            model, expr, per_stage_limit, label=stage_label)
         solve_time += elapsed
         if stage_obj is not None:
             last_objective_value = stage_obj
@@ -1852,7 +2004,7 @@ def solve(
     weighted = [t["weighted"] for t in taste if t["weighted"] is not None]
     if weighted:
         status_name, elapsed, stage_obj = _run_minimize_stage(
-            model, _sum_terms(weighted), per_stage_limit
+            model, _sum_terms(weighted), per_stage_limit, label="взвешенные цели"
         )
         solve_time += elapsed
         if stage_obj is not None:
