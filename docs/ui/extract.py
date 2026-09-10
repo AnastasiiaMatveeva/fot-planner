@@ -41,7 +41,8 @@ def extract(path):
     wb = openpyxl.load_workbook(path, data_only=True)
     log, questions = [], []
     passport = {"employees": [], "contracts": [], "inflow": {}, "labor": [],
-                "settings": {}, "source": path.split("\\")[-1].split("/")[-1]}
+                "secret": [], "settings": {},
+                "source": path.split("\\")[-1].split("/")[-1]}
     recognized = 0
 
     for ws in wb.worksheets:
@@ -61,6 +62,7 @@ def extract(path):
             "fot_detail": _read_fot_detail,
             "form9": _read_form9,
             "labor": _read_labor,
+            "secret": _read_secret,
         }[kind]
         handler(ws, passport, log, questions)
 
@@ -84,7 +86,9 @@ def _classify(ws):
         return "settings"
     if t in ("трудоемкость_по_договорам", "трудоёмкость_по_договорам"):
         return "labor"
-    if t in ("запуск", "лимиты_по_должностям", "120_надбавка",
+    if t in ("120_надбавка", "надбавка 120", "120 надбавка"):
+        return "secret"
+    if t in ("запуск", "лимиты_по_должностям",
              "фиксация_фот_по_месяцам",
              "минимальные_остатки", "ручные_назначения", "ручные_запреты"):
         return "skip"
@@ -127,6 +131,10 @@ def _read_employees(ws, p, log, q):
             "department": text("подразделение"),
             "employment_type": text("тип занятости"),
             "employment_category": text("категория занятости"),
+            # Ограничения по договорам — графы шаблона: без них человек,
+            # которому на ГОЗ нельзя, в расчёте туда попадёт.
+            "allowed": text("разрешенные договоры") or text("разрешённые договоры"),
+            "forbidden": text("запрещенные договоры") or text("запрещённые договоры"),
         })
         n += 1
     log.append(f"Лист «сотрудники»: шаблон fot-planner, извлечено строк: {n}")
@@ -177,6 +185,37 @@ def _read_contracts(ws, p, log, q):
         })
         n += 1
     log.append(f"Лист «договоры»: шаблон fot-planner, извлечено договоров: {n}")
+
+
+def _read_secret(ws, p, log, q):
+    """Лист «120_надбавка»: сотрудник, договор секретности, ставка 120.
+
+    Надбавка за гостайну — надбавка сотрудника, а не договора: пока действует
+    договор секретности, она обязательна и считается процентом от оклада.
+    Графы те же, что во входном файле решателя; строка без сотрудника или
+    без договора пропускается — половина записи в реестре хуже её отсутствия.
+    """
+    hdr = {str(ws.cell(1, c).value or "").strip().lower(): c
+           for c in range(1, ws.max_column + 1)}
+    if "сотрудник" not in hdr or "договор секретности" not in hdr:
+        log.append(f"Лист «{ws.title}»: заголовки не совпали с шаблоном, пропущен")
+        return
+    n = 0
+    for r in range(2, ws.max_row + 1):
+        who = ws.cell(r, hdr["сотрудник"]).value
+        ctr = ws.cell(r, hdr["договор секретности"]).value
+        if not who or not ctr:
+            continue
+        raw = ws.cell(r, hdr["ставка 120"]).value if "ставка 120" in hdr else None
+        rate = _num(raw)
+        if rate is None:
+            rate = 0.05
+        elif rate > 1:
+            rate = rate / 100.0      # «10 %» и «10» — доля 0,1
+        p["secret"].append({"employee": str(who).strip(), "contract": str(ctr).strip(),
+                            "rate": rate})
+        n += 1
+    log.append(f"Лист «120_надбавка»: надбавок за гостайну: {n}")
 
 
 def _read_inflow(ws, p, log, q):
@@ -262,9 +301,132 @@ def _year_of(text, default=None):
     return int(m.group(1)) if m else default
 
 
-def _add_labor(p, code, year, position, cm, cost, headcount, where):
+MONTH_NAMES = ["январь", "февраль", "март", "апрель", "май", "июнь", "июль",
+               "август", "сентябрь", "октябрь", "ноябрь", "декабрь"]
+
+
+def _date_of(v):
+    """Дата из ячейки: datetime, строка «01.06.2026» или порядковый номер Excel."""
+    import datetime as _dt
+
+    if v is None or v == "":
+        return None
+    if isinstance(v, _dt.datetime):
+        return v.date()
+    if isinstance(v, _dt.date):
+        return v
+    s = str(v).strip()
+    try:
+        n = float(s)
+        if 1 <= n <= 80000:
+            return _dt.date(1899, 12, 30) + _dt.timedelta(days=int(n))
+    except ValueError:
+        pass
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d.%m.%y"):
+        try:
+            return _dt.datetime.strptime(s[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _stage_months(cm, date_from, date_to, year):
+    """Чел.-мес. этапа — поровну по его месяцам, только месяцы этого года.
+
+    «4 чел.-мес. с 01.06 по 30.09» — по 1,0 в июне, июле, августе и сентябре.
+    Без дат — None: строка годовая, закрывается в любом месяце договора.
+    """
+    d1, d2 = _date_of(date_from), _date_of(date_to)
+    if not d1 or not d2 or d2 < d1:
+        return None
+    span = [(y, m) for y in range(d1.year, d2.year + 1) for m in range(1, 13)
+            if (d1.year, d1.month) <= (y, m) <= (d2.year, d2.month)]
+    each = cm / len(span)
+    year = year or d1.year
+    out = {str(m): round(each, 4) for y, m in span if y == year}
+    return out or None
+
+
+def _stage_month_count(date_from, date_to):
+    d1, d2 = _date_of(date_from), _date_of(date_to)
+    if not d1 or not d2 or d2 < d1:
+        return None
+    return (d2.year - d1.year) * 12 + d2.month - d1.month + 1
+
+
+def _working_hour_norms(ws):
+    """Норматив среднемесячных часов прямо из примечания формы.
+
+    В используемой форме он написан в шапке: «в 2026 г. — 164,25».
+    Берём норматив из документа, а не зашиваем календарь в программу.
+    """
+    text = " ".join(str(ws.cell(r, c).value or "")
+                    for r in range(1, min(6, ws.max_row) + 1)
+                    for c in range(1, ws.max_column + 1))
+    # Буква «г» обязательна: иначе дата вроде 30.06.2026 принимается за
+    # норматив 30,06 часа и незаметно искажает пересчёт человеко-часов.
+    found = re.findall(r"(20\d{2})\s*г\.?\s*[-–—:]?\s*(\d{2,3}(?:[,.]\d+)?)", text,
+                       flags=re.I)
+    return {int(year): float(value.replace(",", ".")) for year, value in found}
+
+
+def _fot_labor_unit(per_person, unit_cost, date_from, date_to, hours_per_month):
+    """Определить, чем заполнена двусмысленная графа «мес ЛИБО час».
+
+    Стоимость 100 000 обычно является месячной, а 600 — часовой: после
+    умножения на норматив обе должны давать правдоподобную месячную стоимость.
+    Длительность этапа служит второй независимой проверкой. Если признаки не
+    дают единственного ответа, возвращаем None и просим человека уточнить.
+    """
+    cost = _num(unit_cost)
+    norm = _num(hours_per_month)
+    monthly_ok = cost is not None and 10_000 <= cost <= 1_000_000
+    hourly_ok = (cost is not None and norm is not None
+                 and 10_000 <= cost * norm <= 1_000_000)
+    if monthly_ok != hourly_ok:
+        return "чел.-мес." if monthly_ok else "чел.-ч"
+
+    per = _num(per_person)
+    span = _stage_month_count(date_from, date_to)
+    if per is not None and span is not None and per > span + 0.05:
+        return "чел.-ч" if norm else None
+    return None
+
+
+def _add_labor(p, code, year, position, cm, cost, headcount, where,
+               date_from=None, date_to=None, months=None, stage=None,
+               work_type=None, total_cost=None, labor_per_person=None,
+               cells=None, labor_unit="чел.-мес.", source_total_labor=None,
+               source_unit_cost=None, hours_per_month=None):
     """Строка трудоёмкости паспорта; одинаковые должности одного договора
-    складываются: в «Расшифровке ФОТ» одна должность идёт по этапам."""
+    складываются: в «Расшифровке ФОТ» одна должность идёт по этапам, и у
+    каждого этапа свои месяцы — они складываются в один план по месяцам."""
+    # Расчёту нужна одна помесячная позиция по должности, а проверяющему —
+    # каждая исходная строка формы. Сохраняем обе проекции: агрегат остаётся
+    # входом оптимизатора, details отвечает, что именно прочитано в документе.
+    def text(v):
+        return str(v).strip() if v not in (None, "") else None
+
+    def day(v):
+        d = _date_of(v)
+        return d.strftime("%d.%m.%Y") if d else text(v)
+
+    detail = {"stage": text(stage), "work_type": text(work_type),
+              "position": text(position), "headcount": headcount or None,
+              "labor_unit": labor_unit,
+              "labor_per_person": labor_per_person,
+              "source_total_labor": source_total_labor,
+              "source_unit_cost": source_unit_cost,
+              "hours_per_month": hours_per_month,
+              "person_months": cm, "avg_cost": cost,
+              "total_cost": total_cost, "from": day(date_from),
+              "to": day(date_to), "where": where, "cells": cells}
+    detail = {k: v for k, v in detail.items() if v is not None}
+
+    if months is None:
+        months = _stage_months(cm, date_from, date_to, year)
+    if months:
+        cm = round(sum(months.values()), 4)
     key = (code, year, (position or "").strip().lower())
     for row in p["labor"]:
         if (row["contract"], row["year"], (row["position"] or "").strip().lower()) == key:
@@ -272,10 +434,19 @@ def _add_labor(p, code, year, position, cm, cost, headcount, where):
             row["avg_cost"] = ((row["avg_cost"] or 0) * row["person_months"] + cost * cm) / total
             row["person_months"] = total
             row["headcount"] = max(row["headcount"] or 0, headcount or 0) or None
+            # План по месяцам складывается, только если он есть у обеих строк:
+            # иначе неизвестно, куда положить чел.-мес. этапа без дат.
+            if row.get("months") and months:
+                for m, v in months.items():
+                    row["months"][m] = round(row["months"].get(m, 0.0) + v, 4)
+            else:
+                row["months"] = None
+            row.setdefault("details", []).append(detail)
             return
     p["labor"].append({"contract": code, "year": year, "position": (position or "").strip(),
                        "person_months": cm, "avg_cost": cost,
-                       "headcount": headcount or None, "место": where})
+                       "headcount": headcount or None, "months": months,
+                       "details": [detail], "место": where})
 
 
 def _read_labor(ws, p, log, q):
@@ -296,11 +467,17 @@ def _read_labor(ws, p, log, q):
         if not code or not cm:
             continue
         head_col = hdr.get("количество человек") or hdr.get("кол-во человек")
+        months = {}
+        for m, name in enumerate(MONTH_NAMES, start=1):
+            if name in hdr:
+                v = _num(ws.cell(r, hdr[name]).value)
+                if v:
+                    months[str(m)] = v
         _add_labor(p, str(code), _year_of(ws.cell(r, hdr["год"]).value) if "год" in hdr else None,
                    str(ws.cell(r, hdr["должность"]).value or "") if "должность" in hdr else "",
                    cm, _num(ws.cell(r, cost_col).value) if cost_col else None,
                    _num(ws.cell(r, head_col).value) if head_col else None,
-                   f"лист «{ws.title}», строка {r}")
+                   f"лист «{ws.title}», строка {r}", months=months or None)
         n += 1
     log.append(f"Лист «{ws.title}»: шаблон fot-planner, строк трудоёмкости: {n}")
 
@@ -309,11 +486,14 @@ def _read_fot_detail(ws, p, log, q):
     """«Расшифровка ФОТ»: строки этапов, проверка гр.6×гр.7=гр.8.
 
     Из каждой строки берётся должность, кол-во человек, чел.-мес. и месячная
-    зарплата — это трудоёмкость договора по должностям; этапы одной должности
-    складываются. Год — из дат этапа, если они есть, иначе из шапки.
+    зарплата — это трудоёмкость договора по должностям. Даты этапа (графы
+    «начало» и «окончание») раскладывают его чел.-мес. по месяцам; этапы
+    одной должности складываются в один план по месяцам. Год — из дат этапа,
+    если они есть, иначе из шапки.
     """
-    rows, bad, empty = 0, 0, 0
+    rows, bad, empty, hours_rows = 0, 0, 0, 0
     code = _contract_code(ws, p)
+    hour_norms = _working_hour_norms(ws)
     head_year = _year_of(" ".join(str(ws.cell(r, c).value or "")
                                   for r in range(1, min(6, ws.max_row) + 1)
                                   for c in range(1, min(12, ws.max_column) + 1)))
@@ -321,37 +501,81 @@ def _read_fot_detail(ws, p, log, q):
         if _is_column_numbering(ws, r):
             continue
         pos = ws.cell(r, 4).value
-        cm = _num(ws.cell(r, 7).value)
-        sal = _num(ws.cell(r, 8).value)
+        source_total = _num(ws.cell(r, 7).value)
+        source_cost = _num(ws.cell(r, 8).value)
         tot = _num(ws.cell(r, 9).value)
-        if not pos or cm is None or sal is None or tot is None:
+        if not pos or source_total is None or source_cost is None or tot is None:
             continue
-        if cm <= 0 or sal <= 0:
+        if source_total <= 0 or source_cost <= 0:
             empty += 1
             continue
         if str(pos).strip().lower() in ("должность", "4"):
             continue
+        date_from, date_to = ws.cell(r, 10).value, ws.cell(r, 11).value
+        year = _year_of(date_from) or _year_of(date_to) or head_year
+        norm = hour_norms.get(year)
+        per_person = _num(ws.cell(r, 6).value)
+        unit = _fot_labor_unit(per_person, source_cost, date_from, date_to, norm)
+        if unit is None:
+            q.append({
+                "field": f"Единица трудоёмкости строки «{pos}» (строка листа {r})",
+                "raw": f"{_fmt(source_total)}; заголовок формы допускает месяцы или часы",
+                "why": "Без единицы одно и то же число меняет загрузку сотрудника в сотни раз.",
+                "options": ["Это человеко-месяцы", "Это человеко-часы"],
+            })
+            continue
+        if unit == "чел.-ч" and not norm:
+            q.append({
+                "field": f"Норматив рабочих часов за {year or 'год'}",
+                "raw": f"{_fmt(source_total)} чел.-ч",
+                "why": "Для перевода человеко-часов в человеко-месяцы нужен норматив года.",
+                "options": ["Указать среднемесячные рабочие часы"],
+            })
+            continue
+
         rows += 1
-        calc = cm * sal
+        cm = source_total
+        sal = source_cost
+        if unit == "чел.-ч":
+            hours_rows += 1
+            cm = source_total / norm
+            sal = source_cost * norm
+        calc = source_total * source_cost
         if abs(calc - tot) > 1:
             bad += 1
             q.append({
                 "field": f"Строка «{pos}» (строка листа {r})",
-                "raw": f"{_fmt(cm)} чел.-мес по {_fmt(sal)} ₽, итог {_fmt(tot)} ₽",
-                "why": (f"Соотношение формы: {_fmt(cm)} × {_fmt(sal)} = {_fmt(calc)} ₽, "
+                "raw": f"{_fmt(source_total)} {unit} по {_fmt(source_cost)} ₽, итог {_fmt(tot)} ₽",
+                "why": (f"Соотношение формы: {_fmt(source_total)} × {_fmt(source_cost)} = {_fmt(calc)} ₽, "
                         f"а в итоге строки {_fmt(tot)} ₽."),
                 "options": [f"Принять расчётное {_fmt(calc)} ₽",
                             f"Оставить из документа {_fmt(tot)} ₽"],
             })
-        year = _year_of(ws.cell(r, 10).value) or _year_of(ws.cell(r, 11).value) or head_year
         _add_labor(p, code, year, str(pos), cm, sal, _num(ws.cell(r, 5).value),
-                   f"лист «{ws.title}», строка {r}")
+                   f"лист «{ws.title}», строка {r}",
+                   date_from=date_from, date_to=date_to,
+                   stage=ws.cell(r, 2).value, work_type=ws.cell(r, 3).value,
+                   total_cost=tot, labor_per_person=per_person,
+                   labor_unit=unit, source_total_labor=source_total,
+                   source_unit_cost=source_cost,
+                   hours_per_month=norm if unit == "чел.-ч" else None,
+                   cells={"stage": f"{ws.title}!B{r}",
+                          "work_type": f"{ws.title}!C{r}",
+                          "position": f"{ws.title}!D{r}",
+                          "headcount": f"{ws.title}!E{r}",
+                          "labor_per_person": f"{ws.title}!F{r}",
+                          "person_months": f"{ws.title}!G{r}",
+                          "avg_cost": f"{ws.title}!H{r}",
+                          "total_cost": f"{ws.title}!I{r}",
+                          "from": f"{ws.title}!J{r}",
+                          "to": f"{ws.title}!K{r}"})
     if rows == 0 and empty:
         log.append(f"Лист «{ws.title}»: форма-образец, {empty} строк без значений — "
                    "заполненных данных нет")
     else:
         log.append(f"Лист «{ws.title}»: строк трудоёмкости: {rows}, "
                    f"несоответствий формуле: {bad}"
+                   + (f", из них в человеко-часах: {hours_rows}" if hours_rows else "")
                    + (f", договор {code}" if code else ", шифр договора в шапке не найден"))
 
 
@@ -385,6 +609,7 @@ def _read_form9(ws, p, log, q):
     rows, bad, empty = 0, 0, 0
     code = _contract_code(ws, p)
     year = None
+    date_from = date_to = None
     total_markers = ("научные и инженерно", "итого", "всего")
     for r in range(1, ws.max_row + 1):
         if _is_column_numbering(ws, r):
@@ -392,6 +617,16 @@ def _read_form9(ws, p, log, q):
         b = str(ws.cell(r, 2).value or "")
         if re.search(r"20\d\d\s*год", b, re.I):
             year = _year_of(b)
+        # В форме 9д общий интервал этапа/года записан над строками
+        # должностей. Он ограничивает месяцы, в которых оптимизатор вправе
+        # распределять указанную трудоёмкость.
+        row_text = " | ".join(str(ws.cell(r, c).value or "")
+                              for c in range(1, min(ws.max_column, 12) + 1))
+        dates = re.findall(r"\b\d{2}\.\d{2}\.20\d{2}\b", row_text)
+        if len(dates) >= 2 and ("год" in row_text.lower() or year):
+            d1, d2 = _date_of(dates[0]), _date_of(dates[1])
+            if d1 and d2 and d2 >= d1:
+                date_from, date_to = d1, d2
         grp = ws.cell(r, 5).value
         cm = _num(ws.cell(r, 6).value)
         cost = _num(ws.cell(r, 7).value)
@@ -406,7 +641,16 @@ def _read_form9(ws, p, log, q):
             continue
         rows += 1
         _add_labor(p, code, year, str(grp), cm, cost, _num(ws.cell(r, 4).value),
-                   f"лист «{ws.title}», строка {r}")
+                   f"лист «{ws.title}», строка {r}",
+                   date_from=date_from, date_to=date_to,
+                   stage=(f"{year} год" if year else None), total_cost=ozp,
+                   labor_per_person=(cm / _num(ws.cell(r, 4).value)
+                                     if _num(ws.cell(r, 4).value) else None),
+                   source_total_labor=cm, source_unit_cost=cost,
+                   cells={"stage": f"B{r}", "position": f"E{r}",
+                          "headcount": f"D{r}", "labor_per_person": f"F{r}",
+                          "source_total_labor": f"F{r}", "source_unit_cost": f"G{r}",
+                          "total_cost": f"H{r}"})
         calc = cm * cost
         if abs(calc - ozp) > 1:
             bad += 1
