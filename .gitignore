@@ -60,3 +60,6 @@ harness/_crisis/
 
 # Локальные настройки Claude Code
 .claude/settings.local.json
+
+# Результаты прогонов: пересоздаются приёмкой и сквозным счётом
+outputs/

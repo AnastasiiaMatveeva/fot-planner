@@ -1,0 +1,46 @@
+{
+  "$comment": "Границы и приёмка для агентов этого репозитория. Правила предметной области и порядок работы — в CLAUDE.md.",
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Read(./.env)",
+      "Bash(curl:*DELETE*)",
+      "Bash(taskkill:*)",
+      "Bash(*app/data/fot.sqlite3*)",
+      "Bash(*app/data/uploads*)"
+    ],
+    "ask": [
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(.venv/Scripts/python.exe scripts/demo_run.py*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".venv/Scripts/python.exe scripts/lint_changed.py",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".venv/Scripts/python.exe scripts/stop_gate.py",
+            "timeout": 180
+          }
+        ]
+      }
+    ]
+  }
+}

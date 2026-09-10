@@ -1,0 +1,31 @@
+# Приёмка на каждое изменение. Смысл именно в том, что она вне машины автора:
+# хук на Stop можно обойти, локальный прогон — забыть, а это выполняется
+# всегда и одинаково.
+#
+# Сюда попадает только то, что не ходит в сеть и не зовёт модель: поведение
+# чата и правила решателя. Разбор документов и сквозной счёт остаются
+# ручными — они требуют ключа и минут.
+name: priyomka
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Поставить проект
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[web,dev]"
+      - name: Приёмка
+        env:
+          PYTHONIOENCODING: utf-8
+          FOT_SKIP_ORPHANS: '1'
+        run: python scripts/check.py --quick

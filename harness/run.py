@@ -32,6 +32,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "app"))
 sys.path.insert(0, HERE)
 
+os.environ["FOT_SKIP_ORPHANS"] = "1"   # не трогать прогоны сервера
 import main  # noqa: E402,F401 — подтягивает .env так же, как сервер
 import llm  # noqa: E402
 from db import Document, Verdict, session  # noqa: E402
@@ -113,7 +114,12 @@ def _file_stub(name):
 def run_case(case, doc, cache):
     """Прогнать один случай. Возвращает список (вердикт, пояснение)."""
     out = []
-    cls = llm.classify(doc.path, doc.name)
+    # Книгу по шаблону сервис узнаёт по листам, а не моделью — стенд идёт
+    # тем же путём, что приложение (intake.classify).
+    import intake
+    by_template = intake.template_kind(doc.path)
+    cls = ({"ok": True, "kind": by_template, "garbled": False} if by_template
+           else llm.classify(doc.path, doc.name))
 
     if case.get("unreadable"):
         ok = not cls.get("ok") and "unavailable" not in cls
@@ -153,7 +159,7 @@ def run_case(case, doc, cache):
                "inflows": [{"contract": c, "month": m + 1, "amount": v}
                            for c, row in p["inflow"].items()
                            for m, v in enumerate(row) if v],
-               "labor": p["labor"]}
+               "labor": p["labor"], "secret": p.get("secret") or []}
     else:
         if doc.name not in cache:
             cache[doc.name] = llm.freeform(doc.path, doc.name)

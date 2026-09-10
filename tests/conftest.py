@@ -1,4 +1,14 @@
-"""Pytest: корень tests/ в sys.path для пакета demo_business."""
+"""Pytest: корень tests/ в sys.path для пакета demo_business.
+
+Тесты здесь не выполняются: контракт решателя ушёл вперёд, а они остались на
+прежнем, и 41 из 96 падает не по делу. Приёмка живёт в `scripts/check.py`.
+
+Важно, чем это отличается от прежнего поведения: раньше `pytest` при этом
+завершался с кодом 0, то есть «ничего не проверено» выглядело как «всё
+хорошо». Такой ответ опаснее красного: на него можно построить CI, который
+всегда зелёный. Теперь команда честно возвращает ошибку и говорит, чем
+проверять на самом деле.
+"""
 
 from __future__ import annotations
 
@@ -32,7 +42,8 @@ def pytest_collection_modifyitems(config, items):
         item.add_marker(marker)
 
 
-def pytest_sessionfinish(session, exitstatus):
-    # pytest exit code 5 = nothing collected; считаем нормой, пока тесты выключены.
-    if TESTS_DISABLED and exitstatus == 5:
-        session.exitstatus = 0
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if TESTS_DISABLED:
+        terminalreporter.write_line(
+            "tests/ отключены (conftest: TESTS_DISABLED). "
+            "Приёмка: python scripts/check.py --quick", red=True)
