@@ -175,9 +175,15 @@ button.primary{width:100%;font:600 13.5px var(--f);padding:9px 14px;border:1px s
                background:var(--acc);color:#fff;cursor:pointer;border-radius:var(--r2)}
 button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(--ink3);cursor:default}
 
-@media (max-width:1100px){
+/* До 1240 — узкая колонка планов и без колонки контекста: место нужно
+   таблицам. До 900 остаётся только рабочая область. */
+@media (max-width:1240px){
+  .shell{grid-template-columns:180px minmax(0,1fr)}
+  .side{display:none}
+}
+@media (max-width:900px){
   .shell{grid-template-columns:1fr}
-  .cases,.side{display:none}
+  .cases{display:none}
 }
 
 /* ── вкладки просмотра ─────────────────────────────────────── */
@@ -223,6 +229,8 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
 .view .scroller{max-height:100%;overflow:auto}
 
 /* нумерация строк в перечнях */
+/* Годовая строка трудоёмкости: одна ячейка на все месяцы. */
+.view td.yr{color:var(--ink3);text-align:center}
 .view th.num,.view td.num{width:1%;white-space:nowrap;text-align:right;
                           font-variant-numeric:tabular-nums;color:var(--ink3);
                           padding-left:13px;padding-right:10px}
@@ -294,7 +302,14 @@ button.primary:disabled{border-color:var(--line);background:var(--s2);color:var(
                        color:var(--ink2);cursor:pointer;white-space:nowrap}
 #regview .rtabs button:hover{border-color:var(--acc);color:var(--acc)}
 #regview .rtabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
-#regview .rtabs button.on .c{color:rgba(255,255,255,.8)}
+/* Счётчик во вкладке — отдельный бледный кружок, а не хвост названия:
+   «Надбавка 120 1» читалось как одно число. */
+#regview .rtabs button{display:inline-flex;align-items:center;gap:7px}
+#regview .rtabs button .c{display:inline-grid;place-items:center;min-width:18px;height:18px;
+                          padding:0 5px;border-radius:999px;line-height:1;
+                          background:var(--s2,#eef2f6);color:var(--ink3);font:500 11px var(--f);
+                          font-variant-numeric:tabular-nums}
+#regview .rtabs button.on .c{background:rgba(255,255,255,.22);color:#fff}
 button.ghost{width:calc(100% - 12px);margin:9px 6px 0;padding:8px 12px;border:1px solid var(--line);
              background:var(--s0);color:var(--ink2);font:13px var(--f);cursor:pointer;
              border-radius:var(--r2)}
@@ -329,7 +344,10 @@ body{font-size:14.5px}
 /* Список планов прокручивается, главное действие остается на виду внизу. */
 .cases{overflow:hidden}
 .clist{flex:1;min-height:0;overflow:auto}
-.cases .cta{flex:0 0 auto;margin-bottom:12px}
+/* Кнопка «Новый план» и строка ввода — одна нижняя полоса: одна высота 40 px
+   и один центр по вертикали (низ колонки 14 px + кнопка 40 px = центр 34 px
+   от низа, как у поля ввода: 14 px + 41/2). */
+.cases .cta{flex:0 0 auto;margin-bottom:0;min-height:40px;padding:10px 14px}
 
 /* Inter плотнее по межбуквенному просвету, чем Segoe UI: чуть распускаем
    заголовки и подтягиваем цифры к одной ширине, чтобы суммы вставали в столбик. */
@@ -363,6 +381,8 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 
 /* ── верхняя полоса: режим и переключатель колонки ─────────── */
 .brandbar .spacer{flex:1}
+/* display в правиле класса перебивает атрибут hidden — возвращаем ему силу. */
+.iconbtn[hidden]{display:none}
 .iconbtn{width:32px;height:32px;display:grid;place-items:center;border:1px solid var(--line);
          background:var(--s0);color:var(--ink3);border-radius:var(--r2);cursor:pointer}
 .iconbtn:hover{border-color:var(--acc);color:var(--acc)}
@@ -513,49 +533,90 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .cdot.ready{background:var(--warn)}
 .cdot.ok{background:var(--ok)}
 .cdot.bad{background:var(--bad)}
-.case .ttl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Имя плана переносится по словам и обрезается только на третьей строке:
+   в узкой колонке «Вариант: П4 ровно в предел» иначе схлопывается в
+   «Вариант: …», и планы не различить. */
+.case .ttl{flex:1;min-width:0;overflow:hidden;white-space:normal;line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
+  overflow-wrap:anywhere}
 
 /* ── карточка документа ────────────────────────────────────── */
 /* Панель справа, а не окно посередине: карточка — подробности строки, из
    списка она не уносит. Так показывают запись в реестре в Carbon и Polaris:
    таблица остается на месте под затемнением, закрыл — и ты там же. */
-.drawer{position:fixed;inset:0;z-index:60;display:flex;justify-content:flex-end}
-.drawer .scrim{position:absolute;inset:0;background:rgba(15,23,42,.26)}
+/* Документ — отдельный экран: просмотрщик на всю высоту слева, справа
+   узкая панель с реестром и разговором. Боковой панели в полэкрана, где
+   разговор стоял под документом, больше нет. */
+.drawer{position:fixed;inset:0;z-index:60;display:flex}
 .drawer .panel{position:relative;display:flex;flex-direction:column;
-               width:min(580px,94vw);height:100%;background:var(--s0);
-               border-left:1px solid var(--line2);
-               box-shadow:-10px 0 32px rgba(15,23,42,.10)}
-.dhead{display:flex;align-items:flex-start;gap:12px;padding:18px 18px 14px;
+               width:100%;height:100%;background:var(--s0)}
+.dhead{display:flex;align-items:center;gap:14px;padding:10px 18px;
        border-bottom:1px solid var(--line2)}
-.dhead h3{flex:1;min-width:0;margin:0;font-size:15px;font-weight:600;color:var(--ink);
-          word-break:break-word;line-height:1.35}
-.dhead .x,.dhead .wider{flex:0 0 auto;width:28px;height:28px;border:0;
-                        background:none;cursor:pointer;color:var(--ink3);
-                        border-radius:var(--r3);display:grid;place-items:center}
-.dhead .x{font-size:20px;line-height:1}
-.dhead .x:hover,.dhead .wider:hover{background:var(--s2);color:var(--ink)}
-/* Развернутая панель: у форм РКМ два десятка колонок, в 580 пикселях их не
-   прочесть. Затемнение остается — это по-прежнему окно поверх реестра. */
-.drawer.wide .panel{width:100%}
-.drawer.wide .sheetview,.drawer.wide .pdf{height:calc(100vh - 260px);
-                                          min-height:420px}
-.drawer.wide .wider svg{transform:rotate(180deg)}
-.dbody{flex:1;min-height:0;overflow:auto;padding:16px 18px 20px}
-.dfoot{flex:0 0 auto;padding:12px 18px;border-top:1px solid var(--line2);
-       display:flex;justify-content:flex-end}
-.dfoot .del{padding:8px 16px;border:1px solid var(--line);background:var(--s0);
-            color:var(--bad);border-radius:var(--r3);font:600 13px var(--f);cursor:pointer}
-.dfoot .del:hover{border-color:var(--bad);background:var(--badbg)}
+.dhead .dttl{flex:1;min-width:0}
+.dhead h3{margin:0;font-size:14.5px;font-weight:600;color:var(--ink);line-height:1.35;
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dhead .dfacts{margin-top:2px;font-size:12px;color:var(--ink3);white-space:nowrap;
+               overflow:hidden;text-overflow:ellipsis}
+.dhead .dfacts .dot{margin:0 7px;color:var(--line)}
+/* Действия в шапке — значки, как у строк реестра. */
+/* Скругление у ссылки-значка своё от .dfile — возвращаем общее. */
+.dhead .iconbtn{flex:0 0 auto;padding:0;font:inherit;text-decoration:none;
+                border-radius:var(--r2)}
+.dhead .ddel:hover{color:var(--bad);border-color:var(--bad);background:var(--badbg)}
+/* Три значка в шапке — одинаковые: скачать, удалить, закрыть. */
+.dbody{flex:1;min-height:0}
+/* Две колонки: документ и панель справа. Каждая скроллится сама. */
+.dcols{display:flex;overflow:hidden}
+.dmain{flex:1;min-width:0;display:flex;flex-direction:column;padding:12px 16px 14px;
+       background:var(--s1)}
+.dmain .docview{flex:1;min-height:0;display:flex;flex-direction:column;margin:0}
+.dmain .pvbar{flex:0 0 auto}
+.dmain .asdoc,.dmain .astext{flex:1;min-height:0;display:flex;flex-direction:column}
+.dmain .asdoc[hidden],.dmain .astext[hidden]{display:none}
+.dmain .pdf,.dmain .sheetview,.dmain .richview{flex:1;min-height:0;height:auto}
+.dmain .sheetbox,.dmain .richbox{flex:1;min-height:0;display:flex;flex-direction:column}
+.dmain .ptext{flex:1;min-height:0;overflow:auto;background:var(--s0)}
+.dside{flex:0 0 400px;display:flex;flex-direction:column;min-height:0;
+       border-left:1px solid var(--line2);background:var(--s0)}
+.dside h4{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--ink3);
+          text-transform:uppercase;letter-spacing:.04em}
+.dside-top{flex:0 1 auto;max-height:45%;overflow:auto;padding:14px 16px 0}
+.dside-top .grp{margin:0}
+.dside-reg{flex:0 0 auto;padding:14px 16px 12px;border-bottom:1px solid var(--line2)}
+.dside-reg .grp{margin:0}
+/* Справочник в карточке: факты строкой, расхождения таблицей, запись кнопкой. */
+.dside .reffacts{font-size:12.5px;color:var(--ink2);margin-bottom:8px}
+.dside .reffacts .dot{margin:0 6px;color:var(--line)}
+.dside .reftab{width:100%;border-collapse:collapse;font-size:12.5px;
+               border:1px solid var(--line2);border-radius:var(--r2);overflow:hidden}
+.dside .reftab th{text-align:left;font-weight:600;font-size:11.5px;color:var(--ink2);
+                  padding:6px 8px;background:var(--s2);border-bottom:1px solid var(--line)}
+.dside .reftab td{padding:6px 8px;border-bottom:1px solid var(--line2);vertical-align:top}
+.dside .reftab tr:last-child td{border-bottom:0}
+.dside .reftab th.n,.dside .reftab td.n{text-align:right;white-space:nowrap;
+                                        font-variant-numeric:tabular-nums}
+.dside .reftab td.up{color:var(--acc2);font-weight:600}
+.dside .refacts{margin-top:10px}
+.dside .refapply{padding:7px 14px;border:1px solid var(--acc);background:var(--acc);
+                 color:#fff;border-radius:var(--r3);font:600 12.5px var(--f);cursor:pointer}
+.dside .refapply:hover{background:var(--acc2)}
+.dside .refapply[disabled]{opacity:.6;cursor:default}
+.dside .refmiss{margin-top:10px;font-size:12px;color:var(--ink3);line-height:1.5}
+.dside-talk{flex:1;min-height:0;display:flex;flex-direction:column;padding:14px 16px 14px}
+.dside-talk .dtalk{flex:1;min-height:0;overflow:auto;margin:0 0 10px;padding-right:2px}
+.dside-talk .dask{flex:0 0 auto}
+@media (max-width:1000px){
+  .dcols{flex-direction:column}
+  .dmain{flex:1 1 55%}
+  .dside{flex:0 0 45%;border-left:0;border-top:1px solid var(--line2)}
+  .dhead .dfacts{white-space:normal}
+}
 
 /* Учетные сведения — парами, а не таблицей: их пять и они разной длины. */
 .meta{display:grid;grid-template-columns:auto 1fr;gap:7px 16px;margin:0 0 16px;
       font-size:12.5px}
 .meta dt{color:var(--ink3);white-space:nowrap}
 .meta dd{margin:0;color:var(--ink)}
-.dfile{display:inline-block;padding:7px 15px;border:1px solid var(--line);
-       border-radius:var(--r3);background:var(--s0);color:var(--acc2);
-       font:600 12.5px var(--f);text-decoration:none}
-.dfile:hover{border-color:var(--acc);background:var(--accbg)}
 .dbody .grp{margin-top:20px}
 .dbody .grp h4{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--ink3);
                text-transform:uppercase;letter-spacing:.04em}
@@ -626,9 +687,10 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
                   border-radius:var(--r2);background:var(--s0)}
 /* Выбор листа — одна строка: у формы РКМ тридцать листов, и ряд вкладок был
    бы стеной в пол-панели. Разметку выбранного листа собирает сервер. */
-.spick{display:flex;align-items:center;gap:9px;margin-bottom:8px;
+.spick{display:inline-flex;align-items:center;gap:9px;margin:0;
        font-size:12.5px;color:var(--ink2)}
-.spick select{flex:1;min-width:0;max-width:340px;border:1px solid var(--line);
+.spick[hidden]{display:none}
+.spick select{min-width:0;max-width:300px;min-height:30px;border:1px solid var(--line);
               background:var(--s0);color:var(--ink);border-radius:var(--r3);
               padding:5px 7px;font:500 12.5px var(--f);cursor:pointer}
 .spick select:hover{border-color:var(--acc)}
@@ -716,6 +778,18 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 /* Первый показ листа занимает несколько секунд: конвертер разбирает книгу и
    кладет результат в кэш. Пустая белая рамка все это время читается как
    сломанная — говорим, что лист готовится. */
+/* Ячейка с замечанием: подчёркнута, щелчок ведёт к своей реплике. Цвет
+   отличается от жёлтой маски «Извлечённые данные» — это разные вещи. */
+.panel .ptext .noted,.dmain .ptext .noted{border-bottom:2px dotted #1687b8;cursor:pointer}
+.dm.lit{outline:2px solid var(--acc);outline-offset:2px;border-radius:var(--r2)}
+/* Рамка просмотрщика ONLYOFFICE занимает всю высоту, как и PDF. */
+.dmain .ooview{flex:1;min-height:0;width:100%}
+/* Пока Excel печатает книгу, в рамке видно, что документ готовится. */
+.dmain .asdoc{position:relative}
+.dmain .asdoc.loading .pdf{opacity:0}
+.dmain .asdoc .sload{display:none}
+.dmain .asdoc.loading .sload{display:grid;position:absolute;inset:0;place-items:center;
+  color:var(--ink3);font-size:13px;background:var(--s0);border-radius:var(--r2);z-index:1}
 .dbody .sheetbox{position:relative}
 .dbody .sload{display:none;position:absolute;inset:0;place-items:center;
               border:1px solid var(--line2);border-radius:var(--r2);
@@ -741,9 +815,7 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 /* Поступление месяца с полосой: доля от наибольшего в таблице. Полоса светлая
    и под числом, а не вместо него — читают все-таки сумму, а полоса лишь дает
    увидеть профиль года не считая. */
-.view td.n .bar{position:relative;display:inline-block;padding:2px 5px;
-                border-radius:3px;background:linear-gradient(to right,
-                var(--accbg) var(--f, 0%), transparent var(--f, 0%))}
+
 
 
 /* ── след по документу ─────────────────────────────────────── */
@@ -843,17 +915,18 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .prob .pw{margin-top:3px;font-size:11.5px;color:var(--ink3)}
 .prob .pr{margin-top:6px;font-size:12.5px;color:var(--ink2);padding-left:10px;
           border-left:2px solid var(--line)}
-.view td.n .bar.neg{background:linear-gradient(to right,var(--badbg) var(--f,0%),
-                    transparent var(--f,0%));color:var(--bad)}
+.view td.n.neg{color:var(--bad)}
 .view .dname[data-emp]{cursor:pointer}
 
 
 /* ── намерение перед расчетом ─────────────────────────────── */
 .modal .box.wide{max-width:520px;width:calc(100% - 48px)}
 .pfrows{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin:6px 0 4px}
+.pfintro{margin:-4px 0 12px;font-size:12.5px;color:var(--ink3)}
 .pfrow{display:flex;justify-content:space-between;gap:10px;font-size:13px;
        color:var(--ink2);padding:4px 0;border-bottom:1px solid var(--line2)}
 .pfrow b{color:var(--ink);font-variant-numeric:tabular-nums}
+.pfrule b{font-size:12px;font-weight:500;text-align:right}
 .pfh{margin:14px 0 6px;font:600 11.5px var(--f);letter-spacing:.05em;
      text-transform:uppercase;color:var(--warn)}
 .pfwarn{font-size:12.5px;color:var(--ink2);line-height:1.5;padding:7px 10px;
@@ -866,6 +939,10 @@ body{-webkit-font-smoothing:antialiased;letter-spacing:-.006em}
 .dm.me{align-self:flex-end;background:var(--accbg);color:var(--ink)}
 .dm.ag{align-self:flex-start;background:var(--s1);color:var(--ink);
        border:1px solid var(--line2);white-space:pre-wrap}
+.dm.pending{color:var(--ink3);font-style:italic}
+.dm.pending i{display:inline-block;width:1.1em;text-align:left;font-style:normal}
+.dm.pending i::after{content:"";animation:dmDots 1.2s steps(4,end) infinite}
+@keyframes dmDots{0%{content:""}25%{content:"."}50%{content:".."}75%,100%{content:"..."}}
 .dm .dmw{margin-top:3px;font-size:10.5px;color:var(--ink3)}
 .dask{display:flex;gap:8px}
 .dask input{flex:1;min-width:0;padding:8px 11px;border:1px solid var(--line);
@@ -1146,14 +1223,21 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
    состояния только в клетках, где оно есть. */
 .view .rtool{position:sticky;top:-22px;z-index:5;margin:-22px -26px 14px;padding:6px 26px 7px;
   background:var(--s0);border-bottom:1px solid var(--line)}
-/* Два яруса: сверху оглавление, снизу действия. В одну строку тринадцать
-   разделов и семь наборов месяцев читались как сплошная лента кнопок. */
-.view .rtool .toc{display:flex;gap:2px;min-width:0;padding-bottom:4px;
-  overflow-x:auto;scrollbar-width:none}
-.view .rtool .toc::-webkit-scrollbar{display:none}
+/* Панель переносится: в узком окне поля и кнопки встают в два ряда, а не
+   уезжают за край. Кнопки держатся справа. */
 .view .rtool .acts{display:flex;align-items:center;gap:8px;padding-top:5px;
-  border-top:1px solid var(--line2)}
-.view .rtool .fld{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--ink3)}
+  flex-wrap:wrap}
+/* Черта — только под заголовком отчёта в полном экране. Сама по себе она
+   отделяла панель от вкладок, где и так есть граница панели снизу. */
+.shell.full .view .rtool .ftitle + .acts{border-top:1px solid var(--line2)}
+/* Распорка тянется только пока строка одна; после переноса она обнуляется,
+   иначе кнопки прижимались к левому краю второго ряда. */
+.view .rtool .acts .sp{flex:1 1 0;min-width:0}
+.view .rtool .acts > .xl,.view .rtool .acts > button.ico{margin-left:auto}
+.view .rtool .acts > .xl ~ button.ico{margin-left:0}
+.view .rtool .fld{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--ink3)}
+/* Действия держатся вместе, без просвета между «Excel» и разворотом. */
+.view .rtool .acts > .xl{margin-right:-2px}
 .view .rtool .fld select{font:13px var(--f);color:var(--ink);background:var(--s0);
   border:1px solid var(--line);border-radius:var(--r3);padding:5px 8px;min-height:30px;cursor:pointer}
 .view .rtool .fld select:hover{border-color:var(--acc)}
@@ -1163,18 +1247,13 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 .view .rtool .seg button:first-child{border-radius:var(--r3) 0 0 var(--r3);margin-left:0}
 .view .rtool .seg button:last-child{border-radius:0 var(--r3) var(--r3) 0}
 .view .rtool .seg button.on{position:relative;z-index:1}
-.view .rtool .toc a{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;
-  border-radius:var(--r3);font-size:12px;color:var(--ink2);text-decoration:none;white-space:nowrap}
-.view .rtool .toc a b{font-weight:600;color:var(--ink3)}
-.view .rtool .toc a:hover{background:var(--s2);color:var(--ink)}
-.view .rtool .toc a.on{background:var(--accbg);color:var(--acc2);font-weight:600}
-.view .rtool .toc a.on b{color:var(--acc2)}
 .view .rtool .sp,.view .sech .sp{flex:1}
-.view .rtool button,.view .rtool a.xl{font:12px var(--f);padding:4px 10px;border:1px solid var(--line);
-  background:var(--s0);color:var(--ink2);cursor:pointer;border-radius:var(--r3);text-decoration:none;
-  white-space:nowrap;display:inline-flex;align-items:center;gap:4px;line-height:1.3}
+.view .rtool button,.view .rtool a.xl{font:13px var(--f);padding:0 11px;min-height:30px;
+  border:1px solid var(--line);background:var(--s0);color:var(--ink2);cursor:pointer;
+  border-radius:var(--r3);text-decoration:none;white-space:nowrap;display:inline-flex;
+  align-items:center;gap:4px;line-height:1}
 .view .rtool button:hover,.view .rtool a.xl:hover{border-color:var(--acc);color:var(--acc)}
-.view .rtool button.ico{padding:4px 7px;display:grid;place-items:center}
+.view .rtool button.ico{width:30px;padding:0;display:grid;place-items:center}
 .view .rtool button.ico .i-b{display:none}
 .view .rtool button.ico.on .i-a{display:none}
 .view .rtool button.ico.on .i-b{display:block}
@@ -1194,13 +1273,12 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 .view .grp.rep{margin:0;background:transparent;display:none}
 .view .grp.rep.active{display:block}
 /* Отчёт: слева разделы, справа один раздел во всю площадь. */
-.view .repwrap{display:grid;grid-template-columns:minmax(0,1fr);align-items:start}
-.view .repnav{display:none}
-/* В полном экране места хватает на список слева; в обычном окне список
-   отнимал треть ширины у таблицы, там раздел выбирают полем в панели. */
+/* Оглавление слева всегда: выпадающий список разделов и лента-облако из
+   пятнадцати ярлыков читались хуже, чем короткий столбец. В обычном окне
+   столбец уже, в полном экране — шире. */
+.view .repwrap{display:grid;grid-template-columns:156px minmax(0,1fr);gap:12px;align-items:start}
+.view .repnav{display:flex}
 .shell.full .view .repwrap{grid-template-columns:216px minmax(0,1fr);gap:16px}
-.shell.full .view .repnav{display:flex}
-.shell.full .view .rtool .secsel{display:none}
 .view .repnav{position:sticky;top:calc(var(--toolh,60px) + 4px);flex-direction:column;
   gap:1px;padding:4px;background:var(--s0);border:1px solid var(--line);border-radius:var(--r2)}
 .view .repnav a{display:flex;align-items:center;gap:8px;
@@ -1208,11 +1286,13 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 .view .repnav a b{font:600 11px var(--f);color:var(--ink3);width:16px;text-align:right;flex:0 0 auto}
 .view .repnav a > span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .view .repnav a .chip{flex:0 0 auto;font-size:10.5px;padding:0 6px}
+.view .repnav a .mk{width:6px;height:6px;border-radius:50%;background:var(--warn);flex:0 0 auto}
+.view .repnav a .mk.er{background:var(--bad)}
 .view .repnav a:hover{background:var(--s1);color:var(--ink)}
 .view .repnav a.on{background:var(--accbg);color:var(--acc2);font-weight:600}
 .view .repnav a.on b{color:var(--acc2)}
 .view .rep .sech{display:flex;align-items:center;gap:10px;padding:8px 0 6px;background:var(--paper);
-  user-select:none;position:sticky;top:var(--toolh,60px);z-index:4}
+  user-select:none;position:sticky;top:calc(var(--toolh,60px) + var(--navh,0px));z-index:4}
 .view .rep.closed>:not(.sech){display:none}
 .view .rep .sech .sn{font-size:13px;font-weight:600;color:var(--ink3);min-width:16px;text-align:right}
 .view .rep .sech .stt{font-size:14px;font-weight:600;color:var(--ink)}
@@ -1229,7 +1309,8 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 .view .rep .chip.er{background:var(--badbg);color:var(--bad)}
 
 .view .rep .grid{overflow:auto;max-width:100%;margin:0}
-.view .rep .grid.tall{max-height:none}
+.view .rep .grid:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+
 .view .rep .grid::-webkit-scrollbar{height:9px;width:9px}
 .view .rep .grid::-webkit-scrollbar-thumb{background:var(--line);border-radius:999px}
 .view .rep .grid::-webkit-scrollbar-thumb:hover{background:var(--ink3)}
@@ -1239,6 +1320,16 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 .view .rep .grid th,.view .rep .grid td{padding:8px 12px;border-right:1px solid var(--line);
   border-bottom:1px solid var(--line2);vertical-align:middle;white-space:nowrap;
   font-variant-numeric:tabular-nums}
+/* Автоподбор ширины: графа, которая шире 220 точек, переносит текст по
+   словам (класс ставится после раскладки, см. fixCols). Остальные остаются в
+   одну строку — иначе браузер сжимал и короткие графы вроде шифра договора.
+   Без переноса одна графа «Шифр затрат» с полным названием договора уносила
+   таблицу далеко за край экрана. */
+.view .rep .grid th.w,.view .rep .grid td.w{white-space:normal;overflow-wrap:break-word;
+  max-width:220px}
+/* В широкой таблице поля граф уже: двадцать три графы по 12 точек с каждой
+   стороны — это лишние полтораста точек ширины. */
+.view .rep .grid:not(.fit) th,.view .rep .grid:not(.fit) td{padding-left:8px;padding-right:8px}
 .view .rep .grid.fit{overflow:visible}
 /* Таблица помещается — закреплять графы не от чего: липкость по горизонтали
    тянула их к краю окна. Остаётся только липкая шапка. */
@@ -1246,9 +1337,23 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 .view .rep .grid.fit thead th.fx{left:auto}
 /* Таблица масштабируется, а панель и заголовок раздела — нет, поэтому отступ
    липкой шапки делится на масштаб таблицы (--gz). */
-.view .rep .grid.fit thead th{position:sticky;top:calc((var(--toolh,60px) + var(--sech,35px)) / var(--gz,1));z-index:2}
+.view .rep .grid.fit thead th{position:sticky;
+  top:calc((var(--toolh,60px) + var(--navh,0px) + var(--sech,35px)) / var(--gz,1));z-index:2}
+/* Широкая таблица прокручивается сама, и липкость в ней отсчитывается от неё,
+   а не от страницы: чтобы шапка графы не уезжала, таблице задана высота по
+   свободному месту, и вниз прокручивается она, а не раздел. Так шапка стоит
+   на месте в обеих таблицах — и в узкой, и в широкой. */
+.view .rep .grid:not(.fit){
+  max-height:calc(var(--viewh,80vh) - var(--toolh,60px) - var(--navh,0px) - var(--sech,35px) - 56px)}
+.view .rep .grid:not(.fit) thead th{position:sticky;top:0;z-index:2}
+/* Прокрутка не перескакивает с таблицы на страницу: пока в таблице есть куда
+   листать, колесо листает её, и шапка граф остаётся на месте. */
+.view .rep .grid:not(.fit){overscroll-behavior:contain}
+.view .rep .grid:not(.fit) thead tr.g1 ~ tr th{top:var(--g1h,28px)}
+.view .rep .grid:not(.fit) thead th.fx{z-index:3}
 /* Второй ярус шапки: ниже первого на его же высоту в масштабе таблицы. */
-.view .rep .grid.fit thead tr.g1 ~ tr th{top:calc((var(--toolh,60px) + var(--sech,35px)) / var(--gz,1) + var(--g1h,28px))}
+.view .rep .grid.fit thead tr.g1 ~ tr th{
+  top:calc((var(--toolh,60px) + var(--navh,0px) + var(--sech,35px)) / var(--gz,1) + var(--g1h,28px))}
 /* Верхний ярус шапки: месяц или квартал над своими графами. */
 .view .rep .grid thead tr.g1 th{text-align:center;font-size:11.5px;font-weight:600;
   color:var(--ink3);padding:5px 8px;background:var(--s2)}
@@ -1286,8 +1391,14 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
   border-bottom:1.5px solid var(--ink2);transform:rotate(45deg)}
 .view .rep .grid tr.grp.closed td:first-child::before{transform:rotate(-45deg);margin-top:-2px}
 .view .rep .grid tr.hide{display:none}
-.view .rep .grid td.gray{background:repeating-linear-gradient(135deg,var(--s0),var(--s0) 3px,
-  var(--s2) 3px,var(--s2) 4px);color:var(--ink3);text-align:center}
+/* Штриховка рисуется поверх ячейки: заливка строки-полосы, итога и группы
+   перекрывала её фоном, и в этих строках закрытый месяц выглядел обычным
+   пустым. */
+.view .rep .grid td.gray{color:var(--ink3);text-align:center}
+.view .rep .grid td.gray::after{content:"";position:absolute;left:0;right:0;top:0;bottom:0;
+  background:repeating-linear-gradient(135deg,transparent,transparent 3px,
+    var(--s2) 3px,var(--s2) 4px);pointer-events:none}
+.view .rep .grid td.gray:not(.fx){position:relative}
 .view .rep .grid td.tight{background:var(--warnbg)}
 .view .rep .grid td.pt{font-style:italic;color:var(--ink2)}
 .view .rep .grid td.set{color:var(--ink2)}
@@ -1302,6 +1413,7 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 .view .rep .wr{color:var(--warn)}
 /* закрепленные графы: фон непрозрачный, у последней — тень-разделитель */
 .view .rep .grid .fx{position:sticky;z-index:1;background:var(--s0)}
+.view .rep .grid .fx.fx-off{position:static;left:auto}
 /* Закрепленная графа перекрывала заливку шапки: у нее свой фон, и первые
    графы шапки выходили белыми на сером ряду. */
 .view .rep .grid th.fx{z-index:2;background:var(--s2)}
@@ -1356,7 +1468,11 @@ table.mini .tag{margin-left:6px;padding:1px 6px;border-radius:999px;
 /* Узкое окно: список планов скрыт медиа-правилом, а .noside задан позже и
    перебивал его, оставляя под скрытую колонку 230 px — лента и отчет
    сжимались в узкую полосу. */
-@media (max-width:1100px){.shell.noside{grid-template-columns:1fr}}
+/* Полный экран убирает обе колонки, поэтому узкие правила его не касаются:
+   с ними отчёт на весь экран в окне уже 1240 пикселей уезжал в колонку
+   180 пикселей, а справа оставалось белое поле. */
+@media (max-width:1240px){.shell.noside:not(.full){grid-template-columns:180px minmax(0,1fr)}}
+@media (max-width:900px){.shell.noside:not(.full){grid-template-columns:1fr}}
 
 /* ── версии расчета ───────────────────────────────────────────
    Строка на расчет: номер, дата, статус; ниже — что изменилось числами.
@@ -1451,3 +1567,324 @@ button:focus-visible,select:focus-visible,a:focus-visible,input:focus-visible,[t
 .fmenu .fbtns button{font:inherit;padding:5px 12px;border:1px solid var(--line);border-radius:var(--r3);
   background:var(--s0);cursor:pointer;min-height:30px}
 .fmenu .fbtns button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+
+.panel .ptext,.panel .sheetbox{cursor:text}
+/* Полоса выбора вида заметки над выделением. */
+.nbar{position:fixed;z-index:80;display:flex;gap:4px;padding:4px;background:var(--s0);
+  border:1px solid var(--line);border-radius:var(--r2);
+  box-shadow:0 8px 24px rgba(16,24,40,.16)}
+.nbar button{font:12.5px var(--f);padding:5px 10px;min-height:30px;border:1px solid var(--line);
+  background:var(--s0);color:var(--ink);border-radius:var(--r3);cursor:pointer;white-space:nowrap}
+.nbar button:hover{border-color:var(--acc);color:var(--acc)}
+.nbar.say{flex-direction:column;gap:6px;width:420px;padding:8px}
+.nbar .nq{position:relative;padding-right:22px}
+.nbar .nclose{position:absolute;right:0;top:-2px;width:20px;height:20px;padding:0;min-height:0;
+  border:0;background:none;color:var(--ink3);font-size:16px;line-height:1;cursor:pointer}
+.nbar .nclose:hover{color:var(--ink)}
+.nbar .nq{font-size:12px;color:var(--ink2);border-left:2px solid var(--acc);padding-left:8px;
+  max-height:56px;overflow:hidden}
+.nbar .nr{display:flex;align-items:center;gap:6px}
+.nbar .nr input{flex:1;min-width:0;font:13px var(--f);padding:5px 9px;min-height:30px;
+  border:1px solid var(--line);border-radius:var(--r3)}
+.nbar .nr .ok{background:var(--acc);border-color:var(--acc);color:#fff}
+.nbar .nr .ok:hover{background:var(--acc2);color:#fff}
+
+/* Маска предпросмотра: что из документа ушло в расчёт. */
+/* display в правиле класса перебивает hidden — гасим явно. */
+.panel .mtog[hidden]{display:none}
+.panel .mtog{display:inline-flex;align-items:center;gap:8px;margin:0 6px 0 0;font:12px var(--f);
+  color:var(--ink3);cursor:pointer;user-select:none}
+.panel .mtog:hover{color:var(--ink)}
+.panel .mtog input{position:absolute;opacity:0;width:0;height:0;margin:0}
+/* Тумблер: дорожка и ползунок. */
+.panel .mtog .sw{position:relative;width:30px;height:16px;border-radius:8px;background:#C9D1DB;
+  transition:background .15s}
+.panel .mtog .sw::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:left .15s}
+.panel .mtog input:checked + .sw{background:var(--acc)}
+.panel .mtog input:checked + .sw::after{left:16px}
+.panel .mtog input:focus-visible + .sw{box-shadow:0 0 0 2px var(--accbg),0 0 0 3px var(--acc)}
+.panel .markjump[hidden]{display:none}
+.panel .markjump{min-height:30px;padding:5px 10px;margin:0 6px 0 0;border:1px solid var(--line);
+  border-radius:var(--r3);background:var(--s0);color:var(--acc2);font:12.5px var(--f);cursor:pointer}
+.panel .markjump:hover{border-color:var(--acc);background:var(--accbg)}
+.panel .markjump:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.panel .ptext .used{background:#FFF3C4;box-shadow:inset 0 0 0 1px #E6A700;border-radius:2px}
+/* PDF: тот же файл документом или текстом. */
+.panel .pdfseg{display:inline-flex}
+.panel .pdfseg button{font:13px var(--f);padding:5px 11px;min-height:30px;border:1px solid var(--line);
+  background:var(--s0);color:var(--ink);cursor:pointer;border-radius:0;margin-left:-1px}
+.panel .pdfseg button:first-child{border-radius:var(--r3) 0 0 var(--r3);margin-left:0}
+.panel .pdfseg button:last-child{border-radius:0 var(--r3) var(--r3) 0}
+.panel .pdfseg button.on{background:var(--accbg);border-color:var(--acc);color:var(--acc2);
+  font-weight:600;position:relative;z-index:1}
+/* Таблицы внутри текстового предпросмотра (Word, PDF). */
+.panel .ptext .ptab{border-collapse:collapse;margin:6px 0;font-size:12.5px;width:100%}
+.panel .ptext .ptab td{border:1px solid var(--line);padding:4px 8px;vertical-align:top}
+.panel .ptext .ptab tr:first-child td{background:var(--s1);font-weight:600}
+.panel .ptext .ptab td.n{white-space:nowrap;text-align:right;width:1%;
+  font-variant-numeric:tabular-nums}
+/* «Текстом»: строки как их прочитал разборщик. */
+.panel .ptext.plain pre{margin:0;font:12.5px/1.5 ui-monospace,Consolas,monospace;
+  white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+
+/* «Текстом» для Word: разметка документа — заголовки, выравнивание, таблицы. */
+.panel .ptext.rich{font-size:13px;line-height:1.45}
+.panel .ptext.rich p{margin:0 0 6px}
+.panel .ptext.rich h1,.panel .ptext.rich h2,.panel .ptext.rich h3,
+.panel .ptext.rich h4,.panel .ptext.rich h5,.panel .ptext.rich h6{
+  margin:12px 0 6px;font-size:13.5px;font-weight:600;line-height:1.3}
+.panel .ptext.rich .acenter{text-align:center}
+.panel .ptext.rich .aright{text-align:right}
+.panel .ptext.rich .ajustify{text-align:justify}
+.panel .ptext.rich table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12.5px}
+.panel .ptext.rich td,.panel .ptext.rich th{border:1px solid var(--line);padding:4px 8px;
+  vertical-align:top}
+.panel .ptext.rich ul,.panel .ptext.rich ol{margin:6px 0 6px 20px;padding:0}
+/* Рамка с вёрсткой документа Word: та же высота, что у листа книги. */
+.panel .richbox{border:1px solid var(--line);border-radius:var(--r2);overflow:hidden;
+  background:var(--s0)}
+.panel .richview{width:100%;height:520px;border:0;display:block;background:#fff}
+
+/* Строка над предпросмотром: маска слева, масштаб справа. */
+.panel .pvbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px}
+.panel .pvbar .sp{flex:1}
+/* display в правиле класса перебивает атрибут hidden — гасим явно. */
+.panel .pvbar .dzoom[hidden]{display:none}
+.panel .pvbar .dzoom{display:inline-flex;align-items:stretch;background:var(--s0);
+  border:1px solid var(--line);border-radius:var(--r3);overflow:hidden}
+.panel .pvbar .dzoom button{font:13px var(--f);color:var(--ink);background:none;border:0;
+  min-height:28px;padding:0 9px;line-height:1;cursor:pointer}
+.panel .pvbar .dzoom .zb{width:30px;padding:0;font-size:15px;color:var(--ink2)}
+.panel .pvbar .dzoom .zv{display:inline-flex;align-items:center;justify-content:center;
+  min-width:58px;font:13px var(--f);color:var(--ink3);font-variant-numeric:tabular-nums;
+  border-left:1px solid var(--line);border-right:1px solid var(--line)}
+.panel .pvbar .dzoom .zf{border-left:1px solid var(--line);color:var(--ink2)}
+.panel .pvbar .dzoom button:hover{background:var(--s1);color:var(--ink)}
+
+/* Result review: readable at the page scale, independent of table zoom. */
+.plan-overview{padding:0 0 20px;color:#243344}
+/* Что требует проверки — обычная таблица отчёта, строка ведёт в раздел. */
+.view .isst{width:100%;border-collapse:separate;border-spacing:0;margin:0 0 14px;
+  font-size:12.5px;background:var(--s0);border:1px solid var(--line2);
+  border-radius:var(--r2);overflow:hidden}
+.view .isst th{text-align:left;font-weight:600;color:var(--ink2);font-size:11.5px;
+  padding:7px 12px;background:var(--s2);border-bottom:1px solid var(--line)}
+.view .isst td{padding:7px 12px;border-bottom:1px solid var(--line2);vertical-align:top}
+.view .isst tr:last-child td{border-bottom:0}
+.view .isst td.num,.view .isst th.num{width:1%;text-align:right;white-space:nowrap;
+  color:var(--ink3);font-variant-numeric:tabular-nums}
+.view .isst tbody tr{cursor:pointer}
+.view .isst tbody tr:hover td{background:var(--s1)}
+.view .isst tr.er td:nth-child(2){color:var(--bad);font-weight:600}
+.view .isst tr.wr td:nth-child(2){color:var(--warn);font-weight:600}
+.plan-checks-link{border:0;background:transparent;color:#176d92;padding:10px 0;font:inherit;font-size:13px;cursor:pointer;text-align:left}
+.plan-message{padding:14px 18px;border:1px solid #e8cf9f;border-left:4px solid #b56b08;background:#fffaf0;border-radius:8px;margin:10px 0;font-size:13px;line-height:1.5}
+.plan-message p{margin:6px 0 0}
+/* Both existing error classes now have the same explicit visual treatment. */
+.view .rep .grid td.er,.view .rep .grid td.err{background:#ffe3e1!important;color:#9f2525!important;font-weight:650;box-shadow:inset 0 -2px #cd4b43}
+.view .rep .grid td.wr,.view .rep .grid td.tight{background:#fff0cb!important;color:#855000!important;font-weight:600}
+.view .rep .grid tr:has(td.er,td.err)>td:first-child{border-left:3px solid #cd4b43}
+.view .rep .grid tr:has(td.wr)>td:first-child{border-left:3px solid #c18a29}
+.plan-rule-attention .rule{margin:12px 0;border-radius:8px;border:1px solid #efc5c1;border-left:4px solid #bd3434;background:#fff4f3;padding:16px}
+.plan-rule-attention .rule.warn{border-color:#e8cf9f;border-left-color:#b56b08;background:#fffaf0}
+
+/* Result review: one type scale, one spacing scale, semantic states. */
+.review-section-title{display:flex;align-items:center;gap:8px;margin:24px 0 8px}
+.review-section-title h3{font:600 15px/1.4 var(--f);color:#243344;margin:0}
+.review-count{font:500 12px/20px var(--f);min-width:22px;padding:0 5px;border-radius:10px;text-align:center;background:#eef1f5;color:#526174}
+.review-note{font:12px/1.5 var(--f);color:#566578;margin:0 0 12px}
+.review-block{margin:0 0 24px;border:1px solid #dfe5ec;border-radius:8px;overflow:auto;background:#fff}
+.review-heading{font:600 14px/1.5 var(--f);padding:14px 16px;border-bottom:1px solid #e0e5eb}
+.review-table{width:100%;border-collapse:collapse;font:13px/1.5 var(--f);text-align:left;color:#243344}
+.review-table thead th{font-size:12px;font-weight:500;color:#526174;background:#f5f7fa;padding:12px 16px;border-bottom:1px solid #dfe5ec;vertical-align:middle}
+.review-table td,.review-table tbody th{padding:14px 16px;border-bottom:1px solid #e9edf2;vertical-align:middle}
+.review-table tbody th{font-weight:400;text-align:left}
+.review-table tr:last-child>*{border-bottom:0}
+.review-table strong{font-size:13px;font-weight:600;line-height:1.5}
+.review-table small{display:block;margin-top:4px;color:#5b6b7e;font-size:12px;line-height:1.5}
+.review-table .amount{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.review-table .review-value{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.review-table .review-value.error{background:#fff0ef;color:#9f2e27;box-shadow:inset 2px 0 #bf443c}
+.review-table .review-value.warn{background:#fff8e8;color:#805509;box-shadow:inset 2px 0 #bb8b30}
+.review-table .review-value.error small{color:#9f2e27}
+.review-table .review-value.warn small{color:#805509}
+.review-table .contract-col{width:34%}
+/* Графа действия — отдельная колонка, а не хвост числа: отбита отступом и
+   волосяной линией. Правило общее для всех учётных таблиц замечаний, чтобы
+   кнопка не прилипала к значению нигде. */
+.review-table .action-col{width:112px}
+.review-table th:last-child,.review-table td:last-child{padding-left:24px}
+.review-table td:last-child:has(.review-open),
+.review-table th:last-child{border-left:1px solid #eef2f6}
+.review-table td:first-child{min-width:190px}
+.review-open{display:inline-flex;align-items:center;justify-content:center;gap:8px;background:#fff;border:1px solid #d2dfe8;border-radius:6px;color:#176b91;padding:7px 10px;min-height:34px;white-space:nowrap;cursor:pointer;font:500 12px/1.5 var(--f)}
+.review-open:hover{background:#edf6fb;border-color:#7eafc6}
+.review-open:focus-visible{outline:3px solid #1687b8;outline-offset:3px}
+.review-totals tbody th{width:55%}
+.review-freshness{font:12px/1.5 var(--f);color:#526174;border-left:2px solid #8298ae;padding:4px 12px;margin:4px 0 20px}
+.review-sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.view.annual-overview .repbody{padding:0 16px 16px}
+.view.annual-overview .rep .sech{padding-left:0;padding-right:0;min-height:48px}
+.view.annual-overview .rep .sech .stt{font:600 18px/1.4 var(--f)}
+.view .rtool label[hidden]{display:none!important}
+.view.annual-overview .rtool .acts{gap:16px}
+.view .review-rule{border:1px solid #dfe5ec;border-radius:8px;margin:12px 0 20px;overflow:hidden}
+.review-rule .review-heading{display:flex;align-items:center;gap:12px}
+.review-rule .mini{margin:0;width:100%}
+.review-explain{padding:12px 16px;font:12px/1.5 var(--f);color:#526174;border-top:1px solid #e9edf2}
+.review-explain summary{cursor:pointer}
+.review-explain p{margin:12px 0 0}
+.view .plan-message.warn,.view .plan-message.warn strong{color:#805509}
+.review-rule .mini tr.over td{background:#fff0ef;color:#9f2e27}
+.view .rep .grid tr.review-target>td{box-shadow:inset 0 2px #158bb9,inset 0 -2px #158bb9}
+.view .rep .grid tr.review-target>td:first-child{border-left:4px solid #158bb9}
+.view .rep .grid tr.review-target{outline:none;scroll-margin-top:130px}
+@media(max-width:1000px){
+  .review-table thead th,.review-table td,.review-table tbody th{padding:10px 12px}
+  .review-table .amount,.review-table .review-value{white-space:normal;min-width:110px}
+  .view.annual-overview .rtool .acts{gap:10px}
+}
+.view.annual-overview .rep .sech .sn{display:none}
+.view.annual-overview .rep .sech{gap:12px}
+.view .review-totals tbody th{background:#fff;color:#243344;font:400 13px/1.5 var(--f)}
+.view .review-totals tbody th,.view .review-totals tbody td{padding-top:10px;padding-bottom:10px}
+.result-date{color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap;padding:6px 0}
+
+/* Раздел 15: сначала одно понятное замечание, затем вторичные журналы. */
+.checks-page{padding-bottom:28px}
+.checks-attention{margin:4px 0 32px}
+.checks-attention .review-section-title{margin-top:16px;margin-bottom:12px}
+.view .checks-attention .review-rule{margin:0 0 20px;border-color:#e2c990;
+  border-left:4px solid #b77a13;background:#fff;box-shadow:0 1px 2px rgba(31,48,67,.04)}
+.view .checks-attention .review-rule.bad{border-color:#e0aaa6;border-left-color:#b53b35}
+.checks-attention .review-rule .review-heading{justify-content:space-between;align-items:flex-start;
+  gap:24px;padding:18px 20px;background:#fffaf0;border-bottom:1px solid #eadbbd}
+.checks-attention .review-rule.bad .review-heading{background:#fff4f3;border-bottom-color:#edcecb}
+.review-heading-copy{min-width:0}
+.review-heading-copy h4{margin:0;font:600 15px/1.4 var(--f);color:#243344}
+.review-heading-copy p{margin:6px 0 0;font:13px/1.5 var(--f);color:#526174}
+.review-heading-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex:0 0 auto}
+.review-rule-scroll{overflow-x:auto;overscroll-behavior-inline:contain;background:#fff}
+.review-rule-table{min-width:760px}
+.review-rule-table thead th{padding-top:11px;padding-bottom:11px;line-height:1.35}
+.review-rule-table td,.review-rule-table tbody th{padding-top:12px;padding-bottom:12px}
+.review-rule-table tbody th{font-weight:600}
+.review-rule-table tbody th small{font-weight:400}
+.review-rule-table .rule-delta.warn{background:#fff8e8;color:#805509;box-shadow:inset 2px 0 #bb8b30}
+.review-rule-table .rule-delta.error{background:#fff0ef;color:#9f2e27;box-shadow:inset 2px 0 #bf443c}
+.review-rule-table .rule-share{display:flex;align-items:center;justify-content:flex-end;gap:12px}
+.review-rule-table .rule-share>span{min-width:52px;text-align:right}
+.review-rule-table .gauge{width:78px;flex:0 0 78px}
+.rule-over{font-weight:600;color:#9f2e27}
+.rule-reserve{color:#526174}
+.checks-attention .review-explain{padding:14px 20px;background:#fff}
+.checks-attention .review-explain summary{font-weight:500;color:#42556b}
+.checks-secondary{display:grid;gap:12px;margin-top:28px}
+.view .checks-fold{margin:0;padding:0;border:1px solid #dfe5ec;border-radius:8px;background:#fff;overflow:hidden}
+.view .checks-fold>summary{display:flex;align-items:center;justify-content:space-between;gap:16px;
+  padding:14px 16px;list-style:none;cursor:pointer;font:600 13px/1.4 var(--f);
+  letter-spacing:0;text-transform:none;color:#33475b;background:#fff}
+.view .checks-fold>summary::-webkit-details-marker{display:none}
+.view .checks-fold>summary::before{content:"›";font-size:18px;line-height:1;color:#718096;
+  transition:transform .15s}
+.view .checks-fold[open]>summary::before{transform:rotate(90deg)}
+.view .checks-fold[open]>summary{border-bottom:1px solid #e5eaf0;background:#f8fafc}
+.checks-fold-count{margin-left:auto;font:500 12px/1.4 var(--f);color:#67778a;white-space:nowrap}
+.checks-fold-body{padding:18px 20px}
+.checks-fold-body>.grp{margin:0}
+.checks-fold-body>.grp>h4:first-child{margin-top:0}
+.message-groups{display:grid;gap:12px}
+.message-group{padding:14px 16px;border:1px solid #e2c990;border-left:3px solid #b77a13;
+  border-radius:7px;background:#fffaf0}
+.message-group.error{border-color:#e0aaa6;border-left-color:#b53b35;background:#fff4f3}
+.message-group-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.message-group-head strong{font:600 13px/1.45 var(--f);color:#243344}
+.message-group-meta,.message-group-action{margin:6px 0 0;font:12.5px/1.5 var(--f);color:#526174}
+.message-group-action{padding-top:7px;border-top:1px solid rgba(128,85,9,.16);color:#33475b}
+.checks-clear{padding:18px 20px;border:1px solid #b9dfc8;border-radius:8px;background:#f3fbf6;
+  color:#256b43;font:13px/1.5 var(--f)}
+@media(max-width:800px){
+  .checks-attention .review-rule .review-heading{flex-direction:column;gap:14px;padding:16px}
+  .review-heading-actions{width:100%;justify-content:space-between}
+  .checks-fold-body{padding:14px}
+}
+
+/* Значки действий — одна группа с одинаковым шагом: просвет самой панели
+   в разных разделах разный, и значки расходились то на 16, то на 24 точки. */
+.view .rtool .acts .ricons{display:inline-flex;align-items:center;gap:6px}
+.view .rtool .acts .ricons > *{margin:0}
+.rtool .acts .delrun{width:32px;height:32px;min-height:32px;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;color:var(--ink3)}
+.rtool .acts .delrun:hover{color:var(--bad);border-color:var(--bad)}
+
+
+/* Панель отчёта — одна строка: версия расчёта, вид и действия. Разделы —
+   в оглавлении слева. */
+.view .rtool .acts{padding-top:0;gap:8px}
+.view .rtool .fld{gap:0}
+.view .rtool .fld select{padding:4px 6px;min-height:26px;font-size:12px}
+
+/* ── отчёт: рабочая ширина и спокойная навигация ──────────────
+   Отчёт — это один рабочий документ. Вертикальный список из пятнадцати
+   пунктов рядом с таблицей отнимал полезную ширину и визуально конкурировал
+   с данными. Навигация теперь горизонтальная, а таблица получает весь экран. */
+.view .rtool{margin-left:-26px;margin-right:-26px;padding:12px 28px 10px;
+  background:#fff;border-bottom:1px solid var(--line2)}
+.view .rtool .ftitle{display:flex;align-items:center;min-height:28px;padding:0 0 9px;
+  color:var(--ink);font-size:18px;letter-spacing:-.015em}
+.view .rtool .ftitle b{font-weight:650}
+.view .rtool .acts{padding:9px 0 0;border-top:1px solid var(--line2);gap:10px}
+.view .rtool .acts .fld{position:relative;gap:7px;padding-left:0}
+.view .rtool .acts .fld::before{font-size:11px;font-weight:600;color:var(--ink3);
+  letter-spacing:.02em;white-space:nowrap}
+.view .rtool .acts .fld:first-child::before{content:"Расчёт"}
+.view .rtool .acts .fld:nth-child(2)::before{content:"Период"}
+.view .rtool .acts select{min-height:32px;padding:6px 9px;background:#f8fafc;border-color:#d6e0e8}
+.view .rtool .acts .fld:first-child select{min-width:235px}
+.view .rtool .acts .fld:nth-child(2) select{min-width:118px}
+.view .rtool .acts .dfile{margin-left:auto}
+.view .rtool .acts .ico{min-height:32px;min-width:34px}
+
+/* Переключатель разделов — одна лёгкая строка под панелью действий. */
+.view .repwrap{display:block!important;margin:0!important}
+/* Разделы переносятся на вторую строку, а не уезжают за край: пятнадцать
+   ярлыков в одну строку не помещаются, а прокрутка прячет половину списка
+   и добавляет серую полосу во всю ширину. Высота строки меряется (--navh),
+   поэтому заголовок раздела встаёт под ней при любом числе рядов. */
+.view .repnav{position:sticky;top:var(--toolh,72px);z-index:4;display:flex;flex-direction:row;
+  flex-wrap:wrap;gap:2px 3px;overflow:visible;padding:7px 26px 6px;
+  /* Вынос строки под края ровно по отступу колонки (26 пикселей): при 28
+     она вылезала за край и вся страница получала прокрутку вбок. */
+  margin:0 -26px 16px;background:#fff;border:0;border-bottom:1px solid var(--line2);
+  border-radius:0;white-space:nowrap}
+.view .repnav a{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;
+  min-height:28px;padding:5px 9px;border-radius:7px;font-size:12px;color:var(--ink2)}
+.view .repnav a b{width:auto;font-size:11px;color:var(--ink3)}
+.view .repnav a > span{flex:0 0 auto;overflow:visible;white-space:nowrap}
+.view .repnav a.on{background:var(--accbg);color:var(--acc2);box-shadow:inset 0 -2px 0 var(--acc)}
+.view .repnav a:hover{background:var(--s1)}
+.view .repbody{padding:0 28px 28px}
+.view .rep .sech{top:calc(var(--toolh,72px) + var(--navh,0px));padding:11px 0 8px;
+  background:var(--paper)}
+.view .rep .sech .stt{font-size:16px}
+.view .rep .sech .sn{font-size:12px}
+.view .rep .grid{max-width:100%;}
+
+@media (max-width:760px){
+  .view .rtool{padding-left:16px;padding-right:16px}
+  .view .rtool .acts .fld:first-child select{min-width:180px}
+  .view .repnav{margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}
+  .view .repbody{padding-left:16px;padding-right:16px}
+}
+
+/* Ожидание ответа агента: три точки в пузыре реплики. Отметка «агент
+   работает» стоит в шапке плана, но экономист смотрит в ленту. */
+.feed .bubble.typing{display:inline-flex;align-items:center;gap:5px;padding:13px 14px}
+.feed .bubble.typing i{width:6px;height:6px;border-radius:50%;background:var(--ink3);
+  opacity:.35;animation:typing 1.1s infinite ease-in-out}
+.feed .bubble.typing i:nth-child(2){animation-delay:.18s}
+.feed .bubble.typing i:nth-child(3){animation-delay:.36s}
+@keyframes typing{0%,60%,100%{opacity:.25;transform:translateY(0)}
+  30%{opacity:.9;transform:translateY(-3px)}}
+@media(prefers-reduced-motion:reduce){.feed .bubble.typing i{animation:none;opacity:.5}}

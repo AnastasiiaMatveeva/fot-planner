@@ -87,6 +87,11 @@ function ask(title, detail, okText) {
    под него отведена. */
 /* Два действия — две кнопки: меню при таком наборе только добавляет щелчок.
    Появляются при наведении на строку. */
+function svg16(path) {
+  return '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" ' +
+         'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' + path + "</svg>";
+}
+
 function iconBtn(cls, attr, id, title, path) {
   return '<button class="rowbtn ' + cls + '" ' + attr + '="' + id + '" title="' + esc(title) +
          '" aria-label="' + esc(title) + '">' +
@@ -105,6 +110,9 @@ var ICON_WIDE =
 
 var ICON_EDIT = '<path d="M11.3 2.6a1.4 1.4 0 0 1 2 2l-7.2 7.2-2.7.7.7-2.7z"/>' +
                 '<path d="M10.2 3.7l2.1 2.1"/>';
+var ICON_CLOSE = '<path d="M4 4l8 8M12 4l-8 8"/>';
+var ICON_DOWN = '<path d="M8 2.5v8M4.8 7.3 8 10.5l3.2-3.2"/>' +
+                '<path d="M2.8 11.2v1.3c0 .6.4 1 1 1h8.4c.6 0 1-.4 1-1v-1.3"/>';
 var ICON_TRASH = '<path d="M2.8 4.3h10.4M6.4 4.3V3.1c0-.4.3-.7.7-.7h1.8c.4 0 .7.3.7.7v1.2"/>' +
                  '<path d="M4.2 4.3l.6 8.2c0 .6.5 1 1 1h4.4c.6 0 1-.4 1-1l.6-8.2"/>' +
                  '<path d="M6.7 6.8v4.2M9.3 6.8v4.2"/>';
@@ -297,7 +305,10 @@ function openCurrent() {
     return;
   }
   var c = computed[0];
+  // Если этот план уже открыт, open() не зовётся — но из реестра или со
+  // страницы агентов вернуться всё равно надо.
   if (caseId !== c.id) open(c.id);
+  else { leaveRegistry(); leaveAgents(); }
   // Сводке нужен список прогонов дела; он приходит первым опросом состояния,
   // а сервер после перезапуска отвечает не сразу — ждем состояние, не таймер.
   var tries = 0;
@@ -323,6 +334,11 @@ function agentName(key) {
   return a ? a.name : key;
 }
 
+/* Реплика, отправленная и еще не подтвержденная сервером. Пока она здесь,
+   лента показывает ее эхом и строку «агент печатает»: ответ модели идет
+   секунды, и без этого экономист не понимал, ушло сообщение или нет. */
+var sending = null;
+
 function renderFeed() {
   var feed = $("feed");
   var atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
@@ -340,8 +356,23 @@ function renderFeed() {
              '<div class="head"><b>' + who + "</b><span>" + esc(m.created) + "</span></div>" +
              '<div class="bubble">' + esc(m.text) + attach(m.payload) + "</div>" +
            "</div>";
-  }).join("");
-  if (atBottom) feed.scrollTop = feed.scrollHeight;
+  }).join("") + waitingMsg();
+  // Ждем ответа — прокручиваем всегда: экономист смотрит на свою реплику.
+  if (atBottom || sending) feed.scrollTop = feed.scrollHeight;
+}
+
+/* Эхо своей реплики и строка ожидания ответа. Эхо снимается, как только та
+   же реплика пришла с сервера, — иначе она двоилась. */
+function waitingMsg() {
+  if (!sending) return "";
+  var echoed = state.messages.some(function (m) {
+    return m.who === "экономист" && m.text === sending;
+  });
+  return (echoed ? "" :
+    '<div class="msg me"><div class="head"><b>Вы</b><span>сейчас</span></div>' +
+    '<div class="bubble">' + esc(sending) + "</div></div>") +
+    '<div class="msg"><div class="head"><b>Агент</b><span>отвечает</span></div>' +
+    '<div class="bubble typing"><i></i><i></i><i></i></div></div>';
 }
 
 function attach(p) {
@@ -540,6 +571,7 @@ function goalDiff(cur, prev) {
 }
 function renderRuns() {
   var el = $("runs");
+  if (!el) return;
   if (!state.runs.length) { el.innerHTML = '<div class="empty">Расчет еще не выполнен</div>'; return; }
   var runs = state.runs;
   var shown = chosenRun || (runs.filter(function (r) { return r.status === "OPTIMAL"; })[0] || {}).id;
@@ -610,7 +642,7 @@ function renderStage() {
   var pill = working.length
     ? '<span class="pill work">агент работает: ' + esc(working[0].title) + "</span>"
     : '<span class="pill' + (c.stage === "посчитано" ? " ok" : (c.stage === "нет решения" || c.stage === "не успел" ? " bad" : "")) + '">' +
-      esc(c.stage) + "</span>";
+      esc(c.stage === "готово к расчету" && (state.runs || []).some(function (r) { return r.status === "OPTIMAL"; }) ? "готов к пересчёту" : c.stage) + "</span>";
   var why = !c.has_data ? "для расчета нужны документы по договорам" : "";
   $("pmeta").innerHTML = pill +
     "<span>обновлено " + esc(c.updated) + "</span>" +
@@ -693,17 +725,22 @@ function solve() {
     var warn = (pf["допущения"] || []).map(function (w) {
       return '<div class="pfwarn">' + esc(w) + "</div>";
     }).join("");
+    var rules = (pf["ограничения"] || []).map(function (kv) {
+      return '<div class="pfrow pfrule"><span>' + esc(kv[0]) + "</span><b>" + esc(kv[1]) + "</b></div>";
+    }).join("");
     back.innerHTML =
       '<div class="box wide" role="dialog" aria-modal="true">' +
-        "<h4>" + (pf["стоит"] ? "Считать не на чем" : "Что уйдет в расчет") + "</h4>" +
+        "<h4>" + (pf["стоит"] ? "Недостаточно данных" : "Проверьте данные перед расчётом") + "</h4>" +
+        (pf["стоит"] ? "" : '<p class="pfintro">Расчёт будет выполнен по данным ниже.</p>') +
         '<div class="pfrows">' + rows + "</div>" +
-        (warn ? '<div class="pfh">Допущения сервиса — проверьте</div>' + warn : "") +
+        (rules ? '<div class="pfh">Правила оптимизатора</div><div class="pfrows">' + rules + "</div>" : "") +
+        (warn ? '<div class="pfh">Что нужно проверить</div>' + warn : "") +
         (pf["стоит"]
           ? '<p>Нет сотрудников или договоров. Загрузите документы в реестр.</p>' : "") +
         '<div class="btns">' +
           '<button type="button" class="no">Отмена</button>' +
           (pf["стоит"] ? "" :
-           '<button type="button" class="yes">Запустить расчет</button>') +
+           '<button type="button" class="yes">Рассчитать</button>') +
         "</div></div>";
     document.body.appendChild(back);
     function close() { back.remove(); $("solve").disabled = false; }
@@ -837,8 +874,8 @@ function loadResult() {
         .catch(function () { vpay = null; }),
       // Отчет в формах экономистов — им и заменены прежние таблицы результата.
       api("/api/case/" + caseId + "/run/" + pick.id + "/report")
-        .then(function (r) { vrep = r; })
-        .catch(function () { vrep = null; }),
+        .then(function (r) { vrep = r; repOpenCache = null; })
+        .catch(function () { vrep = null; repOpenCache = null; }),
     ]);
   });
 }
@@ -1287,8 +1324,8 @@ function ruleTable(r) {
   if (!rows.length) return "";
   var numeric = rows[0]["предел"] !== undefined && rows[0]["предел"] !== null;
   if (!numeric) {
-    return '<table class="mini rb2"><tbody>' + rows.map(function (s) {
-      return "<tr><td>" + esc(s["объект"]) + "</td><td>" + esc(s["что"] || "") +
+    return '<table class="mini rb2"><tbody>' + rows.map(function (s, i) {
+      return '<tr data-review-key="rule:' + vrules.indexOf(r) + ':' + i + '"><td>' + esc(s["объект"]) + "</td><td>" + esc(s["что"] || "") +
              "</td></tr>";
     }).join("") + "</tbody></table>";
   }
@@ -1297,8 +1334,8 @@ function ruleTable(r) {
   return '<table class="mini rb2"><thead><tr><th>Где</th>' +
     '<th class="n">Факт' + esc(unit) + '</th><th class="n">' + esc(limitName) +
     esc(unit) + '</th><th class="n">Запас</th><th></th></tr></thead><tbody>' +
-    rows.map(function (s) {
-      return '<tr class="' + (s["нарушено"] ? "over" : "") + '"><td>' +
+    rows.map(function (s, i) {
+      return '<tr data-review-key="rule:' + vrules.indexOf(r) + ':' + i + '" class="' + (s["нарушено"] ? "over" : "") + '"><td>' +
         esc(s["объект"]) +
         (s["таких же"] > 1 ? '<span class="same">и еще ' + (s["таких же"] - 1) +
                              " с тем же результатом</span>" : "") +
@@ -1468,7 +1505,8 @@ function table(head, rows, note, opts) {
       (num ? '<td class="num">' + (first + i + 1) + "</td>" : "") +
       r.map(function (c) {
         return (c && typeof c === "object")
-          ? '<td class="' + (c.cls || "") + '">' + (c.v == null ? "—" : c.v) + "</td>"
+          ? '<td class="' + (c.cls || "") + '"' + (c.cs ? ' colspan="' + c.cs + '"' : "") +
+            ">" + (c.v == null ? "—" : c.v) + "</td>"
           : "<td>" + (c == null || c === "" ? "—" : esc(c)) + "</td>";
       }).join("") + "</tr>";
   }).join("");
@@ -1500,6 +1538,33 @@ function nc(v, cls) {
 }
 function gc(v) { return { v: v == null || v === "—" ? "" : v, cls: "gray" }; }
 
+/* Штриховка значит «значения здесь быть не может»: договор в этом месяце не
+   действует или уже не платит, человек не работает, этап не идёт. Ноль —
+   это не то же самое: договор действует, но выплаты в месяце не было, и
+   такая клетка остаётся пустой. Раньше штриховались обе, и экономист не
+   отличал закрытый месяц от нулевого.
+
+   Окно договора берём из кассы: там месяцы вне срока — пустые, а после
+   предела выплат — «запрет». */
+var repOpenCache = null;
+function repOpenMonths(code) {
+  if (!repOpenCache) {
+    repOpenCache = {};
+    ((vrep && vrep["касса"]) || []).forEach(function (c) {
+      var row = (c["строки"] || {})["доступно"] || [];
+      repOpenCache[c["код"]] = row.map(function (v) { return v != null && v !== "запрет"; });
+    });
+  }
+  return repOpenCache[code] || null;
+}
+
+/* Клетка месяца: число, пусто (ноль в открытом месяце) или штриховка. */
+function mc(v, code, month, fmt, cls) {
+  if (v) return nc(fmt(v), cls || "");
+  var open = repOpenMonths(code);
+  return (open && open[month - 1] === false) ? gc("—") : { v: "", cls: "n" };
+}
+
 /* ── сетка отчета ────────────────────────────────────────────
  * Плотная сетка, как в учетной системе: линии по обеим осям, шапка и первые
  * графы закреплены при прокрутке, одинаковые значения в соседних строках
@@ -1513,7 +1578,8 @@ var REP_SECTIONS = [];
 var repColFilter = {}, repSort = {}, repHideCol = {}, GRID_SEQ = 0, CUR_SEC = 0, GRID_DATA = {};
 var REP_SHORT = { 1: "Итоги", 2: "Договоры", 3: "Освоение", 4: "Касса", 5: "Виды выплат",
                   6: "Выплаты", 7: "Ставки", 8: "БЭП", 9: "П4", 10: "Трудоёмкость",
-                  11: "Исполнители", 12: "Нехватка", 13: "Цели", 14: "Дефицит" };
+                  11: "Исполнители", 12: "Нехватка", 13: "Расчёт", 14: "Дефицит",
+                  15: "Контроль" };
 function secH(n, t, meta) {
   REP_SECTIONS.push({ n: n, t: REP_SHORT[n] || t, meta: meta || "" });
   CUR_SEC = n;
@@ -1696,13 +1762,24 @@ function grid(head, rows, opts) {
     at = 0;
     gh = '<tr class="g1"><th class="num fx" data-c="0"></th>' +
       opts.groups.map(function (g, i) {
-        var cls = (i && sep[at] ? "gs " : "") + (g.t ? "gt" : "");
-        var span = visIn(at, g.span || 1);
-        at += g.span || 1;
+        var from = at, count = g.span || 1;
+        var cls = (i && sep[from] ? "gs " : "") + (g.t ? "gt" : "");
+        var span = visIn(from, count);
+        at += count;
+        // Первый пустой диапазон стоит над ключевыми графами. Разбиваем его
+        // на отдельные липкие ячейки: тогда кварталы прокручиваются под ними,
+        // а адаптивное закрепление может снять лишнюю графу на узком экране.
+        if (i === 0 && !g.t) {
+          var fixedTop = "";
+          for (var q = from; q < from + count && q < N; q++) {
+            if (visPos[q] > 0) fixedTop += '<th class="fx gfix" data-c="' + visPos[q] + '"></th>';
+          }
+          return fixedTop;
+        }
         return span ? '<th class="' + cls + '" colspan="' + span + '">' + esc(g.t || "") + "</th>" : "";
       }).join("") + "</tr>";
   }
-  var h = '<div class="grid' + (opts.tall ? " tall" : "") + '" data-fix="' + fix + '" data-tid="' + tid + '"><table><thead>' + gh + "<tr>" +
+  var h = '<div class="grid' + (opts.tall ? " tall" : "") + '" data-fix="' + fix + '" data-scroll-space="' + (opts.scrollSpace || 0) + '" data-tid="' + tid + '" tabindex="0" role="region" aria-label="Таблица данных"><table><thead>' + gh + "<tr>" +
     '<th class="num fx" data-c="0" scope="col"><span>№</span></th>' +
     head.map(function (c, i) {
       if (hid[i]) return "";
@@ -1717,6 +1794,7 @@ function grid(head, rows, opts) {
     if (r.grp) rc += " grp";
     var attrs = (rc.trim() ? ' class="' + rc.trim() + '"' : "") + (r.g ? ' data-g="' + esc(r.g) + '"' : "") +
                 (r.k ? ' data-k="' + esc(r.k) + '"' : "");
+    if (r.reviewKey) attrs += ' data-review-key="' + esc(r.reviewKey) + '"';
     var data = !r.grp && rc.indexOf("sum") < 0;
     var col = 1, swallow = 0;   // исходный номер графы, 1-based
     return "<tr" + attrs + '><td class="num fx" data-c="0">' + (data ? ++num : "") + "</td>" +
@@ -1733,7 +1811,7 @@ function grid(head, rows, opts) {
       var vp = visPos[start - 1];
       if (vp < 0) { for (var q = start; q < start + width; q++) if (visPos[q - 1] > 0) { vp = visPos[q - 1]; break; } }
       var fx = vp < fix, cls = (fx ? "fx " : "") + (sep[start - 1] ? "gs " : "");
-      var extra = fx ? ' data-c="' + vp + '"' : "";
+      var extra = ' data-source-col="' + start + '"' + (fx ? ' data-c="' + vp + '"' : '');
       if (c && typeof c === "object") {
         if (c.span) extra += ' rowspan="' + c.span + '"';
         if (vspan > 1) extra += ' colspan="' + vspan + '"';
@@ -1794,54 +1872,55 @@ function mergeDown(rows, cols, fixN) {
   return rows;
 }
 var SVG = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">';
-function navChip(meta) {
-  var bad = null, warn = null, re = /<span class="chip ([a-z]*)">([^<]*)<\/span>/g, m;
-  while ((m = re.exec(meta || ""))) {
-    if (m[1] === "er" && !bad) bad = m;
-    if (m[1] === "wr" && !warn) warn = m;
-  }
-  var got = bad || warn;
-  return got ? '<span class="chip ' + got[1] + '">' + got[2] + "</span>" : "";
-}
-
 function repNav() {
-  return '<nav class="repnav">' + REP_SECTIONS.map(function (x) {
+  // Пометка замечания — точка: полный текст стоит в самом разделе, а в
+  // оглавлении важно только, есть оно или нет и насколько серьёзно.
+  return '<nav class="repnav" aria-label="Разделы отчёта">' + REP_SECTIONS.map(function (x) {
+    var mark = /chip er/.test(x.meta || "") ? '<i class="mk er"></i>'
+             : /chip wr/.test(x.meta || "") ? '<i class="mk"></i>' : "";
     return '<a href="#sec-' + x.n + '" data-sec="' + x.n + '"' +
            (x.n === repSec ? ' class="on"' : "") + '><b>' + x.n + "</b><span>" + esc(x.t) +
-           "</span>" + navChip(x.meta) + "</a>";
+           "</span>" + mark + "</a>";
   }).join("") + "</nav>";
 }
 
 function repToolbar() {
   var title = (state.case && state.case.title) || "";
+  var sectionTitle = ((REP_SECTIONS.find(function (x) { return x.n === repSec; }) || {}).t || "");
+  var savedRuns = (state.runs || []).filter(function (r) { return r.status === "OPTIMAL"; });
+  var runControl = savedRuns.length
+    ? '<label class="fld" title="Версия расчёта"><select data-sel="run">' + savedRuns.map(function (r) {
+        return '<option value="' + r.id + '"' + (r.id === vrun ? ' selected' : '') + '>№ ' +
+               r.id + ' · ' + esc(r.created || "дата не указана") + '</option>';
+      }).join('') + '</select></label>'
+    : '<div class="fld">Расчёта нет</div>';
+  // Действия справа: удалить версию, скачать, на весь экран. Корзина стояла
+  // вплотную к выбору версии и читалась как часть поля; значок тот же, что у
+  // удаления плана и документа — одно действие рисуется одним значком.
+  // Значки живут одной группой со своим шагом: у самой панели просвет разный
+  // в разных разделах (в «Итогах» он шире), и значки расходились по-разному.
+  var reportActions = '<span class="ricons">' +
+    (vrun ? '<button type="button" class="iconbtn delrun" data-ra="delrun" ' +
+            'title="Удалить эту версию расчёта" aria-label="Удалить эту версию расчёта">' +
+            svg16(ICON_TRASH) + '</button>' : "") +
+    (vrun ? '<a class="iconbtn dfile" download href="/api/case/' + caseId + "/result/" + vrun + '" title="Скачать XLSX" aria-label="Скачать XLSX">' + svg16(ICON_DOWN) + '</a>' : "") +
+    '<button type="button" data-ra="full" class="ico full" title="Отчет на весь экран" aria-label="Отчет на весь экран">' +
+    SVG + '<path class="i-a" d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/>' +
+    '<path class="i-b" d="M13.5 6.5h-4v-4M9.5 6.5 13.5 2.5M2.5 9.5h4v4M6.5 9.5 2.5 13.5"/></svg></button>' +
+    '</span>';
+  // Разделы выбираются в боковом оглавлении отчёта (repNav), а не здесь:
+  // панель — только версия расчёта, вид и действия, одной строкой.
   return '<div class="rtool"><div class="ftitle"><b>' + esc(title) + "</b>" +
   "</div>" +
+  (issueReturn ? '<nav class="issue-context" aria-label="Путь к замечанию"><button type="button" data-issue-back title="Вернуться к списку замечаний">← Замечания к расчёту</button><span aria-hidden="true">/</span><span>' + esc(sectionTitle) + '</span><span class="issue-context-actions">' + reportActions + '</span></nav>' : '') +
   '<div class="acts">' +
-  '<label class="fld">Версия<select data-sel="run">' + (state.runs || []).filter(function (r) {
-    return r.status === "OPTIMAL";
-  }).map(function (r) {
-    return '<option value="' + r.id + '"' + (r.id === vrun ? " selected" : "") + ">№ " + r.id +
-           " · " + esc(r.created || "") + "</option>";
-  }).join("") + "</select></label>" +
-  '<label class="fld secsel">Раздел<select data-sel="sec">' + REP_SECTIONS.map(function (x) {
-    return '<option value="' + x.n + '"' + (x.n === repSec ? " selected" : "") + ">" + x.n + " " +
-           esc(x.t) + "</option>";
-  }).join("") + "</select></label>" +
-  '<label class="fld">Период<select data-sel="mset">' + MON_SETS.map(function (x) {
+  runControl +
+  '<label class="fld" title="Период"><select data-sel="mset">' + MON_SETS.map(function (x) {
     return '<option value="' + x[1].join(",") + '"' +
            (x[1].join() === repMon.join() ? " selected" : "") + ">" + x[0] + "</option>";
   }).join("") + "</select></label>" +
-  '<label class="fld">Масштаб<select data-sel="zoom">' + ZOOMS.map(function (z) {
-    return '<option value="' + z[1] + '"' +
-           (String(z[1]) === String(repZoom) ? " selected" : "") + ">" + z[0] + "</option>";
-  }).join("") + "</select></label>" +
   '<span class="sp"></span>' +
-  (vrun ? '<a class="xl" href="/api/case/' + caseId + "/result/" + vrun + '">Excel</a>' : "") +
-  '<button type="button" data-ra="full" class="ico full" title="Отчет на весь экран" ' +
-  'aria-label="Отчет на весь экран">' +
-  SVG + '<path class="i-a" d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/>' +
-  '<path class="i-b" d="M13.5 6.5h-4v-4M9.5 6.5 13.5 2.5M2.5 9.5h4v4M6.5 9.5 2.5 13.5"/></svg>' +
-  "</button></div></div>";
+  (issueReturn ? '' : reportActions) + "</div></div>";
 }
 /* Оглавление показывает, где экономист сейчас: при прокрутке подсвечен
    раздел, чья шапка прошла под панелью. Внизу страницы — последний раздел:
@@ -1850,7 +1929,11 @@ var repSpyBusy = false;
 function repSpy() {
   var el = $("view"), tool = el.querySelector(".rtool");
   if (!tool) return;
-  var secs = el.querySelectorAll(".grp.rep");
+  // Разделы, кроме открытого, скрыты; у скрытых координаты нулевые, и
+  // «последним на экране» становился раздел 15, хотя открыт шестой.
+  var secs = Array.prototype.filter.call(el.querySelectorAll(".grp.rep"), function (g) {
+    return g.offsetParent !== null;
+  });
   if (!secs.length) return;
   var edge = tool.getBoundingClientRect().bottom + 6, id = secs[0].id;
   var scrolls = el.scrollHeight > el.clientHeight + 8;
@@ -1868,7 +1951,7 @@ function repSpy() {
       if (d < best) { best = d; id = secs[i].id; }
     }
   }
-  Array.prototype.forEach.call(tool.querySelectorAll(".toc a"), function (a) {
+  Array.prototype.forEach.call(el.querySelectorAll(".repnav a"), function (a) {
     a.classList.toggle("on", "sec-" + a.dataset.sec === id);
   });
 }
@@ -1886,10 +1969,15 @@ function showSection(n) {
     g.classList.toggle("active", g.id === "sec-" + n);
   });
   Array.prototype.forEach.call(el.querySelectorAll(".repnav a"), function (a) {
-    a.classList.toggle("on", +a.dataset.sec === n);
+    var on = +a.dataset.sec === n;
+    a.classList.toggle("on", on);
+    // Строка разделов шире окна: открытый раздел подводим к видимой части,
+    // иначе выбранный ярлык остаётся за краем.
+    if (on && a.scrollIntoView) a.scrollIntoView({ block: "nearest", inline: "nearest" });
   });
-  var sel = el.querySelector('select[data-sel="sec"]');
-  if (sel) sel.value = String(n);
+  el.classList.toggle('annual-overview', n === 1);
+  var period = el.querySelector('select[data-sel="mset"]');
+  if (period) period.closest('label').hidden = PERIOD_SECTIONS.indexOf(n) < 0;
   el.scrollTop = 0;
   // Сразу и ещё раз после кадра: в скрытой вкладке кадры не приходят, и
   // масштаб оставался непосчитанным до первого щелчка.
@@ -1897,18 +1985,61 @@ function showSection(n) {
   requestAnimationFrame(applyZoom);
 }
 
-/* Масштаб отчёта: уменьшенный шрифт и клетки вместо прокрутки вбок. Считаем
-   по открытому разделу и не мельчим ниже 60 %: дальше числа не читаются. */
+/* Таблицы автоматически подстраиваются по ширине, сохраняя читаемый размер. */
+/* Высота липкой панели: по ней встают заголовок раздела и шапки таблиц.
+   Меряем не один раз при отрисовке, а следим: панель меняет высоту, когда
+   поля переносятся на второй ряд или меняется её состав, — и тогда прежнее
+   значение оставляло заголовок раздела висеть посреди страницы, наезжая на
+   содержимое. */
+var toolWatch = null;
+function trackToolbar() {
+  var v = $("view"), tool = v.querySelector(".rtool");
+  if (!tool) return;
+  // Липких ярусов два: панель и под ней строка разделов. Заголовок раздела
+  // и шапка таблицы встают под обоими, поэтому высота строки разделов тоже
+  // меряется: при одинаковом отступе они наезжали друг на друга.
+  var nav = v.querySelector(".repnav");
+  var upd = function () {
+    var pad = parseFloat(getComputedStyle(v).paddingTop) || 0;
+    v.style.setProperty("--toolh",
+      Math.round(tool.getBoundingClientRect().height - pad) + "px");
+    var navh = 0;
+    if (nav && getComputedStyle(nav).position === "sticky") {
+      navh = Math.round(nav.getBoundingClientRect().height);
+    }
+    v.style.setProperty("--navh", navh + "px");
+    // Высота видимой части отчёта: по ней широкая таблица получает свою
+    // высоту и прокручивается сама, оставляя шапку граф на месте.
+    v.style.setProperty("--viewh", Math.round(v.clientHeight) + "px");
+  };
+  upd();
+  if (window.ResizeObserver) {
+    if (toolWatch) toolWatch.disconnect();
+    toolWatch = new ResizeObserver(upd);
+    toolWatch.observe(tool);
+    toolWatch.observe(v);
+    if (nav) toolWatch.observe(nav);
+  }
+}
+
+var reportWidthWatch = null, reportWidthBody = null;
 function applyZoom() {
   var body = $("view").querySelector(".repbody");
   if (!body) return;
-  var tool = $("view").querySelector(".rtool");
-  if (tool) {
-    // Панель липкая, и всё, что липнет ниже, должно знать её высоту.
-    var pad = parseFloat(getComputedStyle($("view")).paddingTop) || 0;
-    $("view").style.setProperty("--toolh",
-      Math.round(tool.getBoundingClientRect().height - pad) + "px");
+  if (window.ResizeObserver && reportWidthBody !== body) {
+    if (reportWidthWatch) reportWidthWatch.disconnect();
+    reportWidthBody = body;
+    var lastWidth = body.clientWidth;
+    reportWidthWatch = new ResizeObserver(function () {
+      var width = body.clientWidth;
+      if (width && width !== lastWidth) {
+        lastWidth = width;
+        requestAnimationFrame(applyZoom);
+      }
+    });
+    reportWidthWatch.observe(body);
   }
+  trackToolbar();
   // Масштаб получают только таблицы: заголовки раздела и его переключатели
   // остаются в размере панели, иначе органы управления разных уровней
   // выходили разного роста.
@@ -1918,23 +2049,30 @@ function applyZoom() {
     Array.prototype.forEach.call(grids, function (g) { g.style.zoom = z; g.style.setProperty("--gz", z); });
     body.style.zoom = 1;
   };
-  if (repZoom === "fit") {
+  {
     body.classList.add("compact");
     setZoom(1);
-    var worst = 1;
+    // Сначала подбираем ширину граф: перенос длинного текста сужает таблицу,
+    // и после него нужен меньший масштаб, а часто он и не нужен.
+    Array.prototype.forEach.call(grids, wrapWideCols);
+    // Масштаб — каждой таблице свой: в разделе 6 форма кадров (6.3, двадцать
+    // три графы) втрое шире окна, и общий масштаб «по худшей» оставлял в
+    // размере 100 % и прокрутке все три таблицы, включая помесячную.
     Array.prototype.forEach.call(grids, function (g) {
-      if (g.scrollWidth > g.clientWidth + 2) worst = Math.max(worst, g.scrollWidth / g.clientWidth);
+      var one = function (z) { g.style.zoom = z; g.style.setProperty("--gz", z); };
+      var worst = g.scrollWidth > g.clientWidth + 2 ? g.scrollWidth / g.clientWidth : 1;
+      // Масштаб и горизонтальную прокрутку не совмещаем: при CSS zoom липкие
+      // графы смещаются относительно прокручиваемой части. Если для полного
+      // размещения нужен масштаб ниже 80 %, оставляем размер 100 %
+      // и обычную прокрутку. Запас в два процента убирает полосу в пару пикселей.
+      var need = worst <= 1 ? 1 : 0.98 / worst;
+      var autoZoom = need >= 0.80 ? Math.floor(need * 100) / 100 : 1;
+      one(autoZoom);
+      // CSS zoom меняет расчётную ширину контейнера не так, как ширину таблицы.
+      // Поэтому после применения проверяем результат, а не полагаемся на
+      // предварительное отношение размеров.
+      if (autoZoom < 1 && g.scrollWidth > g.clientWidth + 2) one(1);
     });
-    // Ниже 0,6 числа не читаются, но и полоса прокрутки ради пяти процентов
-    // ширины хуже: таблица тогда ездит целиком. Если не хватило немного —
-    // дожимаем до 0,52, если много — оставляем 0,6 и прокрутку.
-    // Запас в два процента: кнопки в шапке округляются по-разному на разных
-    // масштабах, и без запаса оставалась полоса прокрутки в пару пикселей.
-    var need = worst <= 1 ? 1 : 0.98 / worst;
-    setZoom(Math.floor((need >= 0.52 ? need : 0.6) * 100) / 100);
-  } else {
-    body.classList.remove("compact");
-    setZoom(repZoom / 100);
   }
   body.dataset.zoom = grids.length ? grids[0].style.zoom : "1";
   // Высота заголовка раздела зависит от отметок в нём — липкой шапке таблицы
@@ -1946,8 +2084,35 @@ function applyZoom() {
 
 /* Закрепленным графам нужен отступ слева: он равен ширине граф перед ними и
    известен только после раскладки таблицы. */
+/* Автоподбор ширины граф: графа шире 220 точек переносит текст по словам.
+   Считаем по готовой раскладке — какой она вышла, такую и правим; поэтому
+   класс ставится здесь, а не при сборке строк. */
+function wrapWideCols(g) {
+  var ths = g.querySelectorAll("thead tr:not(.g1) th");
+  if (!ths.length) return;
+  // Пометку только ставим и не снимаем: после переноса графа становится уже
+  // 220 точек, и повторный проход снял бы её, а таблица снова разъехалась.
+  // При новой отрисовке разметка строится заново, и пометки нет.
+  var wide = [];
+  for (var i = 0; i < ths.length; i++) {
+    if (ths[i].classList.contains("n") || ths[i].classList.contains("num")) continue;
+    if (ths[i].classList.contains("w")) continue;
+    if (ths[i].offsetWidth > 220) wide.push(i);
+  }
+  if (!wide.length) return;
+  wide.forEach(function (i) { ths[i].classList.add("w"); });
+  Array.prototype.forEach.call(g.querySelectorAll("tbody tr"), function (tr) {
+    wide.forEach(function (i) {
+      var c = tr.children[i];
+      // Ячейка с объединением закрывает несколько граф — её не трогаем.
+      if (c && (c.colSpan || 1) === 1 && !c.classList.contains("n")) c.classList.add("w");
+    });
+  });
+}
+
 function fixCols() {
   Array.prototype.forEach.call($("view").querySelectorAll(".grid"), function (g) {
+    wrapWideCols(g);
     // Высота верхнего яруса шапки в масштабе таблицы — для липкого второго яруса.
     var g1 = g.querySelector("thead tr.g1");
     if (g1) {
@@ -1969,31 +2134,39 @@ function fixCols() {
     // Таблица помещается по ширине — снимаем свою прокрутку: тогда шапка
     // граф липнет к странице, а не к невидимой полосе внутри таблицы.
     var fits = g.scrollWidth <= g.clientWidth + 2;
+    // На узком экране все заявленные закреплённые графы могут занять всю
+    // видимую область. Оставляем столько, чтобы справа всегда было видно
+    // прокручиваемые данные; номер строки остаётся закреплённым минимумом.
+    var pinned = Math.min(n, ths.length);
+    // Для освоения сохраняем показатель вместе с договором, оставляя
+    // справа место для нескольких месяцев вместо ограничения в полтаблицы.
+    var scrollSpace = +(g.dataset.scrollSpace || 0);
+    var maxPinned = scrollSpace ? Math.max(g.clientWidth * 0.5, g.clientWidth - scrollSpace) : g.clientWidth * 0.5;
+    while (pinned > 1 && lefts[pinned - 1] + ths[pinned - 1].offsetWidth > maxPinned) pinned--;
     g.classList.toggle("fit", fits);
     Array.prototype.forEach.call(g.querySelectorAll(".fx"), function (c) {
       var ci = +c.dataset.c;
-      c.style.left = fits ? "" : (lefts[ci] || 0) + "px";
-      c.classList.toggle("fxl", !fits && ci + (c.colSpan || 1) >= n);
+      var active = !fits && ci < pinned;
+      c.style.left = active ? (lefts[ci] || 0) + "px" : "";
+      c.classList.toggle("fx-off", !fits && !active);
+      c.classList.toggle("fxl", active && ci + (c.colSpan || 1) >= pinned);
     });
   });
 }
-window.addEventListener("resize", function () { if (view === "sum") fixCols(); });
+window.addEventListener("resize", function () { if (view === "sum") applyZoom(); });
 /* Месяцы, показанные в помесячных таблицах. Двенадцать месяцев по три графы
    не помещаются ни в один экран, и экономист возит таблицу вправо-влево.
    Полугодие или квартал помещается целиком. */
 var repMon = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 var repEven = false, repOst = false;
-/* Масштаб отчёта. «Уместить» подбирает его сам под самую широкую таблицу:
-   двенадцать месяцев целиком читать мелко, но лучше, чем возить вбок. */
-var repZoom = "fit";
 /* Открытый раздел. Отчёт показывает одну таблицу во всю площадь: полотно из
    тринадцати таблиц читалось только при мелком масштабе. */
 var repSec = 1;
-var ZOOMS = [["100 %", 100], ["90 %", 90], ["80 %", 80], ["70 %", 70], ["по ширине", "fit"]];
 var MON_SETS = [["год", [1,2,3,4,5,6,7,8,9,10,11,12]],
-                ["I полугодие", [1,2,3,4,5,6]], ["II полугодие", [7,8,9,10,11,12]],
-                ["I квартал", [1,2,3]], ["II квартал", [4,5,6]],
-                ["III квартал", [7,8,9]], ["IV квартал", [10,11,12]]];
+                 ["I полугодие", [1,2,3,4,5,6]], ["II полугодие", [7,8,9,10,11,12]],
+                 ["I квартал", [1,2,3]], ["II квартал", [4,5,6]],
+                 ["III квартал", [7,8,9]], ["IV квартал", [10,11,12]]];
+var PERIOD_SECTIONS = [3, 4, 6, 7, 11];
 function monSetName() {
   for (var i = 0; i < MON_SETS.length; i++) {
     if (MON_SETS[i][1].join() === repMon.join()) return MON_SETS[i][0];
@@ -2011,6 +2184,36 @@ function repGoalsHtml() {
   var goals = (s["цели"] || []).filter(function (g) { return g["приоритет"] === "вес"; });
   var settings = (vrep && vrep["настройки"]) || [];
   var h = "";
+  // 13.1 Версии расчёта: статус, время, дата и взвешенные цели каждой версии
+  // одной таблицей — сравнение версий по числам и есть работа отчёта.
+  var runs = state.runs || [], gcols = [], seen = {};
+  runs.forEach(function (r) {
+    (((r.summary || {})["цели"]) || []).forEach(function (g) {
+      if (g["приоритет"] !== "вес" || seen[g["цель"]]) return;
+      seen[g["цель"]] = true;
+      gcols.push({ key: g["цель"], t: (GOAL_SHORT[g["цель"]] || g["цель"]) + (g["единица"] ? ", " + g["единица"] : "") });
+    });
+  });
+  if (runs.length) {
+    var vrows = runs.map(function (r) {
+      var by = {};
+      (((r.summary || {})["цели"]) || []).forEach(function (g) { by[g["цель"]] = g; });
+      var ok = r.status === "OPTIMAL";
+      return { cls: r.id === vrun ? "sel" : "", cells: [
+        nc(String(r.id)),
+        { v: esc(ok ? "посчитан" : r.status), cls: ok ? "ok" : (r.status === "идет" ? "" : "er") },
+        nc(r.seconds != null ? String(Math.round(r.seconds)) : "—"),
+        r.created || "",
+      ].concat(gcols.map(function (c) {
+        var g = by[c.key];
+        if (!g) return gc("—");
+        return nc(g["единица"] === "₽" ? rmi(g["значение"]) : fmtGoal(g["значение"]));
+      }), [ok ? { v: '<a class="xl" href="/api/case/' + caseId + "/result/" + r.id + '">xlsx</a>' } : ""]) };
+    });
+    h += secH(13, "Расчёт") + subH("13.1", "Версии") + repT(
+      [{ t: "Версия" }, "Статус", { t: "Время, с" }, "Дата"].concat(
+        gcols.map(function (c) { return { t: c.t }; }), ["Файл"]), vrows, null, { fix: 1 });
+  }
   if (goals.length || settings.length) {
     var rows = goals.map(function (g) {
       return [g["цель"], nc(g["единица"] === "₽" ? rmi(g["значение"]) : fmtGoal(g["значение"])),
@@ -2024,32 +2227,217 @@ function repGoalsHtml() {
       else if (name === "макс договоров оклада в год") unit = "шт";
       rows.push([{ v: esc(name), cls: "set" }, nc(txt), unit, ""]);
     });
-    h += secH(13, "Цели и настройки расчета") + repT(
-      ["Цель", { t: "Значение" }, "Единица", { t: "Вес" }], rows) + "</div>";
+    h += (runs.length ? "" : secH(13, "Расчёт")) + subH("13.2", "Цели и настройки") + repT(
+      ["Цель", { t: "Значение" }, "Единица", { t: "Вес" }], rows);
   }
+  if (runs.length || goals.length || settings.length) h += "</div>";
   var def = (vrep && vrep["дефицит"]) || [];
   if (def.length) {
     var total = 0;
     def.forEach(function (d) { total += d["дефицит"] || 0; });
     h += secH(14, "Дефицит выплат", chip(rm(total) + " ₽", "er")) + repT(
       ["Табельный", "Сотрудник", "Месяц", { t: "Положено, ₽" }, { t: "Выплачено, ₽" }, { t: "Дефицит, ₽" }, "Причина"],
-      def.map(function (d) {
-        return [d["табельный"], d["фио"], MON[d["месяц"] - 1], nc(rm(d["положено"])),
-                nc(rm(d["выплачено"])), nc(rm(d["дефицит"]), "err"), d["причина"] || ""];
+      def.map(function (d, i) {
+        return {reviewKey:"deficit:"+i,cells:[d["табельный"], d["фио"], MON[d["месяц"] - 1], nc(rm(d["положено"])),
+                nc(rm(d["выплачено"])), nc(rm(d["дефицит"]), "err"), d["причина"] || ""]};
       }), null, { fix: 2, tall: true, merge: [0, 1] }) + "</div>";
+  } else {
+    h += secH(14, "Дефицит выплат", chip("не выявлен", "ok")) +
+      '<div class="none">В выбранной версии расчёта дефицит выплат сотрудникам не выявлен.</div></div>';
   }
   return h;
 }
 
+/* Diagnostics use the selected run only; a successful solve is not a clean audit. */
+var issueReturn = null;
+function currentIssues() { return PlanIssues.collect(vrep, vrules, vresult, vrun); }
+function reportIssues(report, rules, result) {
+  return PlanIssues.collect(report,rules,result,vrun).map(function (x) { return {sec:x.target.section,level:x.severity==='error'?'error':'warn',title:x.title,detail:x.subject}; });
+}
+function reportOverview() { return PlanIssues.render(currentIssues()); }
+function reportOverviewChips() {
+  var rows=currentIssues();
+  return rows.some(function(x){return x.severity==='error';}) ? chip('Есть ошибки','er') : rows.length ? chip('Есть замечания','wr') : chip('Замечаний нет','ok');
+}
+function openPlanIssue(id) {
+  var issue=currentIssues().find(function(x){return x.id===id;});
+  if(!issue) return;
+  issueReturn={scroll:$("view").scrollTop,mon:repMon.slice(),filters:repColFilter,hidden:repHideCol,id:id};
+  repColFilter={}; repHideCol={};
+  if(issue.target.month) repMon=[issue.target.month];
+  repSec=issue.target.section; renderView(); showSection(repSec);
+  var section=$("view").querySelector('.rep.active');
+  if(!section) return;
+  requestAnimationFrame(function(){
+    var row=Array.prototype.find.call(section.querySelectorAll('[data-review-key]'),function(r){return r.dataset.reviewKey===issue.target.row;});
+    // Ключ по человеку и виду выплаты: строк столько же, сколько договоров,
+    // и годится первая — она приведёт глаз в нужное место таблицы.
+    if(!row && /^pay:/.test(issue.target.row||'')) row=section.querySelector('[data-review-key^="'+issue.target.row+'"]');
+    if(!row) { var note=document.createElement('p');note.className='issue-empty';note.textContent='Точная строка недоступна в этой версии отчёта. '+issue.subject+' — '+issue.title;section.prepend(note);return; }
+    var fold=row.closest('details');if(fold)fold.open=true;
+    row.classList.add('review-target');row.tabIndex=-1;
+    var cell=issue.target.column==null?null:row.querySelector('[data-source-col="'+issue.target.column+'"]');
+    if(cell)cell.classList.add('issue-target-cell');
+    (cell||row).scrollIntoView({block:'center',inline:'center'});row.focus({preventScroll:true});
+  });
+}
+
+function reviewRuleTitle(r) {
+  return r["правило"] === "ФОТ договоров освоен"
+    ? "Нераспределённый ФОТ по договорам" : r["правило"];
+}
+
+function reviewRuleTarget(r) {
+  var where = String(r["где"] || "").toLowerCase();
+  if (where.indexOf("освоен") >= 0) return { section: 3, label: "Освоение" };
+  if (where.indexOf("ставк") >= 0) return { section: 7, label: "Ставки" };
+  if (where.indexOf("бэп") >= 0) return { section: 8, label: "БЭП" };
+  if (where.indexOf("п4") >= 0) return { section: 9, label: "П4" };
+  if (where.indexOf("труд") >= 0) return { section: 10, label: "Трудоёмкость" };
+  if (where.indexOf("договор") >= 0) return { section: 2, label: "Договоры" };
+  return null;
+}
+
+function reviewRuleSummary(r) {
+  if (r["правило"] !== "ФОТ договоров освоен") return r["факт"] || "";
+  var totals = (vrep && vrep["итоги"]) || {};
+  var paid = totals["выплачено"], limit = totals["ФОТ"];
+  if (paid == null || limit == null) return cap(r["факт"] || "");
+  return "Выплачено " + mo(paid) + " ₽ из " + mo(limit) + " ₽. Не распределено " +
+    mo(limit - paid) + " ₽ (" + rpn(limit ? (limit - paid) / limit : 0) + " % ФОТ).";
+}
+
+function reviewPercent(v) {
+  if (v == null) return "—";
+  var n = Math.round(v * 10000) / 100;
+  var digits = n < 100 && n >= 99.9 ? 2 : 1;
+  return n.toFixed(digits).replace(".", ",");
+}
+
+/* В карточке замечания названия колонок описывают бизнес-величины. Общие
+   «Факт / Предел / Запас» не объясняли, является ли запас хорошим результатом
+   или нераспределёнными деньгами. */
+function reviewRuleTable(r) {
+  var rows = r["строки"] || [];
+  if (!rows.length) return "";
+  var numeric = rows[0]["предел"] !== undefined && rows[0]["предел"] !== null;
+  if (!numeric) {
+    return '<div class="review-rule-scroll"><table class="review-table review-rule-table"><thead><tr>' +
+      '<th scope="col">Объект проверки</th><th scope="col">Результат проверки</th></tr></thead><tbody>' +
+      rows.map(function (s, i) {
+        return '<tr data-review-key="rule:' + vrules.indexOf(r) + ':' + i + '"><th scope="row">' +
+          esc(s["объект"]) + '</th><td>' + esc(s["что"] || "—") + '</td></tr>';
+      }).join("") + "</tbody></table></div>";
+  }
+  var spend = r["правило"] === "ФОТ договоров освоен";
+  var unit = r["единица"] || "";
+  var suffix = unit ? ", " + unit : "";
+  var headers = spend
+    ? ["Договор", "Выплаты по плану, ₽", "Лимит ФОТ, ₽", "Не распределено, ₽", "Освоено, %"]
+    : ["Объект проверки", "Проверенное значение" + suffix,
+       cap(r["подпись предела"] || "допустимый предел") + suffix,
+       "Результат относительно предела", "Использовано, %"];
+  return '<div class="review-rule-scroll"><table class="review-table review-rule-table"><thead><tr>' +
+    headers.map(function (h, i) {
+      return '<th scope="col"' + (i ? ' class="amount"' : "") + '>' + esc(h) + '</th>';
+    }).join("") + '</tr></thead><tbody>' + rows.map(function (s, i) {
+      var delta;
+      if (spend) delta = mo(s["запас"]);
+      else if (s["запас"] < 0) delta = '<strong class="rule-over">превышение ' + mo(-s["запас"]) +
+                                        (unit ? " " + esc(unit) : "") + '</strong>';
+      else delta = '<span class="rule-reserve">запас ' + mo(s["запас"]) +
+                   (unit ? " " + esc(unit) : "") + '</span>';
+      return '<tr data-review-key="rule:' + vrules.indexOf(r) + ':' + i + '" class="' +
+        (s["нарушено"] ? "over" : "") + '"><th scope="row">' + esc(s["объект"]) +
+        (s["таких же"] > 1 ? '<small>Ещё ' + (s["таких же"] - 1) +
+                             " с тем же результатом</small>" : "") +
+        '</th><td class="amount">' + mo(s["факт"]) + '</td><td class="amount">' +
+        mo(s["предел"]) + '</td><td class="amount rule-delta' +
+        (spend && s["запас"] > 0.5 ? " warn" : (s["запас"] < 0 ? " error" : "")) + '">' +
+        delta + '</td><td class="amount rule-share"><span>' + reviewPercent(s["доля"]) +
+        ' %</span>' + bar(s["доля"], s["нарушено"] ? "bad" : (spend && s["запас"] > 0.5 ? "warn" : "ok")) +
+        "</td></tr>";
+    }).join("") + "</tbody></table></div>";
+}
+
+function groupedRunWarnings(warnings) {
+  var groups = [], by = {};
+  warnings.forEach(function (w) {
+    // Остаток уже разобран выше по каждому договору; повторять его второй раз
+    // в журнале значит выдавать одну проблему за две.
+    if (/неосвоенный остаток/i.test(w[4] || "")) return;
+    var key = [w[0], w[1], w[2], w[4], w[5], w[6]].join("\u0001");
+    if (!by[key]) {
+      by[key] = { level: w[0], area: w[1], subject: w[2], title: w[4],
+                  value: w[5], action: w[6], periods: [] };
+      groups.push(by[key]);
+    }
+    if (w[3] && by[key].periods.indexOf(w[3]) < 0) by[key].periods.push(w[3]);
+  });
+  return groups;
+}
+
+function warningPeriods(periods) {
+  if (!periods.length) return "";
+  if (periods.length <= 3) return periods.join(", ");
+  return periods[0] + "–" + periods[periods.length - 1] + " · " + periods.length + " мес.";
+}
+
+function reportChecksSection() {
+  var warnings = ((vresult || {}).warnings || []).filter(function (w) { return Array.isArray(w) && /^(Ошибка|Предупреждение)$/.test(w[0]); });
+  var attention = (vrules || []).filter(function (r) { return r["состояние"] === "нарушено" || r["состояние"] === "внимание"; }).sort(function (a, b) { return (a["состояние"] === "нарушено" ? 0 : 1) - (b["состояние"] === "нарушено" ? 0 : 1); });
+  var messageGroups = groupedRunWarnings(warnings);
+  var badCount = attention.filter(function (r) { return r["состояние"] === "нарушено"; }).length;
+  var headChips = attention.length
+    ? (badCount ? chip(badCount + " " + px(badCount, "нарушение", "нарушения", "нарушений"), "er") : "") +
+      chip(attention.length + " " + px(attention.length, "замечание", "замечания", "замечаний"), "wr")
+    : chip("Замечаний нет", "ok");
+  if (messageGroups.length) headChips += chip(messageGroups.length + " " +
+    px(messageGroups.length, "группа сообщений", "группы сообщений", "групп сообщений"));
+
+  var primary = attention.length
+    ? '<section class="checks-attention" aria-label="Замечания к расчёту"><div class="review-section-title"><h3>Требует внимания</h3><span class="review-count">' +
+      attention.length + '</span></div>' + attention.map(function (r) {
+        var target = reviewRuleTarget(r);
+        return '<article class="review-rule ' + (r["состояние"] === "нарушено" ? "bad" : "warn") +
+          '" data-review-key="rule:' + vrules.indexOf(r) + ':-1"><div class="review-heading"><div class="review-heading-copy"><h4>' +
+          esc(reviewRuleTitle(r)) + '</h4><p>' + esc(reviewRuleSummary(r)) + '</p></div><div class="review-heading-actions">' +
+          chip(r["состояние"] === "нарушено" ? "Нарушение" : "Внимание",
+               r["состояние"] === "нарушено" ? "er" : "wr") +
+          (target ? '<button type="button" class="review-open" data-report-sec="' + target.section +
+                    '">Открыть «' + esc(target.label) + '»</button>' : "") +
+          '</div></div>' + reviewRuleTable(r) +
+          '<details class="review-explain"><summary>Условие проверки</summary><p>' + esc(r["смысл"]) +
+          '</p></details></article>';
+      }).join("") + "</section>"
+    : '<div class="checks-clear">Отклонений и замечаний по доступным проверкам нет.</div>';
+
+  var allRules = vrules && vrules.length
+    ? '<details class="fold2 checks-fold"><summary><span>Все проверки</span><span class="checks-fold-count">' +
+      vrules.length + '</span></summary><div class="checks-fold-body">' + rulesView() + "</div></details>"
+    : '<div class="none" data-review-key="checks-unavailable">Проверки этой версии недоступны.</div>';
+  var messages = messageGroups.length
+    ? '<details class="fold2 checks-fold"><summary><span>Дополнительные сообщения</span><span class="checks-fold-count">' +
+      messageGroups.length + " " + px(messageGroups.length, "группа", "группы", "групп") + " · " +
+      warnings.filter(function (w) { return !/неосвоенный остаток/i.test(w[4] || ""); }).length +
+      ' записей</span></summary><div class="checks-fold-body message-groups">' + messageGroups.map(function (g) {
+        return '<article class="message-group ' + (g.level === "Ошибка" ? "error" : "warn") + '"><div class="message-group-head"><strong>' +
+          esc(g.title || g.area) + '</strong>' + chip(g.level === "Ошибка" ? "Ошибка" : "Внимание",
+          g.level === "Ошибка" ? "er" : "wr") + '</div><p class="message-group-meta">' +
+          esc([g.subject, g.area, warningPeriods(g.periods)].filter(Boolean).join(" · ")) + '</p>' +
+          (g.action ? '<p class="message-group-action">' + esc(g.action) + '</p>' : "") + "</article>";
+      }).join("") + "</div></details>" : "";
+  return secH(15, "Контроль расчёта", headChips) + '<div class="checks-page">' + primary +
+    '<div class="checks-secondary">' + allRules + messages + "</div></div></div>";
+}
+
 function repSummary() {
   var r = vrep, t = r["итоги"], fot = t["ФОТ"] || 0;
-  var h = secH(1, "Итоги за год") + repT(
-    ["Показатель", { t: "За год, ₽" }, { t: "Доля от ФОТ, %" }],
-    [["ФОТ договоров на " + (r["год"] || "") + " год", nc(rm(t["ФОТ"])), nc(rpn(fot ? 1 : null))],
-     ["Поступило на счета за год", nc(rm(t["поступило"])), nc(rpn(fot ? t["поступило"] / fot : null))],
-     ["Выплачено по плану за год", nc(rm(t["выплачено"])), nc(rpn(fot ? t["выплачено"] / fot : null))],
-     ["Остаток ФОТ на 31.12." + (r["год"] || ""), nc(rm(t["остаток ФОТ"])), nc(rpn(fot ? t["остаток ФОТ"] / fot : null))],
-     ["Остаток на счетах на 31.12." + (r["год"] || ""), nc(rm(t["остаток на счетах"])), nc(rpn(fot ? t["остаток на счетах"] / fot : null))]]) + "</div>";
+  var h = secH(1, "Итоги за " + (r["год"] || "") + " год", reportOverviewChips());
+  h += reportOverview() + '<div class="review-section-title"><h3>Годовые показатели</h3></div><div class="review-block"><table class="review-table review-totals"><thead><tr><th scope="col">Показатель</th><th scope="col" class="amount">Сумма</th><th scope="col" class="amount">Доля от лимита ФОТ</th></tr></thead><tbody>' +
+    [["Лимит ФОТ по договорам", t["ФОТ"]], ["Поступления на счета", t["поступило"]], ["Выплаты по плану", t["выплачено"]], ["Нераспределённый ФОТ на конец года", t["остаток ФОТ"]], ["Остаток средств на счетах на конец года", t["остаток на счетах"]]].map(function (x) {
+      return '<tr><th scope="row">' + esc(x[0]) + '</th><td class="amount">' + esc(rm(x[1])) + ' ₽</td><td class="amount">' + (fot ? esc(rpn(x[1] / fot)) + ' %' : '—') + '</td></tr>';
+    }).join('') + '</tbody></table></div></div>';
 
   var yy = String(r["год"] || "").slice(2);
   var stc = { ok: 0, wr: 0, er: 0 };
@@ -2079,10 +2467,10 @@ function repSummary() {
      { t: "Освоение за год, %" }, "Статус за год"],
     r["договоры"].map(function (c) {
       var st = c["статус"], scls = st === "в срок" ? "ok" : (/после|нет выплат/.test(st) ? "er" : "wr");
-      return [c["код"], nc(c["месяцев с выплатами"]), nc(c["месяцев в окне"]),
+      return { reviewKey: c["код"], cells: [c["код"], nc(c["месяцев с выплатами"]), nc(c["месяцев в окне"]),
               nc(rm(c["ФОТ"])), nc(rm(c["поступило"])), nc(rm(c["выплачено"])),
               nc(rm(c["остаток"]), c["остаток"] > 0 ? "tight" : ""), nc(rpn(c["освоение"])),
-              { v: esc(st), cls: scls }];
+              { v: esc(st), cls: scls }] };
     }), null, { fix: 1 }) + "</div>";
 
   // Дополнительные показатели идут строками, а не графами: графа на каждый
@@ -2119,7 +2507,7 @@ function repSummary() {
   });
   h += secH(3, "Освоение ФОТ по договорам") +
        repT(head, urows, null,
-            { fix: 4, tall: true, groups: monGroupRow(4, 1, 0, "quarter"), merge: [0, 1, 2] }) +
+            { fix: 4, scrollSpace: 240, tall: true, groups: monGroupRow(4, 1, 0, "quarter"), merge: [0, 1, 2] }) +
        '<div class="lg"><i class="tight"></i>отличие от равномерного освоения более 5 %</div>' + "</div>";
   return h;
 }
@@ -2135,7 +2523,7 @@ function repCash() {
       var year = n[0] === "поступление" ? rm(c["год"]["поступление"])
                : (n[0] === "выплаты" ? rm(c["год"]["выплаты"])
                : (n[0] === "конец" ? rm(c["год"]["конец"]) : null));
-      rows.push({ cls: n[0] === "освоено" ? "sum" : "",
+      rows.push({ reviewKey:"cash:"+c["код"]+":"+n[0], cls: n[0] === "освоено" ? "sum" : "",
         cells: [c["код"], n[1]].concat(repMon.map(function (mn) {
           var v = arr[mn - 1];
           if (v == null) return gc();
@@ -2220,7 +2608,7 @@ function repPlan() {
     vrep["виды"].map(function (k) {
       return [k["договор"], k["вид"], nc(rm(k["сумма"])), nc(rpn(k["доля договора"])),
               nc(rpn(k["доля фонда"])), nc(k["месяцев"])];
-    }), null, { merge: [0] }) + "</div>";
+    }), null, { fix: 2, merge: [0] }) + "</div>";
 
   // Группировка одна на обе таблицы раздела; выбор строк — только регистра.
   var ctlG = '<div class="ctl"><label class="fld">Группировка<select data-rg>' +
@@ -2233,8 +2621,8 @@ function repPlan() {
   // 6.1 — план выплат по месяцам: сотрудник → договор → вид выплаты.
   var pm = vrep["помесячно"] || { "сотрудники": [], "итого": [], "год": 0 };
   var mrows = [], byE = repGroup === "e";
-  var mcells = function (arr) {
-    return repMon.map(function (mn) { var v = arr[mn - 1]; return v ? nc(rmi(v)) : gc("—"); });
+  var mcells = function (arr, code) {
+    return repMon.map(function (mn) { return mc(arr[mn - 1], code, mn, rmi); });
   };
   var KIND_ORDER = ["оклад", "120", "122", "124", "152", "приказ"];
   if (byE) {
@@ -2243,7 +2631,9 @@ function repPlan() {
     pm["сотрудники"].forEach(function (p) {
       p["строки"].forEach(function (l) {
         mrows.push({ cls: l["вид"] === "оклад" ? "okl" : "",
-          cells: [p["табельный"], p["фио"], l["договор"], l["вид"]].concat(mcells(l["месяцы"]), [nc(rmi(l["год"]))]) });
+          reviewKey: "pay:" + p["табельный"] + ":" + l["вид"],
+          cells: [p["табельный"], p["фио"], l["договор"], l["вид"]].concat(
+            mcells(l["месяцы"], l["договор"]), [nc(rmi(l["год"]))]) });
       });
       mrows.push({ cls: "sum", cells: [p["табельный"], p["фио"], { v: "Итого по сотруднику", cs: 2 }, { skip: true }]
         .concat(mcells(p["итого"]), [nc(rmi(p["год"]))]) });
@@ -2260,17 +2650,19 @@ function repPlan() {
       var tot = [], year = 0;
       byC[code].forEach(function (x) {
         mrows.push({ cls: x.l["вид"] === "оклад" ? "okl" : "",
-          cells: [code, x.p["табельный"], x.p["фио"], x.l["вид"]].concat(mcells(x.l["месяцы"]), [nc(rmi(x.l["год"]))]) });
+          reviewKey: "pay:" + x.p["табельный"] + ":" + x.l["вид"],
+          cells: [code, x.p["табельный"], x.p["фио"], x.l["вид"]].concat(
+            mcells(x.l["месяцы"], code), [nc(rmi(x.l["год"]))]) });
         x.l["месяцы"].forEach(function (v, i) { if (v) tot[i] = (tot[i] || 0) + v; });
         year += x.l["год"] || 0;
       });
       mrows.push({ cls: "sum", cells: [code, { v: "Итого по договору", cs: 3 }, { skip: true }, { skip: true }]
-        .concat(mcells(tot), [nc(rmi(year))]) });
+        .concat(mcells(tot, code), [nc(rmi(year))]) });
     });
   }
   if (mrows.length) {
     mrows.push({ cls: "sum all", cells: [{ v: "Итого по организации", cs: 4 }, { skip: true }, { skip: true }, { skip: true }].concat(
-      repMon.map(function (mn) { var v = pm["итого"][mn - 1]; return v ? nc(rmi(v)) : gc("—"); }),
+      repMon.map(function (mn) { return mc(pm["итого"][mn - 1], null, mn, rmi); }),
       [nc(rmi(pm["год"]))]) });
   }
   h += secH(6, "Выплаты сотрудникам") + ctlG +
@@ -2279,7 +2671,8 @@ function repPlan() {
         .concat(monHead(), [{ t: "За год, ₽" }]),
       mrows, null, { fix: 4, tall: true, groups: monGroupRow(4, 1, 1, "quarter"), merge: [0, 1, 2] })
       : '<div class="none">выплат нет</div>') +
-    subH("6.2", "Регистр по периодам") + ctl + repRegisterGrid() + "</div>";
+    subH("6.2", "Регистр по периодам") + ctl + repRegisterGrid() +
+    subH("6.3", "ШР на дату, детализация назначений") + repStaffDetail() + "</div>";
 
   var srows = [];
   vrep["ставки"].forEach(function (p) {
@@ -2292,13 +2685,14 @@ function repPlan() {
         var all = c["месяцы"].filter(function (v, mi) { return v && !!c["основное"][mi] === kind[1]; });
         if (!all.length) return;
         var mx = Math.max.apply(null, all);
-        srows.push([p["табельный"], p["фио"], c["код"], kind[0]].concat(
-          vals.map(function (v) {
-            return v == null ? gc("—") : nc(rf(v), (!kind[1] && v >= 0.5 - 0.001) ? "tight" : "");
-          }), [nc(rf(mx), (!kind[1] && mx >= 0.5 - 0.001) ? "tight" : "")]));
+        srows.push({ reviewKey: "rate:" + p["табельный"], cells: [p["табельный"], p["фио"], c["код"], kind[0]].concat(
+          vals.map(function (v, i) {
+            return mc(v, c["код"], repMon[i], rf,
+                      (!kind[1] && v >= 0.5 - 0.001) ? "tight" : "");
+          }), [nc(rf(mx), (!kind[1] && mx >= 0.5 - 0.001) ? "tight" : "")]) });
       });
     });
-    srows.push({ cls: "sum", cells: [p["табельный"], p["фио"], "Всего", gc("—")].concat(
+    srows.push({ cls: "sum", reviewKey: "rate:" + p["табельный"], cells: [p["табельный"], p["фио"], "Всего", gc("—")].concat(
       repMon.map(function (mn) {
         var v = p["всего"][mn - 1];
         return v == null ? gc("—") : nc(rf(v), v >= p["предел"] - 0.001 ? "tight" : "");
@@ -2329,6 +2723,26 @@ function repPlan() {
   return h;
 }
 
+/* 6.3 — форма отдела кадров «ШР на дату, детализация»: строка на каждое
+   назначение (человек, договор, параметр, период). Графы как в шаблоне
+   кадров; номер и дата приказа сервису неизвестны, графы пустые. */
+function repStaffDetail() {
+  var rows = vrep["шр"] || [];
+  if (!rows.length) return '<div class="none">назначений нет</div>';
+  var head = ["Таб.№", "Назначение", "Фамилия И.О., уч. ст., уч. зван.", "Код подр.", "Подразделение",
+    "Должность", "Категория персонала", "Код пар-ра", "Название параметра", { t: "Ставка" },
+    { t: "Номинальное значение параметра" }, { t: "Значение параметра по ставке" }, { t: "Сумма в руб." },
+    "Начало действия", "Окончание действия", "Код шифра затрат", "Шифр затрат", "Лицевой счет",
+    "УИ ПНИЭР", "Номер приказа ввода", "Дата приказа ввода", "Номер приказа закрытия", "Дата приказа закрытия"];
+  var body = rows.map(function (r) {
+    return [r["таб"], r["назначение"] || gc("—"), r["фио"], r["код_подр"] || gc("—"), r["подразделение"] || gc("—"),
+      r["должность"], r["категория"] || gc("—"), r["код"], r["параметр"], nc(rf(r["ставка"])),
+      nc(rm(r["номинал"])), nc(rm(r["по_ставке"])), nc(rm(r["сумма"])), r["начало"], r["окончание"],
+      r["код_шифра"], r["шифр"] || gc("—"), r["счет"] || gc("—"), gc("—"), gc("—"), gc("—"), gc("—"), gc("—")];
+  });
+  return repT(head, body, null, { fix: 3, tall: true, merge: [0, 2] });
+}
+
 function repLimits() {
   var dev = function (v) {
     return { v: v == null ? "—" : rs(v * 100, true), cls: "n " + (v == null ? "" : (v > 0.0005 ? "er" : (v < -0.0005 ? "ok" : ""))) };
@@ -2338,9 +2752,9 @@ function repLimits() {
              ? (bepBad ? chip(bepBad + " выше БЭП", "er") : chip("в пределах", "ok")) : "") + (vrep["бэп"].length ? repT(
     ["Договор", "Месяц", { t: "Сумма оклада и 122, ₽" }, { t: "Сумма ставок" },
      { t: "Средняя на ставку, ₽" }, { t: "БЭП, ₽" }, { t: "Запас, ₽" }, { t: "Отклонение от БЭП, %" }],
-    vrep["бэп"].map(function (b) {
-      return [b["договор"], MON[b["месяц"] - 1], nc(rm(b["сумма"])), nc(rf(b["ставок"])),
-              nc(rm(b["средняя"])), nc(rm(b["БЭП"])), nc(rm(b["запас"])), dev(b["отклонение"])];
+    vrep["бэп"].map(function (b, i) {
+      return {reviewKey:"bep:"+i,cells:[b["договор"], MON[b["месяц"] - 1], nc(rm(b["сумма"])), nc(rf(b["ставок"])),
+              nc(rm(b["средняя"])), nc(rm(b["БЭП"])), nc(rm(b["запас"])), dev(b["отклонение"])]};
     }), null, { fix: 1, tall: true, merge: [0] }) : '<div class="none">ГОЗ-договоров в плане нет</div>') + "</div>";
 
   var p4Bad = vrep["п4"].filter(function (b) { return b["отклонение"] > 0.0005; }).length;
@@ -2348,10 +2762,10 @@ function repLimits() {
             ? (p4Bad ? chip(p4Bad + " выше предела", "er") : chip("в пределах", "ok")) : "") + (vrep["п4"].length ? repT(
     ["Табельный", "ФИО", "Месяц", { t: "Оклад, ₽" }, { t: "122, ₽" }, { t: "124, ₽" }, { t: "Итого по П4, ₽" },
      { t: "Суммарная ставка" }, { t: "Предел П4 на ставку, ₽" }, { t: "Запас, ₽" }, { t: "Отклонение от предела, %" }],
-    vrep["п4"].map(function (b) {
-      return [b["табельный"], b["фио"], MON[b["месяц"] - 1], nc(rm(b["оклад"])), nc(rm(b["122"])),
+    vrep["п4"].map(function (b, i) {
+      return {reviewKey:"p4:"+i,cells:[b["табельный"], b["фио"], MON[b["месяц"] - 1], nc(rm(b["оклад"])), nc(rm(b["122"])),
               nc(rm(b["124"])), nc(rm(b["итого"])), nc(rf(b["ставка"])), nc(rm(b["предел"])),
-              nc(rm(b["запас"])), dev(b["отклонение"])];
+              nc(rm(b["запас"])), dev(b["отклонение"])]};
     }), null, { fix: 2, tall: true, merge: [0, 1] }) : '<div class="none">надбавка 124 в этом плане не назначалась</div>') + "</div>";
 
   var lbBad = vrep["трудоемкость"].filter(function (l) { return l["статус"] !== "сходится"; }).length;
@@ -2360,19 +2774,33 @@ function repLimits() {
             ? (lbBad ? chip(lbBad + " не сходится", "wr") : chip("сходится", "ok")) +
               (lbTol != null ? chip("допуск " + rp(lbTol)) : "") : "") + (vrep["трудоемкость"].length ? repT(
     ["Договор", "Строка РКМ", { t: "План, чел.-мес." }, { t: "Факт, чел.-мес." }, { t: "Отклонение, чел.-мес." },
-     { t: "План, ₽" }, { t: "Факт, ₽" }, { t: "Отклонение, ₽" }, { t: "Средняя план, ₽" }, { t: "Средняя факт, ₽" },
-     { t: "Отклонение средней, ₽" }, { t: "Предел людей" }, { t: "Людей в месяц, макс" }, "Статус"],
-    vrep["трудоемкость"].map(function (l) {
+     { t: "Отклонение, %" },
+     { t: "План, ₽" }, { t: "Факт, ₽" }, { t: "Отклонение, ₽" }, { t: "Отклонение, %" },
+     { t: "Средняя план, ₽" }, { t: "Средняя факт, ₽" },
+     { t: "Отклонение средней, ₽" }, { t: "Отклонение средней, %" },
+     { t: "Предел людей" }, { t: "Людей в месяц, макс" }, "Статус"],
+    vrep["трудоемкость"].map(function (l, i) {
       var bad = l["статус"] !== "сходится", out = l["вне допуска"] || {};
       // Отклонение внутри допуска — обычное число; вне допуска — красным.
       var dv = function (txt, over) { return { v: txt, cls: "n" + (over ? " er" : "") }; };
-      return [l["договор"], l["строка"], nc(rf(l["план чел-мес"])), nc(rf(l["факт чел-мес"])),
-              dv(rs(l["д чел-мес"], true), out["чел-мес"]), nc(rm(l["план сумма"])),
-              nc(rm(l["факт сумма"])), dv(rs(l["д сумма"]), out["сумма"]), nc(rm(l["средняя план"])),
+      // Доля рядом с рублями: допуск задан в процентах, и по рублям не видно,
+      // близко ли расхождение к нему. 0,8 чел.-мес. — это 5 % от 16 и 10 % от 8.
+      var pc = function (d, plan, over) {
+        return { v: (d == null || !plan) ? "—" : rs(d / plan * 100, true),
+                 cls: "n" + (over ? " er" : "") };
+      };
+      return { reviewKey: "labor:"+i, cells: [l["договор"], l["строка"], nc(rf(l["план чел-мес"])), nc(rf(l["факт чел-мес"])),
+              dv(rs(l["д чел-мес"], true), out["чел-мес"]),
+              pc(l["д чел-мес"], l["план чел-мес"], out["чел-мес"]),
+              nc(rm(l["план сумма"])),
+              nc(rm(l["факт сумма"])), dv(rs(l["д сумма"]), out["сумма"]),
+              pc(l["д сумма"], l["план сумма"], out["сумма"]),
+              nc(rm(l["средняя план"])),
               nc(rm(l["средняя факт"])), dv(rs(l["д средней"]), out["средняя"]),
+              pc(l["д средней"], l["средняя план"], out["средняя"]),
               nc(l["людей предел"] == null ? "—" : l["людей предел"]),
-              nc(l["людей макс"], l["людей предел"] && l["людей макс"] >= l["людей предел"] ? "tight" : ""),
-              { v: esc(l["статус"]), cls: bad ? "wr" : "ok" }];
+              nc(l["людей макс"], l["людей предел"] != null && l["людей макс"] > l["людей предел"] ? "err" : ""),
+              { v: esc(l["статус"]), cls: bad ? "wr" : "ok" }] };
     }), null, { fix: 2, merge: [0] }) : '<div class="none">трудоёмкость в РКМ не задана</div>') + "</div>";
 
   // Вопрос этой таблицы — кто именно и какой своей должностью закрывает
@@ -2393,17 +2821,29 @@ function repLimits() {
     var need = wneed[w["договор"] + "\u0001" + w["строка"]] || {};
     var bad = need["статус"] && need["статус"] !== "сходится";
     var wkey = w["договор"] + "\u0001" + w["строка"];
-    wrows.push({ grp: true, g: w["договор"], k: wkey, cells: [
+    // Якорь строки РКМ: по нему замечание «работу закрывает подходящая
+    // должность» открывается на нужной строке, а не на разделе целиком.
+    var wnum = vrep["трудоемкость"].findIndex(function (x) {
+      return x["договор"] === w["договор"] && x["строка"] === w["строка"]; });
+    wrows.push({ grp: true, g: w["договор"], k: wkey,
+      reviewKey: wnum >= 0 ? "who:" + wnum : undefined, cells: [
       { v: esc(w["строка"]), cs: 2 }, { skip: true },
       { v: "", cs: repMon.length },
       need["план чел-мес"] != null ? nc(rf(need["план чел-мес"])) : { v: "" }] });
+    // Строка с планом по месяцам: план — первой строкой группы, чтобы
+    // закрытие по месяцам сравнивалось с ним, а не только с годом.
+    if (w["план по месяцам"]) {
+      wrows.push({ g: wkey, cells: [{ v: "План", cs: 2 }, { skip: true }].concat(
+        repMon.map(function (mn) { return mc(w["план по месяцам"][mn - 1], w["договор"], mn, rf); }),
+        [nc(rf(need["план чел-мес"]))]) });
+    }
     w["люди"].forEach(function (p) {
       wrows.push({ g: wkey, cells: [p["фио"], p["должность"]].concat(
-        repMon.map(function (mn) { var v = p["ставка"][mn - 1]; return v ? nc(rf(v)) : gc("—"); }),
+        repMon.map(function (mn) { return mc(p["ставка"][mn - 1], w["договор"], mn, rf); }),
         [nc(rf(p["ставка год"]))]) });
     });
     wrows.push({ cls: "sum", g: wkey, cells: [{ v: "Закрыто по строке", cs: 2 }, { skip: true }].concat(
-      repMon.map(function (mn) { var v = w["итого ставка"][mn - 1]; return v ? nc(rf(v)) : gc("—"); }),
+      repMon.map(function (mn) { return mc(w["итого ставка"][mn - 1], w["договор"], mn, rf); }),
       [nc(rf(w["итого ставка год"]), bad ? "er" : "")]) });
   });
   h += secH(11, "Распределение трудоёмкости по исполнителям") + (wrows.length ? repT(
@@ -2422,6 +2862,12 @@ function repLimits() {
     h += secH(12, "Нехватка людей по строкам РКМ", chip(rf(gs) + " чел.-мес.", "er")) + repT(
       ["Договор", "Должность", { t: "Нужно, чел.-мес." }, { t: "Закрыли люди" }, { t: "Не закрыто" },
        { t: "Месяцев" }, { t: "Ставок в месяц" }], grows) + "</div>";
+  } else {
+    var hasLabor = (vrep["трудоемкость"] || []).length > 0;
+    h += secH(12, "Нехватка людей по строкам РКМ", hasLabor ? chip("не выявлена", "ok") : "") +
+      '<div class="none">' + (hasLabor
+        ? 'В выбранной версии расчёта незакрытых человеко-месяцев по строкам РКМ нет.'
+        : 'Трудоёмкость в РКМ не задана. Оценить нехватку людей по этим данным нельзя.') + '</div></div>';
   }
   return h + repGoalsHtml();
 }
@@ -2542,7 +2988,11 @@ document.addEventListener("keydown", function (e) {
 
 $("view").addEventListener("change", function (e) {
   if (view !== "sum") return;
-  if (e.target.matches('select[data-sel="sec"]')) { showSection(+e.target.value); return; }
+  if (e.target.matches('select[data-sel="sec"]')) {
+    var nextSection=+e.target.value;
+    if(issueReturn){issueReturn=null;repSec=nextSection;renderView();}
+    showSection(nextSection);return;
+  }
   if (e.target.matches('select[data-sel="run"]')) {
     chosenRun = +e.target.value; vrun = null; vrep = null;
     renderRuns();
@@ -2566,12 +3016,38 @@ $("view").addEventListener("change", function (e) {
   var s = e.target.closest("select[data-sel]");
   if (!s) return;
   if (s.dataset.sel === "mset") { repMon = s.value.split(",").map(Number); renderView(); }
-  else { repZoom = s.value === "fit" ? "fit" : +s.value; applyZoom(); }
 });
 
 $("view").addEventListener("click", function (e) {
   if (view !== "sum" || !vrep) return;
-  var nav = e.target.closest(".repnav a[data-sec]");
+  var open=e.target.closest('[data-issue-open]');
+  if(open){openPlanIssue(open.dataset.issueOpen);return;}
+  if(e.target.closest('[data-issue-back]') && issueReturn){
+    var saved=issueReturn;issueReturn=null;repMon=saved.mon;repColFilter=saved.filters;repHideCol=saved.hidden;repSec=1;renderView();showSection(1);
+    $("view").scrollTop=saved.scroll;
+    var origin=Array.prototype.find.call($("view").querySelectorAll('[data-issue-open]'),function(b){return b.dataset.issueOpen===saved.id;});
+    if(origin)origin.focus({preventScroll:true});return;
+  }
+  var issue = e.target.closest("[data-report-sec]");
+  if (issue) {
+    var targetKey = issue.dataset.reviewTarget;
+    if (targetKey) {
+      // Restore hidden columns and filtered rows before locating the source.
+      repColFilter = {}; repHideCol = {}; repSec = +issue.dataset.reportSec;
+      renderView();
+    }
+    showSection(+issue.dataset.reportSec);
+    if (targetKey) requestAnimationFrame(function () {
+      var row = Array.prototype.find.call($("view").querySelectorAll(".rep.active tr[data-review-key]"), function (r) { return r.dataset.reviewKey === targetKey; });
+      if (row) {
+        $("view").querySelectorAll(".review-target").forEach(function (r) { r.classList.remove("review-target"); });
+        row.classList.add("review-target"); row.tabIndex = -1;
+        row.scrollIntoView({block:"center",inline:"nearest"}); row.focus({preventScroll:true});
+      }
+    });
+    return;
+  }
+  var nav = e.target.closest("a[data-sec]");
   if (nav) {
     e.preventDefault();
     showSection(+nav.dataset.sec);
@@ -2588,6 +3064,7 @@ $("view").addEventListener("click", function (e) {
     if (ra.dataset.ra === "full") {
       fullReport(!document.querySelector(".shell").classList.contains("full"));
     }
+    if (ra.dataset.ra === "delrun" && vrun) deleteRun(vrun);
     return;
   }
   var gr = e.target.closest("tr.grp");
@@ -2709,7 +3186,7 @@ function renderView() {
     if (vrep) {
       REP_SECTIONS = [];
       GRID_SEQ = 0;
-      var body = repSummary() + repCash() + repPlan() + repLimits();
+      var body = repSummary() + repCash() + repPlan() + repLimits() + reportChecksSection();
       if (!REP_SECTIONS.some(function (x) { return x.n === repSec; })) {
         repSec = REP_SECTIONS.length ? REP_SECTIONS[0].n : 1;
       }
@@ -2757,9 +3234,7 @@ function renderView() {
         crows.push([{ v: ki ? "" : esc(code), cls: "key" }, k].concat(
           arr.map(function (v) {
             if (!v) return { v: null, cls: "n" };
-            var share = cpeak ? Math.max(4, Math.round((Math.abs(v) / cpeak) * 100)) : 0;
-            return { v: '<span class="bar' + (v < 0 ? " neg" : "") +
-                        '" style="--f:' + share + '%">' + mo(v) + "</span>", cls: "n" };
+            return { v: mo(v), cls: "n" + (v < 0 ? " neg" : "") };
           }),
           [{ v: k === "Остаток на конец" ? null : mo(sum), cls: "n tot" }]));
       });
@@ -2943,7 +3418,22 @@ function docStatus(state) {
   return STATUS[state] || { text: state || "—", cls: "wait" };
 }
 
-/* Что документ внес в реестр — только счетчики по сущностям, ничего больше. */
+/* Результат обработки документа. Строки со ссылкой на документ считаем поштучно;
+   у нормативного документа таких строк нет — он сверяет справочник
+   должностей, и тогда показываем итог этой проверки. Это шире и точнее, чем
+   «внесено в реестр»: проверка может ничего не добавлять в реестр. */
+function producedAny(x) {
+  var s = produced(x.produced);
+  if (s) return s;
+  var g = x.gave;
+  if (!g) return "";
+  var out = [];
+  if (g["величин"]) out.push(g["величин"] + " " + px(g["величин"], "величина", "величины", "величин") + " справочника");
+  else if (g["сверен"]) out.push("справочник должностей сверен");
+  if (g["расхождений"]) out.push(g["расхождений"] + " " + px(g["расхождений"], "расхождение", "расхождения", "расхождений"));
+  else if (g["величин"] || g["сверен"]) out.push("расхождений нет");
+  return out.join(" · ");
+}
 function produced(made) {
   var forms = {
     "сотрудников": ["сотрудник", "сотрудника", "сотрудников"],
@@ -2955,8 +3445,16 @@ function produced(made) {
                            "строк трудоемкости"],
     "надбавок 120": ["надбавка 120", "надбавки 120", "надбавок 120"],
   };
-  return Object.keys(made || {}).filter(function (k) { return made[k]; })
+  var sourceLabor = (made || {})["исходных строк трудоемкости"] || 0;
+  return Object.keys(made || {}).filter(function (k) {
+      return made[k] && k !== "исходных строк трудоемкости";
+    })
     .map(function (k) {
+      if (k === "строк трудоемкости" && sourceLabor > made[k]) {
+        return sourceLabor + " " + px(sourceLabor, "строка", "строки", "строк") +
+               " источника → " + made[k] + " " +
+               px(made[k], "позиция", "позиции", "позиций") + " плана";
+      }
       var f = forms[k];
       return made[k] + " " + (f ? px(made[k], f[0], f[1], f[2]) : k);
     }).join(" · ");
@@ -2965,15 +3463,188 @@ function produced(made) {
 /* Предпросмотр: книга — таблицей, PDF — как есть, остальное — тем текстом,
    который увидел разборщик. Последнее важнее всего там, где текст оказался
    кашей: причина отказа видна глазами, а не со слов агента. */
+/* Масштаб — свой у каждого документа: начинается со 100 %, а документ шире
+   рамки вписывается по ширине сам, как «автоматический» масштаб в
+   просмотрщиках. Запоминать между документами нельзя: маленький лист при
+   запомненных 62 % выглядел крошечным. */
+var docZoom = 100;
+var DOC_ZOOMS = [30, 40, 50, 60, 70, 80, 90, 100, 125, 150, 200, 300];
+/* Шагами, а не списком: масштаб подбирают на глаз — минус, плюс и колесо
+   с Ctrl, как в просмотрщике. Число возвращает 100 %. */
+function zoomPick() {
+  return '<span class="dzoom" title="Ctrl и колесо мыши">' +
+    '<button type="button" class="zb" data-zs="-1">−</button>' +
+    '<span class="zv">' + docZoom + ' %</span>' +
+    '<button type="button" class="zb" data-zs="1">+</button>' +
+    '<button type="button" class="zf">по ширине</button></span>';
+}
+function zoomStep(cur, dir) {
+  var i;
+  if (dir > 0) {
+    for (i = 0; i < DOC_ZOOMS.length; i++) if (DOC_ZOOMS[i] > cur) return DOC_ZOOMS[i];
+    return DOC_ZOOMS[DOC_ZOOMS.length - 1];
+  }
+  for (i = DOC_ZOOMS.length - 1; i >= 0; i--) if (DOC_ZOOMS[i] < cur) return DOC_ZOOMS[i];
+  return DOC_ZOOMS[0];
+}
+
+/* Маску держим включённой между открытиями: экономист смотрит документы
+   подряд и хочет видеть одно и то же. */
+var showMarks = true;
+try { showMarks = localStorage.getItem("docmarks") !== "0"; } catch (e) {}
+/* Вкладки вида, как в FineReader: «Документ» — как он есть (книгу и Word
+   для этого печатает сам Excel и Word), «Текст» или «Таблица» — разметка, по
+   которой выделяют куски и видна подсветка. Заголовка у раздела нет: он
+   повторял бы первую вкладку. */
+function viewSeg(has, left, right) {
+  if (!has) return "";
+  return '<span class="seg pdfseg">' +
+    '<button type="button" class="on" data-pdf="doc">' + esc(left || "Документ") + "</button>" +
+    '<button type="button" data-pdf="text">' + esc(right || "Текст") + "</button></span>";
+}
+
+/* Одна панель над предпросмотром, как у просмотрщика: слева вид, справа
+   подсветка и масштаб. Во внешнем ONLYOFFICE наложить нашу маску нельзя:
+   вместо неработающего тумблера показываем действие, которое открывает
+   собственную таблицу/текст и сразу включает подсветку. */
+function markToggle(seg, extra, externalView) {
+  return '<div class="pvbar">' + (seg || "") + (extra || "") + '<span class="sp"></span>' +
+         (externalView
+           ? '<button type="button" class="markjump" title="Открыть таблицу и подсветить данные, извлечённые из файла">' +
+             'Показать извлечённые данные</button>'
+           : "") +
+         '<label class="mtog" title="Подсветить данные, извлечённые из файла">' +
+         '<span>Извлечённые данные</span><input type="checkbox" id="markson"' +
+         (showMarks ? " checked" : "") + '><span class="sw"></span></label>' +
+         zoomPick() + "</div>";
+}
+
+/* Просмотрщик ONLYOFFICE: показывает .xlsx и .docx постранично сам, без
+   печати через Office. Включается настройкой FOT_ONLYOFFICE_URL на сервере;
+   без неё карточка работает по-старому, через напечатанный PDF. */
+function docFrame(d, path) {
+  // ONLYOFFICE показывает документ сам; без него — напечатанный PDF.
+  if (d["onlyoffice"]) {
+    return '<div class="asdoc loading"><div class="sload">Открываю документ…</div>' +
+           '<div class="ooview" id="oo' + d.id + '"></div></div>';
+  }
+  return '<div class="asdoc' + (d["печать готова"] ? "" : " loading") +
+         '"><div class="sload">Готовлю документ…</div>' +
+         '<iframe class="pdf" src="/api/document/' + d.id +
+         (path || "/asis") + '#navpanes=0" title="Документ"></iframe></div>';
+}
+
+function ooMount(back, docId) {
+  var box = back.querySelector(".ooview");
+  if (!box || box.dataset.on) return;
+  box.dataset.on = "1";
+  api("/api/document/" + docId + "/oo").then(function (cfg) {
+    var wrap = box.closest(".asdoc");
+    var run = function () {
+      try {
+        new window.DocsAPI.DocEditor(box.id, cfg);
+        // Просмотрщик заменяет наш блок своей рамкой: заставку снимаем,
+        // когда рамка загрузилась, иначе она висит поверх документа.
+        var frame = wrap && wrap.querySelector("iframe");
+        if (!frame) return;
+        frame.addEventListener("load", function () {
+          if (wrap) wrap.classList.remove("loading");
+        });
+        setTimeout(function () {
+          if (wrap) wrap.classList.remove("loading");
+        }, 8000);
+      } catch (e) {
+        box.innerHTML = '<div class="none">ONLYOFFICE не открыл документ</div>';
+      }
+    };
+    if (window.DocsAPI) return run();
+    var s = document.createElement("script");
+    s.src = cfg.apiUrl;
+    s.onload = run;
+    s.onerror = function () {
+      box.innerHTML = '<div class="none">сервер ONLYOFFICE недоступен</div>';
+    };
+    document.head.appendChild(s);
+  }).catch(function () {
+    box.innerHTML = '<div class="none">не удалось получить настройки просмотра</div>';
+  });
+}
+
+/* Полоса над предпросмотром зависит от того, что показано. Масштаб — только
+   у нашего вида: у PDF своя линейка в просмотрщике, две подряд сбивают с
+   толку. Маска — только там, где её видно: в просмотрщике PDF разметку не
+   покрасить, а лист книги красится и на первой вкладке. */
+function showZoomFor(back, asText) {
+  var f = back.querySelector(".dzoom");
+  if (f) f.hidden = !asText;
+  var sp = back.querySelector(".pvbar .spick");
+  if (sp) sp.hidden = !asText;
+  var tog = back.querySelector(".mtog");
+  if (tog && !tog.dataset.empty) {
+    // ONLYOFFICE заменяет .ooview своим iframe после запуска, поэтому
+    // признаком внешнего просмотра служит стабильная кнопка перехода.
+    tog.hidden = !asText && !!back.querySelector(".asdoc .pdf, .markjump");
+  }
+  var jump = back.querySelector(".markjump");
+  if (jump && !jump.dataset.empty) jump.hidden = asText;
+}
+
+/* Текст документа абзацами: приказ и положение — проза, её читают, а не
+   разбирают по колонкам. Пустые строки схлопываем: в вордовских файлах их
+   подряд бывает по нескольку. */
+/* Текст как есть: строки подряд, ячейки через табуляцию. Для выделения
+   удобнее — видно ровно то, что прочитал разборщик. */
+function ptextPlain(p) {
+  return "<pre>" + esc(p["текст"]) + "</pre>" +
+    (p["обрезано"] ? '<div class="more">показано начало документа</div>' : "");
+}
+
+function ptextHtml(p) {
+  // Строки с табуляцией — строки таблицы документа: показываем таблицей, а не
+  // склеенным абзацем. Идущие подряд собираются в одну.
+  var lines = p["текст"].split("\n").map(function (s) { return s.replace(/\s+$/, ""); })
+    .filter(function (s) { return s.trim(); });
+  var out = [], tbl = [];
+  var flush = function () {
+    if (!tbl.length) return;
+    out.push('<table class="ptab"><tbody>' + tbl.map(function (row) {
+      return "<tr>" + row.map(function (c) {
+        // Числовая графа не переносится: «125 000» ломалось на «125» и «000».
+        var num = /^[\d\s .,%-]+$/.test(c) && /\d/.test(c);
+        return '<td class="' + (num ? "n" : "") + '">' + esc(c) + "</td>";
+      }).join("") + "</tr>";
+    }).join("") + "</tbody></table>");
+    tbl = [];
+  };
+  lines.forEach(function (s) {
+    if (s.indexOf("\t") >= 0) {
+      tbl.push(s.split("\t").map(function (c) { return c.trim(); }));
+    } else {
+      flush();
+      out.push("<p>" + esc(s.trim()) + "</p>");
+    }
+  });
+  flush();
+  return out.join("") +
+    (p["обрезано"] ? '<div class="more">показано начало документа</div>' : "");
+}
+
 function preview(d) {
   var p = d["предпросмотр"] || {};
-  var head = '<div class="grp"><h4>Предпросмотр</h4>';
+  var head = '<div class="grp docview">';
 
   if (p["вид"] === "документ") {
-    return head + '<iframe class="pdf" src="/api/document/' + d.id +
-           '/file" title="Предпросмотр документа"></iframe></div>';
+    var withText = !!p["текст"];
+    return head + markToggle(viewSeg(withText), "", !!(d["onlyoffice"] && withText)) + docFrame(d, "/file") +
+      (withText
+        ? '<div class="astext" hidden>' +
+          '<div class="ptext" data-doc="' + d.id + '">' + ptextHtml(p) + "</div></div>"
+        : "") + "</div>";
   }
   if (p["вид"] === "книга") {
+    // Переключатель маски: показать, что из листа ушло в расчёт.
+    // Лист книги — тот же документ, и выделять в нём надо так же, как в
+    // тексте: рамка своего происхождения, скрипт до неё дотягивается.
     var names = p["листы"] || [];
     // У формы РКМ тридцать листов: рядом вкладок это стена в пол-панели.
     // Выбор списком занимает одну строку и не растет с числом листов.
@@ -2985,24 +3656,36 @@ function preview(d) {
         '<span class="c">' + names.length + " " +
         px(names.length, "лист", "листа", "листов") + "</span></label>"
       : "";
-    return head + pick +
-           '<div class="sheetbox loading"><div class="sload">Готовлю лист…</div>' +
+    // «Документ» — книга страницами, как её печатает Excel; «текстом» —
+    // лист разметкой: по нему работают маска и выделение по ячейкам.
+    var asis = !!p["как есть"];
+    return head + markToggle(viewSeg(asis, "Документ", "Таблица"), pick,
+                             !!(d["onlyoffice"] && asis)) +
+           (asis
+             ? docFrame(d)
+             : "") +
+           '<div class="astext"' + (asis ? " hidden" : "") + ">" +
+           '<div class="sheetbox loading" data-doc="' + d.id + '">' +
+           '<div class="sload">Готовлю лист…</div>' +
            '<iframe class="sheetview" src="/api/document/' + d.id +
            "/preview?sheet=" + encodeURIComponent(names[0] || "") +
-           '" title="Предпросмотр листа"></iframe></div></div>';
+           '" title="Предпросмотр листа"></iframe></div></div></div>';
   }
   if (p["вид"] === "текст") {
-    // Абзацами и обычным шрифтом, а не моноширинным полотном: приказ и
-    // положение об оплате труда — это проза, ее читают, а не разбирают по
-    // колонкам. Пустые строки схлопываем: в вордовских файлах их подряд
-    // бывает по нескольку.
-    var paras = p["текст"].split("\n").map(function (s) { return s.trim(); })
-      .filter(Boolean);
-    return head + '<div class="ptext">' +
-           paras.map(function (s) { return "<p>" + esc(s) + "</p>"; }).join("") +
-           "</div>" +
-           (p["обрезано"] ? '<div class="more">показано начало документа</div>' : "") +
-           "</div>";
+    // Word печатается в PDF — это и есть «как есть»; «текстом» — разметка
+    // документа: заголовки, выравнивание, полужирный, таблицы. По ней
+    // выделяют куски и видят маску. Разметки нет — показываем свой разбор.
+    var wasis = !!p["как есть"];
+    return head + markToggle(viewSeg(wasis), "", !!(d["onlyoffice"] && wasis)) +
+      (wasis
+        ? docFrame(d)
+        : "") +
+      '<div class="astext"' + (wasis ? " hidden" : "") + ">" +
+      (p["разметка"]
+        ? '<div class="richbox"><iframe class="richview" src="/api/document/' + d.id +
+          '/rich" title="Документ разметкой"></iframe></div>'
+        : '<div class="ptext" data-doc="' + d.id + '">' + ptextHtml(p) + "</div>") +
+      "</div></div>";
   }
   return head + '<div class="none">' + esc(p["почему"] || "показать нечего") +
          "</div></div>";
@@ -3026,6 +3709,298 @@ function meta(pairs) {
     }).join("") + "</dl>";
 }
 
+/* Выделение куска документа → замечание агенту.
+
+   Экономист показывает пальцем в сам документ и говорит словами, что не так;
+   реплика уходит в разговор о документе вместе с местом — лист, строка,
+   графа, текст ячейки, — поэтому агент правит именно ту строку, а не ищет её
+   по описанию. Работает и в тексте, и в листе книги: лист приходит с того же
+   адреса, до его разметки можно дотянуться. */
+function noteBar(root, docId, place, getSel, onSaved, onSending) {
+  var bar = null;
+  // Окно замечания закрывается тремя обычными способами: крестиком, Esc и
+  // щелчком мимо. Новое выделение просто заменяет старое — перевыделять
+  // можно сколько угодно, ничего предварительно не закрывая.
+  function hide() {
+    if (!bar) return;
+    bar.remove();
+    bar = null;
+    document.removeEventListener("keydown", onEsc, true);
+  }
+  function onEsc(e) { if (e.key === "Escape") { hide(); e.stopPropagation(); } }
+  function show(sel, rect, frag) {
+    hide();
+    bar = document.createElement("div");
+    bar.className = "nbar say";
+    bar.innerHTML = '<div class="nq">«' + esc(sel.slice(0, 90)) +
+      (sel.length > 90 ? "…" : "") + "»" +
+      '<button type="button" class="nclose" title="Закрыть (Esc)" ' +
+      'aria-label="Закрыть">×</button></div>' +
+      '<div class="nr"><input type="text" aria-label="Замечание к фрагменту" ' +
+      'autocomplete="off"><button type="button" class="ok">Отправить</button></div>';
+    document.body.appendChild(bar);
+    var w = bar.offsetWidth || 420;
+    bar.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - w - 8)) + "px";
+    bar.style.top = Math.max(8, rect.top - bar.offsetHeight - 8) + "px";
+    var inp = bar.querySelector("input");
+    inp.focus();
+    var send = function () {
+      var text = inp.value.trim();
+      if (!text) { inp.focus(); return; }
+      var sendButton = bar.querySelector(".ok");
+      sendButton.disabled = true;
+      if (onSending) onSending(text, frag);
+      api("/api/document/" + docId + "/message", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text, fragment: frag }),
+      }).then(function () { hide(); onSaved(); })
+        .catch(function () { if (sendButton) sendButton.disabled = false; onSaved(); });
+    };
+    bar.querySelector(".ok").onclick = send;
+    bar.querySelector(".nclose").onclick = hide;
+    inp.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter") send();
+      if (ev.key === "Escape") hide();
+    });
+    document.addEventListener("keydown", onEsc, true);
+  }
+  root.addEventListener("mouseup", function () {
+    setTimeout(function () {
+      var s = getSel();
+      // Щелчок без выделения — отказ от замечания: окно уходит.
+      if (!s || !s.text || s.text.length < 2) { hide(); return; }
+      var frag = place(s) || {};
+      frag["цитата"] = s.text.slice(0, 300);
+      show(s.text, s.rect, frag);
+    }, 10);
+  });
+  // Щелчок мимо — и в самой странице, и внутри рамки листа.
+  var away = function (e) {
+    if (bar && !bar.contains(e.target)) hide();
+  };
+  document.addEventListener("mousedown", away);
+  if (root !== document) {
+    (root.ownerDocument || root).addEventListener("mousedown", away);
+  }
+}
+
+/* Значение ячейки к тому же виду, что и на сервере: числа без разделителей,
+   текст в нижнем регистре и без двойных пробелов. Иначе «1 740 000» из
+   документа и 1740000 из реестра не совпадут. */
+/* Отметить внутри строки те числа, которые ушли в расчёт: величина стоит в
+   строке таблицы («| Научные работники | 280 023,62 |»), и целиком строка ни
+   с чем не совпадает. Правим текстовые узлы, разметку не трогаем. */
+function markInside(el, marks) {
+  if (!el) return 0;
+  var doc = el.ownerDocument || document;
+  var nodes = [], walk = doc.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+  var t;
+  while ((t = walk.nextNode())) if (t.nodeValue && /\d/.test(t.nodeValue)) nodes.push(t);
+  var n = 0;
+  nodes.forEach(function (node) {
+    var text = node.nodeValue;
+    if (text.length > 400) return;
+    var re = /\d[\d\s ]*(?:[.,]\d+)?/g, hits = [], m;
+    while ((m = re.exec(text))) {
+      var k = markKey(m[0]);
+      if (k && marks[k] && String(k).length >= 4) hits.push([m.index, m[0], marks[k]]);
+    }
+    if (!hits.length) return;
+    var frag = doc.createDocumentFragment(), at = 0;
+    hits.forEach(function (h) {
+      if (h[0] > at) frag.appendChild(doc.createTextNode(text.slice(at, h[0])));
+      var span = doc.createElement("span");
+      span.className = "used";
+      span.setAttribute("data-mk", "1");
+      span.setAttribute("title", "в расчёт: " + h[2]);
+      span.textContent = h[1];
+      frag.appendChild(span);
+      at = h[0] + h[1].length;
+      n++;
+    });
+    if (at < text.length) frag.appendChild(doc.createTextNode(text.slice(at)));
+    node.parentNode.replaceChild(frag, node);
+  });
+  return n;
+}
+
+function markKey(v) {
+  var s = String(v == null ? "" : v).replace(/\u00a0/g, " ").trim();
+  if (!s) return "";
+  var num = s.replace(/[\s]/g, "").replace(",", ".");
+  if (num && !isNaN(Number(num))) {
+    var f = Number(num);
+    return f === Math.round(f) ? String(Math.round(f)) : String(Math.round(f * 10000) / 10000);
+  }
+  return s.replace(/\s+/g, " ").toLowerCase();
+}
+
+/* Наложить маску на разметку листа или текста: ячейки, чьи значения ушли в
+   расчёт, подсвечиваются и подписываются графой входного файла. */
+/* Величина без строки подсветила бы любую графу с тем же числом: в приказе
+   № 2556 «110 000» стоит и у советника, которого в справочнике нет. Поэтому
+   для нормативных документов приходит ещё и список строк, которые сошлись со
+   справочником, — красим только их. */
+function rowText(tr) {
+  var c = (tr.cells || [])[0];
+  if (!c) return "";
+  return String(c.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+function lineHit(keys, tr) {
+  if (!keys || !keys.length) return true;   // книга реестра: строк не присылают
+  var t = rowText(tr);
+  if (!t) return null;
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i].key, m = Math.min(24, Math.min(k.length, t.length));
+    if (m >= 8 && k.slice(0, m) === t.slice(0, m)) return keys[i];
+  }
+  return null;
+}
+function applyMarks(doc, marks, lines) {
+  if (!doc || !marks) return 0;
+  var n = 0;
+  var keys = (lines || []).map(function (l) {
+    return {key: String(l["строка"] || "").replace(/\s+/g, " ").trim().toLowerCase(),
+            vals: l["значения"] || []};
+  });
+  // Совпадение одной короткой величины ничего не значит: «1» и «2» стоят в
+  // любой форме. Строку считаем той самой, если в ней сошлись хотя бы две
+  // разные графы; одиночное совпадение принимаем только у длинных значений.
+  var rows = doc.querySelectorAll("tr");
+  if (rows.length) {
+    Array.prototype.forEach.call(rows, function (tr, ri) {
+      // Шапка листа — не данные. Слово в ней может совпасть со значением из
+      // другой графы: «Приоритет» — это и название графы, и вид договора, и
+      // подсвечивалась вся графа, будто её прочитали как величину.
+      if (ri === 0 && rows.length > 1) return;
+      var line = lineHit(keys, tr);
+      if (!line) return;
+      // У строки приказа своя графа: предельный уровень по должности стоит в
+      // последней колонке, а соседние — уровни для других категорий.
+      var only = line === true ? null : line.vals;
+      var hits = [];
+      Array.prototype.forEach.call(tr.cells || [], function (c) {
+        if (c.querySelector("td,th")) return;
+        var k = markKey(c.textContent);
+        if (only && only.indexOf(k) < 0) return;
+        if (k && marks[k]) hits.push([c, marks[k], k]);
+      });
+      // Опорное совпадение — то, которое само по себе что-то значит: имя,
+      // шифр, крупное число. Ставка «1» или «2 человека» совпадает где
+      // угодно, поэтому подсвечиваем такие только рядом с опорным.
+      var strong = hits.some(function (h) {
+        var k = h[2];
+        return isNaN(Number(k)) ? k.length >= 4 : k.length >= 4;
+      });
+      if (!strong) return;
+      hits.forEach(function (h) {
+        h[0].classList.add("used");
+        h[0].setAttribute("title", "в расчёт: " + h[1]);
+        n++;
+      });
+    });
+  }
+  // Дальше — строки вне таблиц. У документа, прочитанного моделью, таблица
+  // может остаться строкой текста («| Научные работники | 280 023,62 |»), и
+  // разбор по строкам её не видит.
+  Array.prototype.forEach.call(doc.querySelectorAll("p,li,td,th"), function (c) {
+    if (c.classList.contains("used")) return;
+    if (rows.length && c.closest && c.closest("tr")) return;
+    var k = markKey(c.textContent);
+    if (k && marks[k] && k.length >= 6) {
+      c.classList.add("used");
+      c.setAttribute("title", "в расчёт: " + marks[k]);
+      n++;
+      return;
+    }
+    // Строка целиком не совпала: у документа, прочитанного моделью, величина
+    // стоит внутри строки таблицы («| Научные работники | 280 023,62 |»).
+    // Отмечаем само число, а не всю строку.
+    n += markInside(c, marks);
+  });
+  return n;
+}
+
+/* Формы со стабильными адресами ячеек красим по координатам. Так значение
+   «1 человек» не подсвечивает номер первой строки, а даты и обе графы
+   трудоёмкости отмечаются именно там, откуда их прочитал разборщик. */
+function applyCellMarks(root, cells) {
+  if (!root || !cells || !cells.length) return 0;
+  var doc = root.ownerDocument || root, n = 0;
+  cells.forEach(function (mark) {
+    var cell = doc.getElementById(mark.id);
+    if (!cell) return;
+    cell.classList.add("used");
+    cell.setAttribute("title", "извлечено: " + mark.title);
+    n++;
+  });
+  return n;
+}
+
+/* Нормативный документ: что он дал справочнику должностей. Расхождения —
+   таблицей с кнопкой записи прямо здесь, а не карточкой где-то в чате. */
+function refBlock(g) {
+  var ch = g["расхождения"] || [];
+  var head = '<div class="grp refgrp"><h4>Справочник должностей</h4>';
+  var basis = [g["основание"] ? esc(g["основание"]) : "",
+               g["действует с"] ? "с " + esc(g["действует с"]) : ""]
+    .filter(Boolean).join(" · ");
+  var facts = '<div class="reffacts">' +
+    (g["величин"] || 0) + " " + px(g["величин"] || 0, "величина", "величины", "величин") +
+    (basis ? '<span class="dot">·</span>' + basis : "") + "</div>";
+  var miss = (g["вне справочника"] || []).map(function (m) {
+    return typeof m === "string" ? m : m["строка"];
+  });
+  var missHtml = miss.length
+    ? '<div class="refmiss">вне справочника: ' + esc(miss.map(function (s) {
+        return s.length > 60 ? s.slice(0, 57) + "…" : s;
+      }).join("; ")) + "</div>"
+    : "";
+  if (!ch.length) {
+    // Документ разобран до того, как сервис начал хранить сами расхождения:
+    // счётчик есть, строк нет. Обещать «расхождений нет» в этом случае нельзя.
+    var n = g["расхождений"] || 0;
+    return head + facts + '<div class="none">' +
+           (n ? n + " " + px(n, "расхождение", "расхождения", "расхождений") +
+                " — перечитайте документ, чтобы увидеть строки"
+              : "расхождений со справочником нет") + "</div>" +
+           missHtml + "</div>";
+  }
+  return head + facts +
+    '<table class="reftab"><thead><tr><th>Должность</th><th>Графа</th>' +
+    '<th class="n">Сейчас</th><th class="n">По документу</th></tr></thead><tbody>' +
+    ch.map(function (c) {
+      return '<tr data-pos="' + esc(c.pos) + '" data-field="' + esc(c.field) +
+             '" data-new="' + c.new + '"><td>' + esc(c.pos) + "</td><td>" + esc(c.field) +
+             '</td><td class="n">' + (c.old == null ? "—" : mo(c.old)) +
+             '</td><td class="n up">' + mo(c.new) + "</td></tr>";
+    }).join("") + "</tbody></table>" +
+    '<div class="refacts"><button type="button" class="refapply">Записать в справочник</button></div>' +
+    missHtml + "</div>";
+}
+
+/* Замечания по фрагментам: что процитировано и в какой реплике. Цитату
+   сервис дописывает к словам экономиста строкой «▸ «…»», из неё же метим
+   ячейки листа. */
+function talkQuotes(talk) {
+  var out = [];
+  (talk || []).forEach(function (m, i) {
+    if (m["кто"] !== "экономист") return;
+    var q = /\u25b8 «([^»]+)»/.exec(String(m["текст"] || ""));
+    if (!q) return;
+    out.push({ i: i, quote: q[1], text: String(m["текст"]).split("\n")[0] });
+  });
+  return out;
+}
+
+/* Одна реплика разговора. */
+function dmsg(m, i) {
+  return '<div class="dm ' + (m["кто"] === "экономист" ? "me" : "ag") + '"' +
+         (i == null ? "" : ' data-msg="' + i + '"') + ">" +
+         '<div class="dmt">' + esc(m["текст"]) + "</div>" +
+         '<div class="dmw">' + esc(m["когда"] || "") + "</div></div>";
+}
+
 function openDocument(id) {
   // Две карточки одна поверх другой ни к чему: щелчок по второму имени
   // заменяет первую.
@@ -3034,13 +4009,8 @@ function openDocument(id) {
 
   var back = document.createElement("div");
   back.className = "drawer";
-  // Ширину помним между открытиями: у форм РКМ два десятка колонок, и если
-  // экономист раз развернул панель, следующий документ он смотрит так же.
-  try {
-    if (localStorage.getItem("docwide") === "1") back.classList.add("wide");
-  } catch (e) { /* приватный режим — обойдемся без памяти */ }
-  back.innerHTML = '<div class="scrim"></div><aside class="panel" role="dialog" ' +
-                   'aria-modal="true"><div class="none">Загружаю…</div></aside>';
+  back.innerHTML = '<section class="panel" role="dialog" aria-modal="true">' +
+                   '<div class="none">Загружаю…</div></section>';
   document.body.appendChild(back);
 
   function close() {
@@ -3049,7 +4019,6 @@ function openDocument(id) {
   }
   function onKey(e) { if (e.key === "Escape") close(); }
   document.addEventListener("keydown", onKey);
-  back.querySelector(".scrim").onclick = close;
 
   api("/api/document/" + id).then(function (d) {
     // Карточка одинакова у всех документов: свойства, что внесено в реестр,
@@ -3066,14 +4035,16 @@ function openDocument(id) {
                                            "правило замещения",
                                            "правила замещения",
                                            "правил замещения", "sub"]);
-    var got = '<div class="grp"><h4>Внесено в реестр</h4>' +
-      (made.length
-        ? '<div class="made">' + made.map(function (m) {
-            return '<button type="button" class="mtag" data-rtab2="' + m[4] + '">' +
-                   m[0] + " " + px(m[0], m[1], m[2], m[3]) + "</button>";
-          }).join("") + "</div>"
-        : '<div class="none">' + esc(d.summary || "строк реестра нет") + "</div>") +
-      "</div>";
+    var got = made.length
+      ? '<div class="grp"><h4>Внесено в реестр</h4><div class="made">' +
+        made.map(function (m) {
+          return '<button type="button" class="mtag" data-rtab2="' + m[4] + '">' +
+                 m[0] + " " + px(m[0], m[1], m[2], m[3]) + "</button>";
+        }).join("") + "</div></div>"
+      : (d.gave && "величин" in d.gave
+          ? refBlock(d.gave)
+          : '<div class="grp"><h4>Внесено в реестр</h4><div class="none">' +
+            esc(d.summary || "строк реестра нет") + "</div></div>");
     // Предложения — до подтверждения, поэтому идут первыми и отдельно от
     // того, что уже в реестре: смешать их значило бы стереть разницу между
     // «проверено» и «модель так прочитала».
@@ -3131,59 +4102,146 @@ function openDocument(id) {
     // телеметрия, а не документ. Экономисту нужен сам документ: заглянуть и
     // убедиться, что разобрано именно то. Поэтому здесь предпросмотр, а
     // подробности работы остаются в ленте агентов.
-    got += preview(d);
-
     // Разговор о документе. «Тут ошибка» говорят там, где ошибку видят, —
     // в карточке, а не в ленте плана. Правка уходит в реестр, в память агента
     // и в стенд.
     var talk = d["переписка"] || [];
-    got += '<div class="grp"><h4>Разговор о документе</h4>' +
-      '<div class="dtalk">' + (talk.length ? talk.map(function (m) {
-        return '<div class="dm ' + (m["кто"] === "экономист" ? "me" : "ag") + '">' +
-               '<div class="dmt">' + esc(m["текст"]) + "</div>" +
-               '<div class="dmw">' + esc(m["когда"] || "") + "</div></div>";
-      }).join("") : '<div class="none">Скажите, что разобрано неверно — агент ' +
-                    "поправит и запомнит.</div>") + "</div>" +
+    var talkHtml = '<div class="dtalk">' + (talk.length ? talk.map(function (m, i) { return dmsg(m, i); }).join("")
+        : '<div class="none">Скажите, что разобрано неверно — агент ' +
+          "поправит и запомнит.</div>") + "</div>" +
       '<form class="dask"><input type="text" placeholder="Например: у Петрова оклад ' +
       '90 000, а не 60 000" autocomplete="off">' +
-      '<button type="submit">Отправить</button></form></div>';
+      '<button type="submit">Отправить</button></form>';
+
+    // Учётные сведения — одной строкой в шапке: их пять, и все короткие.
+    var facts = [d.kind, docStatus(d.state).text,
+                 d["версия"] > 1
+                   ? "версия " + d["версия"] +
+                     (d["заменяет"] ? ", прежняя от " + d["заменяет"] : "")
+                   : null,
+                 d["формат"], bytes(d.size), d.uploaded]
+      .filter(Boolean).map(esc).join('<span class="dot">·</span>');
 
     back.querySelector(".panel").innerHTML =
-      '<header class="dhead"><h3>' + esc(d.name) + "</h3>" +
-        '<button type="button" class="wider" aria-label="Развернуть" ' +
-        'title="Развернуть на весь экран">' + ICON_WIDE + "</button>" +
-        '<button type="button" class="x" aria-label="Закрыть">×</button></header>' +
-      '<div class="dbody">' +
-        meta([["Вид", d.kind], ["Статус", docStatus(d.state).text],
-              ["Версия", d["версия"] > 1
-                 ? d["версия"] + (d["заменяет"] ? ", прежняя от " + d["заменяет"] : "")
-                 : null],
-              ["Формат", d["формат"]], ["Размер", bytes(d.size)],
-              ["Загружен", d.uploaded]]) +
+      '<header class="dhead"><div class="dttl"><h3>' + esc(d.name) + "</h3>" +
+        '<div class="dfacts">' + facts + "</div></div>" +
+        // Действия — значками с подсказкой, как в реестре. Книгу и Word
+        // браузер не показывает, только сохраняет: значок «скачать»
+        // сохраняет файл под именем документа.
         (d.exists
-          ? '<a class="dfile" href="/api/document/' + d.id +
-            '/file" target="_blank" rel="noopener">Открыть файл</a>'
-          : '<div class="none">Файла нет на диске</div>') +
-        prop + got +
-      "</div>" +
-      '<footer class="dfoot"><button type="button" class="del">Удалить документ</button>' +
-      "</footer>";
+          ? '<a class="iconbtn dfile" href="/api/document/' + d.id + '/file" download="' +
+            esc(d.name) + '" title="Скачать" aria-label="Скачать">' + svg16(ICON_DOWN) + "</a>"
+          : '<span class="none">Файла нет на диске</span>') +
+        '<button type="button" class="iconbtn ddel" title="Удалить документ" ' +
+        'aria-label="Удалить документ">' + svg16(ICON_TRASH) + "</button>" +
+        '<button type="button" class="iconbtn x" title="Закрыть" ' +
+        'aria-label="Закрыть">' + svg16(ICON_CLOSE) + "</button></header>" +
+      '<div class="dbody dcols">' +
+        '<section class="dmain">' + preview(d) + "</section>" +
+        '<aside class="dside">' +
+          (prop ? '<div class="dside-top">' + prop + "</div>" : "") +
+          '<div class="dside-reg">' + got + "</div>" +
+          '<div class="dside-talk"><h4>Разговор о документе</h4>' + talkHtml + "</div>" +
+        "</aside>" +
+      "</div>";
 
     back.querySelector(".x").onclick = close;
+
+    // Разговор дорисовываем на месте: перерисовка всей карточки уводила экран
+    // и перезагружала просмотрщик. Последняя реплика — в поле зрения.
+    var talkBox = back.querySelector(".dtalk");
+    // Цитаты замечаний: по ним метятся ячейки листа. Обновляются вместе с
+    // перепиской — новое замечание помечает ячейку сразу.
+    var quotes = talkQuotes(d["переписка"]);
+    var scrollTalk = function () {
+      if (talkBox) talkBox.scrollTop = talkBox.scrollHeight;
+    };
+    var refreshTalk = function () {
+      return api("/api/document/" + d.id).then(function (fresh) {
+        if (talkBox) talkBox.innerHTML = (fresh["переписка"] || [])
+          .map(function (m, i) { return dmsg(m, i); }).join("");
+        quotes = talkQuotes(fresh["переписка"]);
+        markNoted();
+        scrollTalk();
+        loadRegistry();
+      });
+    };
+    /* Пометить в листе и в тексте ячейки, по которым есть замечания.
+       Сравниваем по тому же ключу, что и маска «Извлечённые данные»: в
+       документе «1 740 000», в цитате — «1 740 000 ₽» или иной пробел. */
+    var markNoted = function () {
+      var roots = [];
+      var pt = back.querySelector(".ptext");
+      if (pt) roots.push(pt);
+      ["sheetview", "richview"].forEach(function (cls) {
+        var fr = back.querySelector("." + cls);
+        try { if (fr && fr.contentDocument) roots.push(fr.contentDocument.body); } catch (e) {}
+      });
+      var byKey = {};
+      quotes.forEach(function (q) {
+        var k = markKey(q.quote);
+        if (k && !byKey[k]) byKey[k] = q;
+      });
+      roots.forEach(function (root) {
+        Array.prototype.forEach.call(root.querySelectorAll(".noted"), function (c) {
+          c.classList.remove("noted");
+          c.removeAttribute("data-note");
+        });
+        if (!quotes.length) return;
+        Array.prototype.forEach.call(root.querySelectorAll("td,th,p,li"), function (c) {
+          if (c.querySelector("td,th")) return;
+          var q = byKey[markKey(c.textContent)];
+          if (!q) return;
+          c.classList.add("noted");
+          c.setAttribute("title", q.text);
+          c.setAttribute("data-note", q.i);
+        });
+      });
+    };
+    /* Щелчок по помеченной ячейке — к своей реплике в разговоре. */
+    var noteJump = function (ev) {
+      var cell = ev.target && ev.target.closest && ev.target.closest("[data-note]");
+      if (!cell || !talkBox) return;
+      var msg = talkBox.querySelector('[data-msg="' + cell.getAttribute("data-note") + '"]');
+      if (!msg) return;
+      msg.scrollIntoView({ block: "center" });
+      msg.classList.add("lit");
+      setTimeout(function () { msg.classList.remove("lit"); }, 1200);
+    };
+    var showPendingTalk = function (text, fragment) {
+      if (!talkBox) return;
+      var empty = talkBox.querySelector(".none");
+      if (empty) empty.remove();
+      var shown = text;
+      if (fragment && fragment["цитата"]) {
+        shown += "\n«" + String(fragment["цитата"]).slice(0, 120) +
+          (String(fragment["цитата"]).length > 120 ? "…" : "") + "»";
+      }
+      talkBox.insertAdjacentHTML("beforeend", dmsg({
+        "кто": "экономист", "текст": shown, "когда": "сейчас",
+      }) + '<div class="dm ag pending" role="status"><span>Проверяю документ</span><i aria-hidden="true"></i></div>');
+      scrollTalk();
+    };
+    scrollTalk();
 
     var form = back.querySelector(".dask");
     if (form) form.addEventListener("submit", function (e) {
       e.preventDefault();
       var inp = form.querySelector("input"), text = inp.value.trim();
       if (!text) return;
-      form.querySelector("button").disabled = true;
+      var sendButton = form.querySelector("button");
+      sendButton.disabled = true;
+      inp.value = "";
+      // Открытое окно замечания к отправке из общего поля отношения не
+      // имеет — закрываем, иначе висит поверх документа.
+      var openNote = document.querySelector(".nbar");
+      if (openNote) openNote.remove();
+      showPendingTalk(text);
       api("/api/document/" + d.id + "/message", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: text }),
-      }).then(function () {
-        openDocument(d.id);            // карточка перерисуется с ответом
-        loadRegistry();
-      }).catch(function () { form.querySelector("button").disabled = false; });
+      }).then(refreshTalk, refreshTalk)
+        .then(function () { sendButton.disabled = false; });
     });
 
     back.addEventListener("click", function (e) {
@@ -3194,28 +4252,332 @@ function openDocument(id) {
       if (!inRegistry) openRegistry(); else renderRegistry();
     });
 
-    var wider = back.querySelector(".wider");
-    wider.onclick = function () {
-      var on = back.classList.toggle("wide");
-      wider.title = on ? "Свернуть" : "Развернуть на весь экран";
-      wider.setAttribute("aria-label", on ? "Свернуть" : "Развернуть");
-      try { localStorage.setItem("docwide", on ? "1" : "0"); } catch (e) {}
+    // Маска: что из документа ушло в расчёт. Значения приходят одним
+    // списком, места ищет сама рамка — разбор идёт по заголовкам, и
+    // координат ячеек у него нет.
+    var marksData = null, markBox = back.querySelector("#markson");
+    var paintMarks = function () {
+      var docs = [];
+      var pt = back.querySelector(".ptext");
+      if (pt) docs.push(pt);
+      var fr = back.querySelector(".sheetview");
+      try { if (fr && fr.contentDocument) docs.push(fr.contentDocument.body); } catch (e) {}
+      var rv = back.querySelector(".richview");
+      try { if (rv && rv.contentDocument) docs.push(rv.contentDocument.body); } catch (e) {}
+      var total = 0;
+      docs.forEach(function (root) {
+        if (!root) return;
+        // Свои обёртки вокруг чисел снимаем целиком: иначе пустой <span>
+        // остаётся в строке и на следующем проходе перекрывает разметку.
+        Array.prototype.forEach.call(root.querySelectorAll("span[data-mk]"), function (c) {
+          c.parentNode.replaceChild(c.ownerDocument.createTextNode(c.textContent), c);
+        });
+        Array.prototype.forEach.call(root.querySelectorAll(".used"), function (c) {
+          c.classList.remove("used");
+          c.removeAttribute("title");
+        });
+        root.classList.toggle("marks", !!(showMarks && marksData));
+        if (showMarks && marksData) {
+          total += applyMarks(root, marksData["значения"], marksData["строки"]);
+          total += applyCellMarks(root, marksData["ячейки"]);
+        }
+      });
+
     };
-    if (back.classList.contains("wide")) {
-      wider.title = "Свернуть";
-      wider.setAttribute("aria-label", "Свернуть");
+    // Масштаб: своей разметке — zoom на теле рамки, нашей — на блоке текста.
+    var applyDocZoom = function () {
+      var z = docZoom / 100;
+      Array.prototype.forEach.call(back.querySelectorAll(".ptext"), function (el) {
+        el.style.zoom = z;
+      });
+      ["richview", "sheetview"].forEach(function (cls) {
+        var fr = back.querySelector("." + cls);
+        try {
+          if (fr && fr.contentDocument && fr.contentDocument.body) {
+            fr.contentDocument.body.style.zoom = z;
+            if (bindWheel) bindWheel(fr.contentDocument.body);
+          }
+        } catch (e) { /* чужое происхождение */ }
+      });
+    };
+    var setDocZoom = function (v) {
+      docZoom = Math.max(DOC_ZOOMS[0], Math.min(DOC_ZOOMS[DOC_ZOOMS.length - 1], v));
+      var lbl = back.querySelector(".dzoom .zv");
+      if (lbl) lbl.textContent = docZoom + " %";
+      applyDocZoom();
+    };
+    /* «По ширине»: меряем вёрстку при масштабе 1 — иначе замер сам зависел бы
+       от текущего масштаба и ширина подбиралась бы с ошибкой. */
+    var fitDocZoom = function (cap) {
+      var best = 0;
+      var take = function (el, avail) {
+        if (!el || !avail) return;
+        var prev = el.style.zoom;
+        el.style.zoom = 1;
+        var w = el.scrollWidth;
+        el.style.zoom = prev;
+        if (w > 0) {
+          var z = Math.floor(avail / w * 100);
+          if (!best || z < best) best = z;
+        }
+      };
+      Array.prototype.forEach.call(back.querySelectorAll(".ptext"), function (el) {
+        if (el.offsetParent) take(el, el.parentElement.clientWidth);
+      });
+      ["richview", "sheetview"].forEach(function (cls) {
+        var fr = back.querySelector("." + cls);
+        try {
+          if (fr && fr.offsetParent && fr.contentDocument && fr.contentDocument.body) {
+            take(fr.contentDocument.body, fr.clientWidth);
+          }
+        } catch (e) { /* чужое происхождение */ }
+      });
+      if (best) setDocZoom(cap ? Math.min(best, cap) : best);
+    };
+    // Автоматический масштаб: пока экономист не трогал масштаб сам, широкий
+    // документ вписываем по ширине, узкий оставляем как есть.
+    var zoomTouched = false;
+    var autoFit = function () { if (!zoomTouched) fitDocZoom(100); };
+
+    var zbox = back.querySelector(".dzoom");
+    if (zbox) zbox.addEventListener("click", function (ev) {
+      var b = ev.target.closest("button");
+      if (!b) return;
+      zoomTouched = true;
+      if (b.classList.contains("zf")) { fitDocZoom(); return; }
+      setDocZoom(zoomStep(docZoom, +b.getAttribute("data-zs")));
+    });
+    /* Колесо с Ctrl — и над нашим текстом, и внутри рамки документа: иначе
+       рамка отдала бы жест браузеру и поехала бы вся страница. */
+    var wheelZoom = function (ev) {
+      if (!ev.ctrlKey) return;
+      ev.preventDefault();
+      zoomTouched = true;
+      setDocZoom(zoomStep(docZoom, ev.deltaY < 0 ? 1 : -1));
+    };
+    var bindWheel = function (node) {
+      if (!node || node.dataset.zw) return;
+      node.dataset.zw = "1";
+      node.addEventListener("wheel", wheelZoom, { passive: false });
+    };
+    Array.prototype.forEach.call(back.querySelectorAll(".astext"), bindWheel);
+
+    setDocZoom(100);
+    autoFit();
+    showZoomFor(back, !back.querySelector(".asdoc") ||
+                      back.querySelector(".asdoc").hidden);
+    if (markBox) {
+      api("/api/document/" + d.id + "/marks").then(function (m) {
+        marksData = m;
+        // Показывать нечего — не обещаем: у нормативных документов величины
+        // ложатся в справочник должностей, а он к документу не привязан.
+        var any = m && m["значения"] && Object.keys(m["значения"]).length;
+        var tog = back.querySelector(".mtog");
+        var jump = back.querySelector(".markjump");
+        if (!any) {
+          if (tog) { tog.dataset.empty = "1"; tog.hidden = true; }
+          if (jump) { jump.dataset.empty = "1"; jump.hidden = true; }
+          return;
+        }
+        paintMarks();
+      }).catch(function () {});
+      markBox.addEventListener("change", function () {
+        showMarks = markBox.checked;
+        try { localStorage.setItem("docmarks", showMarks ? "1" : "0"); } catch (e) {}
+        paintMarks();
+      });
+    }
+
+    // ONLYOFFICE находится на другом origin: его ячейки недоступны для нашей
+    // маски. Действие переводит пользователя в доступную разметку и включает
+    // подсветку, поэтому результат виден сразу после одного нажатия.
+    var markJump = back.querySelector(".markjump");
+    if (markJump) markJump.addEventListener("click", function () {
+      showMarks = true;
+      if (markBox) markBox.checked = true;
+      try { localStorage.setItem("docmarks", "1"); } catch (e) {}
+      var textButton = back.querySelector('.pdfseg button[data-pdf="text"]');
+      if (textButton) textButton.click();
+    });
+
+    // Выделение в тексте документа → замечание агенту.
+    var ptext = back.querySelector(".ptext");
+    if (ptext) {
+      markNoted();
+      ptext.addEventListener("click", noteJump);
+      noteBar(ptext, d.id, function (sel) {
+        var p = sel.node && (sel.node.nodeType === 1 ? sel.node : sel.node.parentElement);
+        p = p && p.closest("p");
+        var all = Array.prototype.slice.call(ptext.querySelectorAll("p"));
+        var i2 = p ? all.indexOf(p) : -1;
+        return i2 >= 0 ? { "место": "абзац " + (i2 + 1) } : {};
+      }, function () {
+        var s = window.getSelection();
+        if (!s || s.isCollapsed) return null;
+        var t = String(s).trim();
+        if (!t || !ptext.contains(s.anchorNode)) return null;
+        return { text: t, rect: s.getRangeAt(0).getBoundingClientRect(), node: s.anchorNode };
+      }, refreshTalk, showPendingTalk);
+    }
+
+    if (d["onlyoffice"]) ooMount(back, d.id);
+
+    // Печать книги идёт секунды: пока рамка не загрузилась, в ней видно,
+    // что документ готовится.
+    var pdfFrame = back.querySelector(".asdoc .pdf");
+    if (pdfFrame) pdfFrame.addEventListener("load", function () {
+        var box = pdfFrame.closest(".asdoc");
+        if (box) box.classList.remove("loading");
+      });
+
+    // Разметка документа Word: та же рамка своего происхождения, поэтому
+    // выделение для замечаний и маска работают, как в листе книги.
+    var rich = back.querySelector(".richview");
+    if (rich) {
+      rich.addEventListener("load", function () {
+        try {
+          var rdoc = rich.contentDocument;
+          var st = rdoc.createElement("style");
+          st.textContent = ".used{background:#FFF3C4;box-shadow:inset 0 0 0 1px #E6A700}" +
+            ".noted{border-bottom:2px dotted #1687b8;cursor:pointer}";
+          rdoc.head.appendChild(st);
+          applyDocZoom();
+          autoFit();
+          paintMarks();
+          markNoted();
+          rdoc.addEventListener("click", noteJump);
+          noteBar(rdoc, d.id, function (sel) {
+            var node = sel.node && (sel.node.nodeType === 1 ? sel.node : sel.node.parentElement);
+            var cell = node && node.closest("td,th");
+            var out = {};
+            if (cell) {
+              var tr = cell.parentElement, table = cell.closest("table");
+              var rows = table ? Array.prototype.slice.call(table.rows) : [];
+              var ri = rows.indexOf(tr);
+              if (ri >= 0) out["строка"] = "строка таблицы " + (ri + 1);
+              var first = tr.cells[0];
+              if (first && first !== cell) {
+                var ft = first.textContent.trim();
+                if (ft) out["ключ строки"] = ft.slice(0, 60);
+              }
+            } else if (node) {
+              var pel = node.closest("p,h1,h2,h3,h4,li");
+              var all = Array.prototype.slice.call(rdoc.querySelectorAll("p,h1,h2,h3,h4,li"));
+              var i2 = pel ? all.indexOf(pel) : -1;
+              if (i2 >= 0) out["место"] = "абзац " + (i2 + 1);
+            }
+            return out;
+          }, function () {
+            var s = rdoc.getSelection();
+            if (!s || s.isCollapsed) return null;
+            var t = String(s).replace(/[\s\u00a0]+/g, " ").trim();
+            if (!t) return null;
+            var r = s.getRangeAt(0).getBoundingClientRect();
+            var f = rich.getBoundingClientRect();
+            return { text: t, node: s.anchorNode,
+                     rect: { left: f.left + r.left, top: f.top + r.top } };
+          }, refreshTalk, showPendingTalk);
+        } catch (e) { /* чужое происхождение — выделение недоступно */ }
+      });
     }
 
     // Лист переключаем перезагрузкой рамки: разметку собирает сервер.
     var frame = back.querySelector(".sheetview");
     if (frame) {
-      frame.addEventListener("load", function () {
+      function setupSheetFrame() {
         var box = frame.closest(".sheetbox");
         if (box) box.classList.remove("loading");
-      });
+        // Разметка листа приходит с сервера без стилей карточки — свои
+        // добавляем в саму рамку.
+        try {
+          var st = frame.contentDocument.createElement("style");
+          st.textContent = ".used{background:#FFF3C4;box-shadow:inset 0 0 0 1px #E6A700}" +
+            "body.marks .used{outline:none}" +
+            ".noted{border-bottom:2px dotted #1687b8;cursor:pointer}";
+          frame.contentDocument.head.appendChild(st);
+        } catch (e) {}
+        applyDocZoom();
+        autoFit();
+        paintMarks();
+        markNoted();
+        try { frame.contentDocument.addEventListener("click", noteJump); } catch (e) {}
+        // Лист приходит с того же адреса, поэтому выделение внутри рамки
+        // доступно как в своей странице: замечание ставят прямо по ячейкам.
+        try {
+          var idoc = frame.contentDocument;
+          // Кэшированный лист иногда готов до подписки на load. Пометка стоит
+          // на самом Document: при смене листа создастся новый объект, а на
+          // одном листе обработчик выделения не продублируется.
+          if (idoc.__fotNoteBarBound) return;
+          idoc.__fotNoteBarBound = true;
+          var pickNow = back.querySelector("#sheetpick");
+          noteBar(idoc, d.id, function (sel) {
+            // Где именно выделено: лист, номер строки, заголовок графы и
+            // первая ячейка строки — по ним агент находит строку в файле.
+            var name = pickNow ? pickNow.value
+                     : decodeURIComponent((frame.src.split("sheet=")[1] || "").split("&")[0]);
+            var out = { "место": name ? "лист «" + name + "»" : null };
+            var cell = sel.node && (sel.node.nodeType === 1 ? sel.node : sel.node.parentElement);
+            cell = cell && cell.closest("td,th");
+            if (cell) {
+              var tr = cell.parentElement, table = cell.closest("table");
+              var rows = table ? Array.prototype.slice.call(table.rows) : [];
+              var ri = rows.indexOf(tr), ci = Array.prototype.slice.call(tr.cells).indexOf(cell);
+              if (ri >= 0) out["строка"] = "строка " + (ri + 1);
+              var head = rows[0] && rows[0].cells[ci];
+              if (head && head !== cell) {
+                var ht = head.textContent.trim();
+                if (ht) out["графа"] = "графа «" + ht + "»";
+              }
+              var first = tr.cells[0];
+              if (first && first !== cell) {
+                var ft = first.textContent.trim();
+                if (ft) out["ключ строки"] = ft.slice(0, 60);
+              }
+            }
+            return out;
+          }, function () {
+            var s = idoc.getSelection();
+            if (!s || s.isCollapsed) return null;
+            var t = String(s).replace(/[\s\u00a0]+/g, " ").trim();
+            if (!t) return null;
+            var r = s.getRangeAt(0).getBoundingClientRect();
+            var f = frame.getBoundingClientRect();
+            return { text: t, node: s.anchorNode,
+                     rect: { left: f.left + r.left, top: f.top + r.top } };
+          }, refreshTalk, showPendingTalk);
+        } catch (e) { /* чужое происхождение — выделение недоступно */ }
+      }
+      frame.addEventListener("load", setupSheetFrame);
+      // Не полагаемся только на load: предпросмотр из кэша может успеть
+      // загрузиться раньше, чем панель навесит обработчик.
+      try {
+        if (frame.contentDocument && frame.contentDocument.readyState === "complete") {
+          setupSheetFrame();
+        }
+      } catch (e) {}
     }
+    // PDF: тот же файл документом или текстом. Маска и выделение живут в
+    // текстовом виде — браузерную отрисовку PDF не разметить.
+    var pdfSeg = back.querySelector(".pdfseg");
+    if (pdfSeg) pdfSeg.addEventListener("click", function (e) {
+      var b = e.target.closest("button[data-pdf]");
+      if (!b) return;
+      var asText = b.dataset.pdf === "text";
+      Array.prototype.forEach.call(pdfSeg.querySelectorAll("button"), function (x) {
+        x.classList.toggle("on", x === b);
+      });
+      var docEl = back.querySelector(".asdoc"), textEl = back.querySelector(".astext");
+      if (docEl) docEl.hidden = asText;
+      if (textEl) textEl.hidden = !asText;
+      showZoomFor(back, asText);
+      if (asText) autoFit();
+      paintMarks();
+    });
+
+    // Выбор листа: рамка перезагружается, разметку собирает сервер.
     var pickEl = back.querySelector("#sheetpick");
-    if (pickEl) {
+    if (pickEl && frame) {
       pickEl.onchange = function () {
         var box = frame.closest(".sheetbox");
         if (box) box.classList.add("loading");
@@ -3255,7 +4617,38 @@ function openDocument(id) {
         });
       };
     }
-    back.querySelector(".del").onclick = function () {
+    // Запись расхождений в справочник — из карточки документа.
+    var bindRef = function () {
+      var btn = back.querySelector(".refapply");
+      if (!btn) return;
+      btn.onclick = function () {
+        var edits = Array.prototype.map.call(
+          back.querySelectorAll(".reftab tbody tr"), function (tr) {
+            return { pos: tr.getAttribute("data-pos"), field: tr.getAttribute("data-field"),
+                     value: +tr.getAttribute("data-new") };
+          });
+        btn.disabled = true;
+        btn.textContent = "Записываю…";
+        api("/api/document/" + d.id + "/reference", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ edits: edits }),
+        }).then(function (r) {
+          var g = Object.assign({}, d.gave || {}, { "расхождения": r["осталось"] || [] });
+          d.gave = g;
+          var box = back.querySelector(".dside-reg");
+          if (box) box.innerHTML = refBlock(g);
+          bindRef();
+          refreshTalk();
+          tick();
+        }).catch(function () {
+          btn.disabled = false;
+          btn.textContent = "Записать в справочник";
+        });
+      };
+    };
+    bindRef();
+
+    back.querySelector(".ddel").onclick = function () {
       close();
       removeDoc(d.id, d.name, function () { loadRegistry(); tick(); });
     };
@@ -3614,6 +5007,11 @@ var REG_TABS = [
 function openRegistry() {
   leaveAgents();
   inRegistry = true;
+  // Ссылка «весь реестр» нужна из плана; на самом реестре она вела бы в себя.
+  // Колонка «документы в этом плане» на реестре тоже ни к чему — и кнопка,
+  // которая её возвращает, на реестре скрыта.
+  if ($("toreg")) $("toreg").hidden = true;
+  $("toggleside").hidden = true;
   // Правая колонка — контекст плана: на реестре она не к месту и забирает
   // 320 пикселей ширины, которых таблицам как раз не хватает.
   wideScreen(true);
@@ -3634,6 +5032,8 @@ function openRegistry() {
 function leaveRegistry() {
   if (!inRegistry) return;
   inRegistry = false;
+  if ($("toreg")) $("toreg").hidden = false;
+  $("toggleside").hidden = false;
   wideScreen(false);
   picked = {};
   refreshPickBar();
@@ -3666,7 +5066,8 @@ function renderRegistry() {
     // содержимым. «Что дал» держал в одной клетке и счетчики, и состояние, и
     // английскую диагностику библиотеки — свалка, которой в продукте для
     // финансиста быть не должно. Разведено надвое: «статус» из закрытого
-    // перечня и «внесено в реестр» — только счетчики. Вид документа убран:
+    // перечня и «результат обработки» — проверяемые счетчики или итог сверки.
+    // Вид документа убран:
     // он нужен сервису, чтобы выбрать разборщик, а в списке не говорит
     // ничего; остался в карточке.
     // Номер виден всегда, флажок подменяет его при наведении: ряд пустых
@@ -3683,7 +5084,7 @@ function renderRegistry() {
     body = table(
         nPick
         ? [pickBox, { v: pickCell(nPick), cls: "pickcell", span: 5 }]
-        : [pickBox, "документ", "загружен", "статус", "внесено в реестр", ""],
+        : [pickBox, "документ", "загружен", "статус", "результат обработки", ""],
         pg.rows.map(function (x, i) {
           var s = docStatus(x.state);
           return [
@@ -3696,7 +5097,7 @@ function renderRegistry() {
             x.uploaded,
             { v: '<span class="st ' + s.cls + '">' + esc(s.text) + "</span>",
               cls: "status" },
-            { v: produced(x.produced) || "—" },
+            { v: producedAny(x) || "—" },
             { v: rowMenu("data-docmenu", x.id), cls: "act" }];
         }), "",
         { plain: true, headCls: nPick ? "picking" : "",
@@ -3747,21 +5148,54 @@ function renderRegistry() {
       }),
       "", { startNum: pge.from }) + pager("emp", pge);
   } else if (regTab === "labor") {
-    var pgl = paged("labor", d.labor || []);
-    body = table(["договор", { t: "год" }, "должность", "окладная группа",
-                  { t: "чел.-мес." }, { t: "средняя стоимость, ₽" }, { t: "людей" },
-                  "источник"],
-      pgl.rows.map(function (x) {
-        var grp = [x.page, x.group, x.level].filter(function (v) {
-          return v != null && v !== "";
-        }).join(" · ");
+    // Реестр показывает строки источника, а не только две агрегированные
+    // позиции оптимизатора. Так видно этап, вид работ, даты и контрольную
+    // сумму; объединённый помесячный план остаётся в разделе 10 результата.
+    var sourceRows = [];
+    (d.labor || []).forEach(function (x) {
+      var details = x.details && x.details.length ? x.details : [null];
+      details.forEach(function (one) { sourceRows.push({ plan: x, detail: one }); });
+    });
+    // После агрегации одинаковые должности лежат рядом, поэтому без сортировки
+    // строки одного файла шли 1, 3, 2, 4. Возвращаем порядок исходного листа.
+    sourceRows.sort(function (a, b) {
+      if (!a.detail || !b.detail || a.plan.source !== b.plan.source) return 0;
+      function rowNumber(x) {
+        var cells = x.detail.cells || {};
+        var id = cells.stage || cells.position || "";
+        var match = String(id).match(/![A-Z]+(\d+)$/i);
+        return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
+      }
+      return rowNumber(a) - rowNumber(b);
+    });
+    var pgl = paged("labor", sourceRows);
+    body = table(["договор", { t: "год" }, "этап", "вид работ", "должность",
+                  { t: "специалистов" }, "единица", { t: "на специалиста" },
+                  { t: "всего по источнику" }, { t: "для расчёта, чел.-мес." },
+                  { t: "стоимость единицы, ₽" }, { t: "сумма, ₽" },
+                  "начало", "окончание", "источник"],
+      pgl.rows.map(function (row) {
+        var x = row.plan, one = row.detail || {};
+        var pm = one.person_months == null ? x.person_months : one.person_months;
+        var cost = one.avg_cost == null ? x.avg_cost : one.avg_cost;
+        var heads = one.headcount == null ? x.headcount : one.headcount;
+        var perPerson = one.labor_per_person;
+        var unit = one.labor_unit || "чел.-мес.";
+        var sourceTotal = one.source_total_labor == null ? pm : one.source_total_labor;
+        var sourceCost = one.source_unit_cost == null ? cost : one.source_unit_cost;
+        var total = one.total_cost;
+        if (total == null && pm != null && cost != null) total = pm * cost;
         return [x.contract, { v: x.year == null ? null : String(x.year), cls: "n" },
-                x.position, grp || null,
-                { v: x.person_months == null ? null
-                     : String(x.person_months).replace(".", ","), cls: "n" },
-                { v: x.avg_cost == null ? null : mo(x.avg_cost), cls: "n" },
-                { v: x.headcount == null ? null : String(x.headcount).replace(".0", ""), cls: "n" },
-                x.source || null];
+                one.stage || null, one.work_type || null,
+                one.position || x.position,
+                { v: heads == null ? null : String(heads).replace(".0", ""), cls: "n" },
+                unit,
+                { v: perPerson == null ? null : String(perPerson).replace(".", ","), cls: "n" },
+                { v: sourceTotal == null ? null : String(sourceTotal).replace(".", ","), cls: "n" },
+                { v: pm == null ? null : String(pm).replace(".", ","), cls: "n" },
+                { v: sourceCost == null ? null : mo(sourceCost), cls: "n" },
+                { v: total == null ? null : mo(total), cls: "n" },
+                one.from || null, one.to || null, x.source || null];
       }),
       "", { startNum: pgl.from }) + pager("labor", pgl);
   } else if (regTab === "inflow") {
@@ -3777,10 +5211,6 @@ function renderRegistry() {
       years[key] = [x.contract, x.year];
     });
     var keys = Object.keys(by).sort();
-    // Наибольшее поступление задает длину полос: сравнивать месяцы имеет
-    // смысл между собой, а не с чужой таблицей.
-    var peak = 0;
-    rows.forEach(function (x) { if (x.amount > peak) peak = x.amount; });
     var pgi = paged("inflow", keys);
     body = table(
       [{ v: "Договор", cls: "key" }, { t: "год" }].concat(
@@ -3792,11 +5222,7 @@ function renderRegistry() {
           var v = months[i + 1];
           if (v == null) return { v: null, cls: "n" };
           total += v;
-          // Полоса под числом: провал в середине года и месяц, с которого
-          // договор начинается, видно раньше, чем прочитаны цифры.
-          var share = peak ? Math.max(4, Math.round((v / peak) * 100)) : 0;
-          return { v: '<span class="bar" style="--f:' + share + '%">' +
-                      mo(v) + "</span>", cls: "n" };
+          return { v: mo(v), cls: "n" };
         });
         return [{ v: esc(years[key][0]), cls: "key" },
                 { v: years[key][1] == null ? null : String(years[key][1]), cls: "n" }]
@@ -3814,11 +5240,24 @@ function renderRegistry() {
       "", { startNum: pgs2.from }) + pager("secret", pgs2);
   } else if (regTab === "ref") {
     var pgr = paged("ref", d.reference || []);
+    // Откуда величины: оклад — из положения, П2556 — из приказа, П4 — из
+    // справки, БЭП — из письма. Связь ставит агент при записи величин или
+    // экономист вручную; она уходит в основание каждого расчёта.
+    var srcs = d.reference_sources || {};
+    var srcRows = ["оклад", "П2556", "П4", "БЭП"].map(function (f) {
+      var x = srcs[f] || {};
+      return [f,
+              { v: x["документ"] ? '<span class="dname" data-doc="' + esc(String(x["document_id"] || "")) +
+                   '" role="button" tabindex="0">' + esc(x["документ"]) + "</span>" : gc("—") },
+              x["загружен"] || null, x["основание"] || null];
+    });
+    body = table(["величина", "документ-источник", "загружен", "основание"],
+                 srcRows, "", { plain: true }) + "<div style=\"height:12px\"></div>";
     // Окладной группы здесь нет: взаимозаменяемость задают правила замещения,
     // а группировка из положения об оплате труда устарела и в решении больше
     // не участвует. БЭП, наоборот, показываем — по нему считается средний
     // предел по ГОЗ-договору, а раньше его было не видно.
-    body = table(["должность", "категория",
+    body += table(["должность", "категория",
                   { t: "оклад за 1,0 ставки, ₽" }, { t: "П2556, ₽" },
                   { t: "П4, ₽" }, { t: "БЭП, ₽" }, "примечание"],
       pgr.rows.map(function (x) {
@@ -3838,8 +5277,11 @@ function renderRegistry() {
 
   var tabsRow =
     '<div class="reghead"><div class="rtabs">' + REG_TABS.map(function (t) {
+      var visibleLaborRows = (d.labor || []).reduce(function (sum, x) {
+        return sum + (x.details && x.details.length ? x.details.length : 1);
+      }, 0);
       var n = { docs: docs.length, ctr: (d.contracts || []).length,
-                emp: (d.employees || []).length, labor: (d.labor || []).length,
+                emp: (d.employees || []).length, labor: visibleLaborRows,
                 inflow: new Set((d.inflows || []).map(function (x) {
                   return x.contract + "|" + x.year;
                 })).size,
@@ -3930,16 +5372,9 @@ $("openreg").addEventListener("click", openRegistry);
 $("opencurrent").addEventListener("click", openCurrent);
 
 /* Версия расчета: щелчок открывает ее отчет. */
-$("runs").addEventListener("click", function (e) {
-  var v = e.target.closest(".ver");
-  if (!v || e.target.closest("a")) return;
-  var id = +v.getAttribute("data-ver");
-  var r = (state.runs || []).filter(function (x) { return x.id === id; })[0];
-  if (!r || r.status !== "OPTIMAL") return;
-  chosenRun = id; vrun = null; vrep = null;
-  renderRuns();
-  setView("sum");
-});
+// Версии переключаются полем «Версия» в панели отчёта; карточек в колонке
+// справа больше нет.
+if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
 
 /* Флажок документа: снят — чат этого плана документ не смотрит. */
 $("docs").addEventListener("change", function (e) {
@@ -3950,7 +5385,6 @@ $("docs").addEventListener("change", function (e) {
     body: JSON.stringify({ muted: !cb.checked })
   }).then(tick);
 });
-if ($("toreg")) $("toreg").addEventListener("click", openRegistry);
 
 document.addEventListener("keydown", function (e) {
   if (e.key === "Escape" && pickedIds().length && !document.querySelector(".modal")) {
@@ -4164,6 +5598,24 @@ $("docs").addEventListener("click", function (e) {
     } }]);
 });
 
+/* Удалить версию расчёта. Реестр не трогается: прогон — только результат
+   счёта, данные организации живут отдельно. */
+function deleteRun(id) {
+  var saved = (state.runs || []).filter(function (r) { return r.status === "OPTIMAL"; });
+  ask("Удалить версию расчёта № " + id + "?",
+      saved.length > 1
+        ? "Останутся другие версии; данные реестра не изменятся."
+        : "Это единственная посчитанная версия. После удаления план вернётся "
+          + "к состоянию «готово к расчету», данные реестра не изменятся.",
+      "Удалить версию").then(function (yes) {
+    if (!yes) return;
+    api("/api/case/" + caseId + "/run/" + id, { method: "DELETE" }).then(function () {
+      vrun = null; vrep = null; vrules = null; vresult = null; vsum = null; vpay = null;
+      tick();
+    });
+  });
+}
+
 function removeDoc(id, name, done) {
   ask("Удалить «" + String(name).trim() + "»?",
       "Вместе с документом удалятся извлеченные из него данные: сотрудники, " +
@@ -4295,15 +5747,29 @@ function hasFiles(e) {
 }
 armDropZone();
 
+// Enter отправляет реплику. Неявная отправка формы браузером работает не
+// везде (и не во встроенном окне приложения), а экономист набирает текст и
+// жмёт Enter — реплика оставалась в поле.
+$("text").addEventListener("keydown", function (e) {
+  if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+  e.preventDefault();
+  $("composer").dispatchEvent(new Event("submit", { cancelable: true }));
+});
+
 $("composer").addEventListener("submit", function (e) {
   e.preventDefault();
   var t = $("text").value.trim();
-  if (!t || !caseId) return;
+  if (!t || !caseId || sending) return;
   $("text").value = "";
+  // Реплика показывается сразу, ответ модели идет секунды: ждать пустого
+  // экрана экономист не должен.
+  sending = t;
+  renderFeed();
+  var done = function () { sending = null; return tick(); };
   api("/api/case/" + caseId + "/message", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: t })
-  }).then(tick);
+  }).then(done, function () { done(); renderFeed(); });
 });
 
 $("solve").addEventListener("click", solve);
