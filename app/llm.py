@@ -37,7 +37,7 @@ import urllib.request
 
 import docread
 
-FIELDS = ("оклад", "П2556", "П4")
+FIELDS = ("оклад", "П2556", "П4", "БЭП")
 MAX_CHARS = 60000          # хватает на выписку в несколько листов
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
@@ -111,11 +111,19 @@ SYSTEM = """Ты разбираешь документ российской ор
 из приказа, письмо военного представительства, положение об оплате труда или
 приложение к ним. Нужно извлечь величины, относящиеся к должностям.
 
-Извлекай только три вида величин:
+Извлекай только четыре вида величин:
 - «оклад» — должностной оклад за одну полную ставку в месяц, рублей;
 - «П2556» — предельный размер оклада по приказу № 2556, рублей;
-- «П4» — предельный размер по приказу № 4, обычно задан категории персонала
-  (НТП, НР), а не должности.
+- «П4» — предел при надбавке за интенсивность: это средняя заработная плата
+  по категории персонала из справки организации («Научные работники»,
+  «Научно-технический персонал», АУП, ППС). Она задана категории, а не
+  должности — тогда в position пиши название категории как в документе;
+- «БЭП» — среднемесячная заработная плата основных исполнителей работ по
+  гособоронзаказу, которую военное представительство предлагает
+  установить на год (письмо ВП). В position пиши «основные исполнители
+  ГОЗ» и год, если он назван: «основные исполнители ГОЗ 2025».
+Величина по категории или по всем исполнителям — это тоже строка rows, а
+не пустой список: справочник разложит её по должностям сам.
 
 Правила:
 1. Должность записывай так, как она названа в документе, без номера строки.
@@ -124,7 +132,11 @@ SYSTEM = """Ты разбираешь документ российской ор
    «не установлен» означают отсутствие значения — такую строку пропусти.
 4. Заголовки бывают в несколько строк и объединенными: соотнеси значение с
    правильной колонкой по координатам ячеек.
-5. Дату начала действия и основание (номер и дата приказа или письма) возьми
+5. Если предельный уровень задан несколькими колонками по внутридолжностным
+   категориям (без категории, II категория, I категория), в «П2556» бери
+   наибольшее значение строки: справочник хранит предельный уровень по
+   должности.
+6. Дату начала действия и основание (номер и дата приказа или письма) возьми
    из шапки документа, если они там есть.
 
 Если документ не об оплате труда должностей, верни пустой список rows и объясни
@@ -136,7 +148,7 @@ JSON_SHAPE = """Ответь одним объектом JSON без поясн�
   "basis": "номер и дата приказа или письма, либо null",
   "effective_from": "ДД.ММ.ГГГГ, либо null",
   "rows": [{"position": "должность как в документе",
-            "field": "оклад | П2556 | П4",
+            "field": "оклад | П2556 | П4 | БЭП",
             "value": 12345,
             "cell": "лист и ячейка, откуда взято, либо null"}],
   "notes": "что осталось непонятным, либо null"
@@ -205,7 +217,7 @@ def _call_anthropic(text, filename, model):
 
     class Row(BaseModel):
         position: str = Field(description="должность или категория персонала, как в документе")
-        field: Literal["оклад", "П2556", "П4"]
+        field: Literal["оклад", "П2556", "П4", "БЭП"]
         value: float = Field(description="значение в рублях")
         cell: Optional[str] = Field(default=None, description="лист и ячейка, откуда взято")
 
@@ -468,7 +480,9 @@ CLASSIFY_SYSTEM = """Определи, что за документ перед �
 - «документ по договору» — расчетно-калькуляционные материалы, структура цены,
   калькуляция, сметы, формы с трудоемкостью и стоимостью работ по договору;
 - «нормативный документ» — приказ, письмо, положение об оплате труда, справка
-  об окладах и предельных размерах выплат;
+  об окладах и предельных размерах выплат. Сюда же справки о средней
+  заработной плате по категориям персонала (НР, НТП) и письма о предельных
+  размерах: из них берутся пределы П4 и БЭП;
 - «правила замещения должностей» — таблица вида «должность → кем может быть
   замещена»;
 - «штатное расписание» — перечень сотрудников с должностями и ставками;
@@ -503,6 +517,18 @@ CLASSIFY_SCHEMA = {
 }
 
 
+def classify_text(text, filename="", head=6000):
+    """Тот же разбор вида, но по готовому тексту.
+
+    Нужен для сканов: страницы уже прочитаны картинками, читать файл заново
+    незачем.
+    """
+    name, model, why = provider()
+    if name is None:
+        return {"ok": False, "unavailable": True, "error": why}
+    return _classify_call(name, model, (text or "")[:head], filename)
+
+
 def classify(path, filename="", head=6000):
     """Что за документ. Возвращает dict; ok=False — решать вызывающей стороне.
 
@@ -518,7 +544,10 @@ def classify(path, filename="", head=6000):
     except docread.Unreadable as e:
         return {"ok": False, "error": str(e)}
 
-    filename = filename or os.path.basename(path)
+    return _classify_call(name, model, text, filename or os.path.basename(path))
+
+
+def _classify_call(name, model, text, filename):
     try:
         if name == "anthropic":
             raw = _classify_anthropic(text, filename, model)
@@ -564,6 +593,63 @@ def _classify_anthropic(text, filename, model):
         messages=[{"role": "user", "content": "Документ «%s»:\n\n%s" % (filename, text)}],
         output_format=Kind)
     return msg.parsed_output.model_dump() if msg.parsed_output else None
+
+
+#: Модель, читающая изображения. Пусто — сканы читает та же модель, что и
+#: текст: и сервер организации (vLLM принимает image_url), и DeepSeek это
+#: умеют. Отдельная модель «deepseek-v4-flash-vision-exp» была нужна раньше,
+#: сейчас её нет и запрос к ней возвращает 400 — сканы просто не читались.
+#: Другую модель для картинок можно назначить переменной FOT_VISION_MODEL.
+VISION_MODELS = {}
+
+
+def vision_model():
+    """Какой моделью читать сканы; None — читать нечем."""
+    name, model, _why = provider()
+    if name is None:
+        return None
+    override = (os.environ.get("FOT_VISION_MODEL") or "").strip()
+    if override:
+        return override
+    return VISION_MODELS.get(name, model)
+
+
+def read_image(png_b64, prompt, max_tokens=3000):
+    """Прочитать картинку моделью. Пустая строка — не вышло.
+
+    Рассуждающие модели тратят на изображение сотни токенов «про себя», и при
+    коротком лимите ответ не успевает начаться: приходит пустое поле content
+    при полном reasoning_content. Поэтому лимит здесь щедрый.
+    """
+    name, _model, _why = provider()
+    model = vision_model()
+    if not model:
+        return ""
+    payload = {"model": model, "max_tokens": max_tokens, "temperature": 0,
+               "messages": [{"role": "user", "content": [
+                   {"type": "text", "text": prompt},
+                   {"type": "image_url",
+                    "image_url": {"url": "data:image/png;base64," + png_b64}}]}]}
+    if _no_thinking(name):
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    headers = {"Content-Type": "application/json"}
+    key = _key(name)
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    url = _endpoint(name)
+    req = urllib.request.Request(
+        url, method="POST", headers=headers,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    ctx = None
+    if url.lower().startswith("https"):
+        ctx = ssl._create_unverified_context() if _truthy(
+            os.environ.get("FOT_LLM_INSECURE_TLS")) else _ssl_context()
+    try:
+        with urllib.request.urlopen(req, timeout=600, context=ctx) as resp:
+            answer = json.loads(resp.read().decode("utf-8"))
+        return (answer["choices"][0]["message"].get("content") or "").strip()
+    except Exception:  # noqa: BLE001 — модель не прочитала: скажем об этом выше
+        return ""
 
 
 def _endpoint(name):
@@ -619,6 +705,11 @@ FREEFORM_SYSTEM = """Ты читаешь документ планово-эко�
 главное содержание расчетно-калькуляционных материалов и Формы 9д. Основную
 заработную плату строки не выписывай: это произведение человеко-месяцев на
 стоимость, сервис считает её сам.
+Если трудоемкость дана по этапам или периодам с датами начала и окончания
+(«Этап 1, 01.06.2026–30.09.2026, 4 чел.-мес.»), заводи строку на каждый этап
+и укажи его даты в from и to; этапы одной должности не складывай. Если
+человеко-месяцы расписаны по месяцам года, дай их в months — двенадцать
+чисел с января по декабрь, пустые месяцы нулем.
 
 Поступления (inflows) — деньги по договору помесячно: шифр договора, год,
 номер месяца от 1 до 12, сумма поступления. Строку заводи на каждый месяц,
@@ -669,7 +760,13 @@ FREEFORM_SHAPE = """Ответь одним объектом JSON:
  "labor": [{"contract": "шифр", "year": 2026, "position": "Инженер",
             "page": null, "group": null, "level": null,
             "person_months": 12.5, "avg_cost": 95000, "headcount": 2,
-            "место": "Форма 9д, строка 14"}],
+            "from": null, "to": null, "months": null,
+            "место": "Форма 9д, строка 14"},
+           {"contract": "шифр", "year": 2026, "position": "Научный сотрудник",
+            "page": null, "group": null, "level": null,
+            "person_months": 4, "avg_cost": 100000, "headcount": 1,
+            "from": "01.06.2026", "to": "30.09.2026", "months": null,
+            "место": "Расшифровка ФОТ, этап 1, строка 1"}],
  "inflows": [{"contract": "шифр", "year": 2026, "month": 3, "amount": 1200000,
               "место": "график поступлений, строка 5"}],
  "secret": [{"employee": "табельный", "contract": "шифр договора секретности",
@@ -705,6 +802,8 @@ _FF_LABOR = {
         "contract": _TXT, "year": _NUM, "position": _TXT, "page": _TXT,
         "group": _NUM, "level": _NUM, "person_months": _NUM, "avg_cost": _NUM,
         "headcount": _NUM,
+        "from": _TXT, "to": _TXT,
+        "months": {"type": ["array", "null"], "items": _NUM},
         "место": _TXT,
     },
     "required": ["contract", "person_months", "avg_cost"],

@@ -30,7 +30,7 @@ from sqlalchemy.orm import (
 )
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(HERE, "data")
+DATA_DIR = os.path.abspath(os.environ.get("FOT_DATA_DIR") or os.path.join(HERE, "data"))
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 RESULT_DIR = os.path.join(DATA_DIR, "results")
 DB_PATH = os.path.join(DATA_DIR, "fot.sqlite3")
@@ -234,6 +234,9 @@ class Document(Base):
     # отпечаток дает проверить, что документ с тех пор не подменяли, и
     # отличить исправленную редакцию от того же файла, загруженного дважды.
     sha256: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Что документ дал реестру, когда строк со ссылкой на него нет: величины
+    # справочника должностей (JSON).
+    gave: Mapped[str | None] = mapped_column(Text, default=None)
 
     case: Mapped[Case] = relationship(back_populates="documents")
 
@@ -349,6 +352,13 @@ class LaborRow(Base):
     avg_cost: Mapped[float | None] = mapped_column(Float, default=None)
     # Число привлекаемых специалистов из РКМ — предел людей на строке в месяц.
     headcount: Mapped[float | None] = mapped_column(Float, default=None)
+    # План по месяцам, JSON {"6": 1.0, …}: этап «4 чел.-мес. июнь–сентябрь»
+    # из расшифровки ФОТ разложен по месяцам. Пусто — строка годовая.
+    months: Mapped[str | None] = mapped_column(Text, default=None)
+    # Исходные строки формы до объединения по должности: этап, вид работ,
+    # даты, сумма и место в документе. Оптимизатор читает агрегат выше, а эта
+    # расшифровка нужна для проверки полноты извлечения.
+    details: Mapped[str | None] = mapped_column(Text, default=None)
     source: Mapped[str | None] = mapped_column(String(300), default=None)
     document_id: Mapped[int | None] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), default=None)
@@ -480,10 +490,14 @@ _ADDED_COLUMNS = {
     "cases": [("muted_docs", "TEXT"), ("plan_settings", "TEXT")],
     "documents": [("version", "INTEGER"), ("supersedes_id", "INTEGER"),
                   ("scope", "VARCHAR(20)"),
-                  ("sha256", "VARCHAR(64)")],
+                  ("sha256", "VARCHAR(64)"),
+                  # Что документ дал реестру, когда это не строки со ссылкой
+                  # на него: величины справочника должностей.
+                  ("gave", "TEXT")],
     "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
     "runs": [("sources", "TEXT")],
-    "labor_rows": [("headcount", "FLOAT")],
+    "labor_rows": [("headcount", "FLOAT"), ("months", "TEXT"),
+                   ("details", "TEXT")],
     "verdicts": [("grade", "VARCHAR(20)")],
     "employees": [
         ("department", "VARCHAR(200)"),

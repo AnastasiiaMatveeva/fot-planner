@@ -25,7 +25,12 @@ llm = ["anthropic>=1.0", "certifi>=2024.0"]
 web = ["fastapi>=0.115", "uvicorn[standard]>=0.30", "sqlalchemy>=2.0",
        "python-multipart>=0.0.9",
        # чтение нормативных документов: PDF и старый бинарный .doc
-       "pypdf>=4.0", "olefile>=0.47"]
+       "pypdf>=4.0", "olefile>=0.47",
+       # Сканы: страницы рисуются картинками и читаются моделью.
+       "pypdfium2>=4.30", "pillow>=10.0",
+       # предпросмотр «как есть»: печать Word и книги в PDF установленным
+       # Office; без пакета остаётся LibreOffice, без обоих — только разбор
+       "pywin32>=306; sys_platform == 'win32'"]
 
 [project.scripts]
 fot-planner = "fot_planner.cli:main"

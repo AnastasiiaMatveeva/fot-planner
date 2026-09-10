@@ -64,11 +64,37 @@ def from_pdf(path):
         if t:
             pages.append("### Страница %d\n%s" % (i, t))
     if not pages:
+        # Текстового слоя нет — это скан. Читаем страницы картинками той
+        # моделью, которая понимает изображения.
+        text = _read_scan(path)
+        if text:
+            return text
         raise Unreadable(
-            "в файле нет текстового слоя — похоже, это скан. "
-            "Распознавание изображений не подключено: приложите документ "
-            "в текстовом виде или введите величины вручную")
+            "в файле нет текстового слоя — похоже, это скан, а модель, "
+            "читающая изображения, недоступна: приложите документ в "
+            "текстовом виде или введите величины вручную")
     return "\n\n".join(pages)
+
+
+def _read_scan(path):
+    """Скан страницами через модель; None — распознавать нечем."""
+    try:
+        import ocr
+    except ImportError:
+        return None
+    try:
+        return ocr.text_from_pdf(path)
+    except Exception:  # noqa: BLE001 — не вышло распознать: читаем как есть
+        return None
+
+
+def scan_text(path):
+    """Перечитать PDF картинками, минуя текстовый слой.
+
+    Нужно там, где слой есть, но он каша: чужое распознавание выглядит
+    прочитанным и подсовывает «МИН ИСТRJ>Сrво».
+    """
+    return _read_scan(path)
 
 
 # ── Word ────────────────────────────────────────────────────────
@@ -79,12 +105,66 @@ def from_docx(path):
     return re.sub(r"<[^>]+>", "", xml)
 
 
+def _doc_pieces(wd, tbl):
+    """Текст .doc по таблице кусков: FIB → CLX → PlcPcd → куски потока.
+
+    Куски бывают двух видов: UTF-16 и однобайтовый cp1251 — на это указывает
+    старший бит fc. Порядок кусков и есть порядок текста, поэтому таблицы
+    собираются целиком, а не выпадают.
+    """
+    import struct
+
+    # fcClx/lcbClx — 33-е поле FibRgFcLcb97; структура идёт после FibBase(32)
+    # + csw(2) + FibRgW97(28) + cslw(2) + FibRgLw97(88) + cbRgFcLcb(2).
+    fc_clx, lcb_clx = struct.unpack_from("<II", wd, 154 + 33 * 8)
+    clx = tbl[fc_clx:fc_clx + lcb_clx]
+    i = 0
+    while i < len(clx) and clx[i] == 0x01:          # блоки свойств пропускаем
+        i += 3 + struct.unpack_from("<H", clx, i + 1)[0]
+    if i >= len(clx) or clx[i] != 0x02:
+        raise ValueError("в файле нет таблицы кусков")
+    lcb = struct.unpack_from("<I", clx, i + 1)[0]
+    plc = clx[i + 5:i + 5 + lcb]
+    n = (len(plc) - 4) // 12
+    if n <= 0:
+        raise ValueError("таблица кусков пуста")
+    cps = list(struct.unpack_from("<%dI" % (n + 1), plc, 0))
+    out = []
+    for k in range(n):
+        fc = struct.unpack_from("<I", plc, 4 * (n + 1) + k * 8 + 2)[0]
+        length = cps[k + 1] - cps[k]
+        if fc & 0x40000000:
+            start_at = (fc & ~0x40000000) // 2
+            out.append(wd[start_at:start_at + length].decode("cp1251", "ignore"))
+        else:
+            out.append(wd[fc:fc + length * 2].decode("utf-16-le", "ignore"))
+    return "".join(out)
+
+
+def _doc_clean(text):
+    """Ячейки — через табуляцию, строки таблиц — по строке, поля Word — прочь."""
+    # \x07 — конец ячейки; два подряд — конец строки таблицы.
+    text = text.replace("\x07\x07", "\n").replace("\x07", "\t")
+    text = text.replace("\r", "\n").replace("\x0b", "\n").replace("\xa0", " ")
+    # Поля Word (DOCPROPERTY "…" \* MERGEFORMAT, PAGE и прочие) — разметка.
+    text = re.sub(r'\s*[A-Z]{3,}[A-Z ]*\s*(?:"[^"]*")?\s*(?:\\\*\s*\w+)?\s*', " ", text)
+    text = re.sub(r"[\x00-\x08\x0c\x0e-\x1f]", "", text)
+    rows = []
+    for line in text.split("\n"):
+        cells = [c.strip() for c in line.split("\t")]
+        cells = [c for c in cells if c]
+        if cells:
+            rows.append("\t".join(cells))
+    return "\n".join(rows)
+
+
 def from_doc(path):
     """Старый бинарный .doc.
 
-    Текст в потоке WordDocument лежит в UTF-16; вокруг него служебные
-    структуры, поэтому берем длинные читаемые фрагменты, а не весь поток.
-    Для приказа этого достаточно: нужны формулировки и суммы, а не верстка.
+    Сначала по таблице кусков: так достаются и абзацы, и таблицы — прежний
+    способ брал из потока куски длиннее сорока знаков, и таблица пределов из
+    приказа целиком пропадала. Если файл нестандартный, откатываемся к
+    прежнему способу: текст будет, таблиц не будет.
     """
     try:
         import olefile
@@ -96,12 +176,21 @@ def from_doc(path):
         if not ole.exists("WordDocument"):
             raise Unreadable("в файле нет потока WordDocument")
         raw = ole.openstream("WordDocument").read()
+        names = ["/".join(s) for s in ole.listdir()]
+        table = "1Table" if "1Table" in names else ("0Table" if "0Table" in names else None)
+        tbl = ole.openstream(table).read() if table else b""
+    if tbl:
+        try:
+            text = _doc_clean(_doc_pieces(raw, tbl))
+            if len(text.strip()) > 40:
+                return text
+        except Exception:  # noqa: BLE001 — нестандартный файл: пробуем по-старому
+            pass
     text = raw.decode("utf-16-le", "ignore")
-    chunks = re.findall(r"[А-Яа-яЁёA-Za-z0-9 .,;:№%()«»\"'/\-–—\n\r\t]{40,}", text)
+    chunks = re.findall(r"[А-Яа-яЁёA-Za-z0-9 .,;:№%()«»\"\'/\-–—\n\r\t]{40,}", text)
     if not chunks:
         raise Unreadable("не нашел читаемого текста; пересохраните файл как .docx или PDF")
     return "\n".join(c.strip() for c in chunks)
-
 
 # ── выбор способа ───────────────────────────────────────────────
 READERS = {

@@ -86,15 +86,58 @@ def classify_by_words(path):
     return "документ по договору", "intake", contract / (norm + contract)
 
 
+#: Листы шаблона сервиса: книга с таким листом — форма, которую сервис читает
+#: сам, что бы модель ни сказала о её виде.
+_TEMPLATE_SHEETS_STAFF = ("сотрудники", "120_надбавка")
+_TEMPLATE_SHEETS_CONTRACT = ("договоры", "фот_по_месяцам", "трудоемкость_по_договорам",
+                             "трудоёмкость_по_договорам")
+
+
+def template_kind(path):
+    """Вид документа по листам шаблона: «штатное расписание», «документ по
+    договору» или None, если это не книга по шаблону.
+
+    Модель определяет вид по тексту и на книге из пяти строк с шифрами
+    колеблется — «Договоры 2026.xlsx» она однажды назвала «иное», и договоры
+    ушли бы в предложения вместо реестра. Лист, названный как в шаблоне
+    сервиса, — признак надёжнее любой догадки.
+    """
+    if docread.kind_of(path) not in (".xlsx", ".xlsm"):
+        return None
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True)
+        names = {str(n).strip().lower() for n in wb.sheetnames}
+        wb.close()
+    except Exception:  # noqa: BLE001 — не книга или битый файл: пусть решает модель
+        return None
+    if names & set(_TEMPLATE_SHEETS_CONTRACT):
+        return "документ по договору"
+    if names & set(_TEMPLATE_SHEETS_STAFF):
+        return "штатное расписание"
+    return None
+
+
 def classify(path, filename=""):
     """(вид документа, чей он, чем определили, каша ли текст).
 
     Вид определяет модель: счет ключевых слов на настоящих документах путается
     — в приказе об оплате труда слово «договор» встречается не реже, чем в
     расчетно-калькуляционных материалах. Если модель недоступна или не смогла,
-    остается счет слов.
+    остается счет слов. Книгу по шаблону сервиса узнаём по листам сами.
     """
+    by_template = template_kind(path)
+    if by_template is not None:
+        return by_template, OWNER[by_template], "разбор по листам шаблона", None
     res = llm.classify(path, filename)
+    # Каша в текстовом слое — не приговор: у PDF есть сами страницы. Читаем
+    # их картинками и определяем вид заново по распознанному тексту.
+    if res.get("ok") and res.get("garbled") and docread.kind_of(path) == ".pdf":
+        scanned = docread.scan_text(path)
+        if scanned:
+            again = llm.classify_text(scanned, filename)
+            if again.get("ok") and not again.get("garbled"):
+                res = again
     if res.get("ok"):
         kind = res["kind"]
         garbled = (res.get("garbled_why") or "").strip() if res.get("garbled") else None
@@ -212,6 +255,95 @@ def _excel_date(v):
     return (_dt.date(1899, 12, 30) + _dt.timedelta(days=int(n))).strftime("%d.%m.%Y")
 
 
+def _day(v):
+    """Дата из ответа модели или ячейки — в date; None, если это не дата."""
+    import datetime as _dt
+
+    if v is None or v == "":
+        return None
+    if isinstance(v, _dt.datetime):
+        return v.date()
+    if isinstance(v, _dt.date):
+        return v
+    s = str(_excel_date(v) or "").strip()
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%d.%m.%y"):
+        try:
+            return _dt.datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _labor_rows_monthly(rows, default_year):
+    """Строки трудоёмкости из ответа модели — в план по месяцам.
+
+    Модель отдаёт строку на каждый этап с датами начала и окончания либо
+    сразу двенадцать чисел по месяцам. Этап раскладываем поровну по его
+    месяцам: «4 чел.-мес. с июня по сентябрь» — по 1,0 в каждом. Этапы одной
+    должности на одном договоре складываем в одну строку: план по месяцам
+    сам говорит, когда что закрывать, отдельная сущность «этап» не нужна;
+    средняя стоимость взвешивается по чел.-мес. Строки без дат остаются
+    годовыми и не складываются — как раньше.
+    """
+    out, merged = [], {}
+    for lp in rows:
+        pm = _num(lp.get("person_months"))
+        if not pm:
+            continue
+        year = (int(lp["year"]) if lp.get("year")
+                else (int(default_year) if default_year else None))
+        months = None
+        raw = lp.get("months")
+        if isinstance(raw, dict) and any(_num(v) for v in raw.values()):
+            months = {str(int(k)): round(float(_num(v)), 4)
+                      for k, v in raw.items() if _num(v)}
+            pm = round(sum(months.values()), 4)
+        elif isinstance(raw, list) and len(raw) == 12 and any(_num(v) for v in raw):
+            months = {str(m): round(float(_num(v)), 4)
+                      for m, v in enumerate(raw, start=1) if _num(v)}
+            pm = round(sum(months.values()), 4)
+        else:
+            d1, d2 = _day(lp.get("from")), _day(lp.get("to"))
+            if d1 and d2 and d2 >= d1:
+                span = [(y, m) for y in range(d1.year, d2.year + 1) for m in range(1, 13)
+                        if (d1.year, d1.month) <= (y, m) <= (d2.year, d2.month)]
+                if year is None:
+                    year = d1.year
+                each = pm / len(span)
+                months = {str(m): round(each, 4) for y, m in span if y == year}
+                if not months:
+                    continue                      # этап целиком в другом году
+                pm = round(sum(months.values()), 4)
+        row = {"contract": str(lp.get("contract") or ""), "year": year,
+               "position": lp.get("position") or None, "person_months": pm,
+               "avg_cost": _num(lp.get("avg_cost")), "headcount": _num(lp.get("headcount")),
+               "months": months,
+               "details": [dict(x) for x in (lp.get("details") or [])
+                           if isinstance(x, dict)]}
+        if not months:
+            out.append(row)
+            continue
+        key = (row["contract"], year, (row["position"] or "").strip().lower())
+        prev = merged.get(key)
+        if prev is None:
+            merged[key] = row
+            out.append(row)
+            continue
+        for m, v in months.items():
+            prev["months"][m] = round(prev["months"].get(m, 0.0) + v, 4)
+        total = prev["person_months"] + pm
+        if prev["avg_cost"] and row["avg_cost"]:
+            prev["avg_cost"] = round((prev["avg_cost"] * prev["person_months"]
+                                      + row["avg_cost"] * pm) / total, 2)
+        elif row["avg_cost"]:
+            prev["avg_cost"] = row["avg_cost"]
+        prev["person_months"] = round(total, 4)
+        if row["headcount"] and (not prev["headcount"] or row["headcount"] > prev["headcount"]):
+            prev["headcount"] = row["headcount"]
+        prev.setdefault("details", []).extend(row.get("details") or [])
+    return out
+
+
 def _store_passport(db, case, passport, doc):
     """Разложить разобранное по реестрам организации.
 
@@ -242,6 +374,8 @@ def _store_passport(db, case, passport, doc):
                         employment_type=e.get("employment_type"),
                         employment_category=e.get("employment_category"),
                         rate=e.get("rate"), salary=e.get("sal"),
+                        allowed_contracts=e.get("allowed") or None,
+                        forbidden_contracts=e.get("forbidden") or None,
                         date_from=_excel_date(e.get("from")),
                         date_to=_excel_date(e.get("to")),
                         source=doc.name, document_id=doc.id))
@@ -268,22 +402,36 @@ def _store_passport(db, case, passport, doc):
                               month=m, amount=float(amount),
                               source=doc.name, document_id=doc.id))
                 inflows += 1
-    # Трудоёмкость из форм: Ф9 и «Расшифровка ФОТ» дают строки по должностям.
-    for lp in passport.get("labor") or []:
-        if not lp.get("person_months"):
-            continue
-        db.add(LaborRow(contract_code=str(lp.get("contract") or ""),
-                        year=int(lp["year"]) if lp.get("year") else (int(year) if year else None),
-                        position=lp.get("position") or None,
-                        person_months=lp.get("person_months"),
-                        avg_cost=lp.get("avg_cost"), headcount=lp.get("headcount"),
+    # Трудоёмкость из форм: Ф9 и «Расшифровка ФОТ» дают строки по должностям;
+    # этапы одной должности складываются в один план по месяцам.
+    labor_rows = _labor_rows_monthly(passport.get("labor") or [], year)
+    for lp in labor_rows:
+        db.add(LaborRow(contract_code=lp["contract"], year=lp["year"],
+                        position=lp["position"], person_months=lp["person_months"],
+                        avg_cost=lp["avg_cost"], headcount=lp["headcount"],
+                        months=(json.dumps(lp["months"], ensure_ascii=False)
+                                if lp["months"] else None),
+                        details=(json.dumps(lp["details"], ensure_ascii=False)
+                                 if lp.get("details") else None),
                         source=doc.name, document_id=doc.id))
+    # Надбавка 120 из листа «120_надбавка» штатки: без неё решатель не знает,
+    # кому гостайна обязательна, и план по такому человеку выйдет неверным.
+    for s in passport.get("secret") or []:
+        if not (s.get("employee") and s.get("contract")):
+            continue
+        db.add(SecretAllowance(employee_code=str(s["employee"]),
+                               secret_contract_code=str(s["contract"]),
+                               rate=float(s.get("rate") or 0.05),
+                               source=doc.name, document_id=doc.id))
     db.commit()
     counts = {"сотрудников": len(passport.get("employees") or []),
               "договоров": len(passport.get("contracts") or []),
               "поступлений": inflows,
-              "строк трудоемкости": len([x for x in passport.get("labor") or []
-                                         if x.get("person_months")])}
+              "строк трудоемкости": len(labor_rows),
+              "надбавок 120": len(passport.get("secret") or [])}
+    source_labor = sum(len(row.get("details") or []) or 1 for row in labor_rows)
+    if source_labor > len(labor_rows):
+        counts["исходных строк трудоемкости"] = source_labor
     return {k: v for k, v in counts.items() if v}
 
 
@@ -357,10 +505,12 @@ def _store_context(db, ctx, doc):
                         person_months=lp.person_months,
                         avg_cost=lp.avg_monthly_labor_cost,
                         headcount=getattr(lp, "headcount", None),
+                        months=(json.dumps({str(m): v for m, v in lp.monthly.items()})
+                                if getattr(lp, "monthly", None) else None),
                         source=doc.name, document_id=doc.id))
     counts["строк трудоемкости"] = len(ctx.labor_plans or [])
     for s in ctx.secret_allowances or []:
-        db.add(SecretAllowance(employee_code=s.employee_id, contract_code=s.secret_contract_id,
+        db.add(SecretAllowance(employee_code=s.employee_id, secret_contract_code=s.secret_contract_id,
                                rate=s.rate, source=doc.name, document_id=doc.id))
     counts["надбавок 120"] = len(ctx.secret_allowances or [])
     for position, extra in (ctx.substitution_rules or {}).items():
@@ -412,9 +562,19 @@ def _known(db, entity, f):
                    and (r.position or "").strip().lower() == pos
                    for r in db.query(LaborRow).all())
     if entity == "поступление":
+        # Та же сумма по тому же договору — это та же строка, даже если модель
+        # назвала соседний месяц: в графике по месяцам она легко ошибается
+        # колонкой. Предлагать экономисту подтвердить сдвинутую копию уже
+        # разобранного транша незачем — он только запутает.
         code = str(f.get("contract") or "").strip().lower()
-        return any((r.contract_code or "").strip().lower() == code
-                   and r.month == f.get("month") for r in db.query(Inflow).all())
+        amount = f.get("amount")
+        rows = [r for r in db.query(Inflow).all()
+                if (r.contract_code or "").strip().lower() == code]
+        if any(r.month == f.get("month") for r in rows):
+            return True
+        return amount is not None and any(
+            r.amount is not None and abs(float(r.amount) - float(amount)) < 0.5
+            for r in rows)
     if entity == "надбавка 120":
         who = str(f.get("employee") or "").strip().lower()
         return any((r.employee_code or "").strip().lower() == who
@@ -751,7 +911,17 @@ def run_intake(db, case, doc):
         doc.state = "разобран"
         counts = _store_passport(db, case, passport, doc)
         emp, ctr = counts.get("сотрудников", 0), counts.get("договоров", 0)
-        doc.summary = ", ".join("%s %d" % (k, v) for k, v in counts.items() if v)
+        source_labor = counts.get("исходных строк трудоемкости", 0)
+        summary = []
+        for key, value in counts.items():
+            if not value or key == "исходных строк трудоемкости":
+                continue
+            if key == "строк трудоемкости" and source_labor > value:
+                summary.append("строк источника %d → позиций плана %d"
+                               % (source_labor, value))
+            else:
+                summary.append("%s %d" % (key, value))
+        doc.summary = ", ".join(summary)
         w["detail"] = doc.summary
         w["artifact"] = {"файл": doc.name, **counts,
                          "настроек расчета": len(passport.get("settings") or {}),
@@ -815,10 +985,30 @@ def run_norms(db, case, doc):
             rows, by = reference.rows_by_anchors(doc.path), "разбор по заголовкам"
         else:
             raise ValueError(res.get("error") or "документ не разобран")
-        changes, unknown, seen = reference.compare(rows)
+        changes, unknown, seen, given = reference.compare(rows)
         doc.state = "разобран"
         doc.parsed_by = by
+        # Что документ дал реестру: величин извлечено, сколько сошлось со
+        # справочником, сколько расходится. Без этого в перечне документов
+        # у нормативных стоял прочерк — будто разбор ничего не дал.
         doc.summary = "расхождений %d" % len(changes)
+        # Связь «источник для» ставится отдельно (вручную или при записи
+        # величин) и повторный разбор её не отменяет.
+        try:
+            was_source = (json.loads(doc.gave) if doc.gave else {}).get("источник для")
+        except ValueError:
+            was_source = None
+        doc.gave = json.dumps({"источник для": was_source,
+                               "величин": len(rows or []),
+                               "расхождений": len(changes),
+                               "должностей вне справочника": len(unknown),
+                               "значения": given["значения"],
+                               "строки": given["строки"],
+                               "вне справочника": given["без должности"],
+                               "расхождения": changes,
+                               "основание": res.get("basis"),
+                               "действует с": res.get("effective_from")},
+                              ensure_ascii=False)
         w["detail"] = doc.summary
         w["artifact"] = {"файл": doc.name, "чем разобрано": by,
                          "извлечено величин": len(rows or []),

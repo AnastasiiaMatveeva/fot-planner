@@ -17,12 +17,13 @@ import json
 import logging
 import fastapi
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, UploadFile
+from fastapi import Body, BackgroundTasks, FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -99,7 +100,12 @@ def _close_orphans():
         db.close()
 
 
-_close_orphans()
+# Стенды и скрипты импортируют этот модуль ради сборщика входа и путей — и
+# при импорте закрывали живой расчёт сервера как «брошенный» (09.09.2026:
+# demo_offline.py пометил прогон приложения прерванным). Закрываем сироты
+# только в процессе самого сервера.
+if not os.environ.get("FOT_SKIP_ORPHANS"):
+    _close_orphans()
 
 
 # ── сериализация для страницы ───────────────────────────────────
@@ -294,15 +300,48 @@ def _process(case_id: int, doc_id: int):
             # только предложения, которые экономист подтверждает сам.
             kind, owner, by, garbled = intake.classify(doc.path, doc.name)
             doc.kind, doc.parsed_by = kind, by
+            # В песочнице документ читается, но в реестр не пишется: сначала
+            # предложения, потом подтверждение экономиста. Ставить ему при
+            # этом «данные не извлечены» нельзя — файл прочитан, и экономист
+            # видел этот ярлык на обычной, полностью читаемой книге.
             doc.state = "текст нечитаемый" if garbled is not None else (
-                "не прочитан" if by is None else "не распознан")
+                "не прочитан" if by is None else "ожидает")
             db.commit()
             if by is not None and garbled is None:
                 intake.propose_entities(db, case, doc)
+                db.refresh(doc)
+                if doc.state == "ожидает":
+                    doc.state = "разобран"
+                    doc.summary = "в песочнице плана: строк для реестра нет"
+                    db.commit()
             _prerender_first_sheet(doc)
+            threading.Thread(target=_warm_pdf, args=(doc.id,), daemon=True).start()
         elif case and doc:
             intake.handle_document(db, case, doc)
             _prerender_first_sheet(doc)
+            # Печать в PDF — удобство карточки, а не разбор. Она идёт своим
+            # потоком: у книги РКМ тридцать листов, Excel печатает их минуты,
+            # и всё это время следующие документы стояли в очереди
+            # неразобранными, а расчёт запускался без трудоёмкости.
+            threading.Thread(target=_warm_pdf, args=(doc.id,), daemon=True).start()
+    finally:
+        db.close()
+
+
+def _warm_pdf(doc_id):
+    """Напечатать документ в PDF заранее, в фоне.
+
+    Экономист открывает карточку и сразу видит вкладку «Документ»; печать
+    книги занимает у Excel десяток секунд. Если начать её при разборе
+    документа, к открытию карточки файл уже готов.
+    """
+    db = session()
+    try:
+        doc = db.get(Document, doc_id)
+        if doc is not None:
+            _as_pdf(doc)
+    except Exception:  # noqa: BLE001 — грелка не должна ронять запрос
+        pass
     finally:
         db.close()
 
@@ -616,7 +655,16 @@ def _preflight(db, case):
               ("закреплений", len(ps["назначения"])), ("запретов", len(ps["запреты"]))]
     for name, value in sorted((ps.get("настройки") or {}).items()):
         counts.append((name, value))
-    return {"строки": counts, "допущения": warn,
+    settings = ps.get("настройки") or {}
+    constraints = [
+        ("Период", "%s год" % case.year),
+        ("Трудоёмкость", "в пределах допуска %s" % settings.get("допуск трудоёмкости", "5%")),
+        ("Виды выплат", "только разрешённые договором"),
+        ("Основная ставка", "обязательна для основного сотрудника"),
+        ("Дефицит выплат", "разрешён" if str(settings.get("разрешить дефицит", "нет")).lower() in ("да", "true", "1") else "не разрешён"),
+        ("Правила замещения", "%d загружено" % len(data["substitutions"])),
+    ]
+    return {"строки": counts, "ограничения": constraints, "допущения": warn,
             "стоит": not data["employees"] or not data["contracts"],
             "год": case.year}
 
@@ -780,17 +828,26 @@ def all_documents():
         out = []
         for d in (db.query(Document).filter(Document.state != "заменен")
                   .order_by(Document.id.desc()).all()):
+            labor_rows = db.query(LaborRow).filter_by(document_id=d.id).all()
+            source_labor = 0
+            for row in labor_rows:
+                try:
+                    source_labor += len(json.loads(row.details)) if row.details else 1
+                except (TypeError, ValueError):
+                    source_labor += 1
             out.append({
                 "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
                 "version": d.version or 1,
                 "by": d.parsed_by, "summary": d.summary, "size": d.size,
                 "uploaded": _dt(d.uploaded), "case_id": d.case_id,
+                "gave": json.loads(d.gave) if getattr(d, "gave", None) else None,
                 "produced": {
                     "сотрудников": db.query(Employee).filter_by(document_id=d.id).count(),
                     "договоров": db.query(Contract).filter_by(document_id=d.id).count(),
                     "поступлений": db.query(Inflow).filter_by(document_id=d.id).count(),
-                    "строк трудоемкости": db.query(LaborRow)
-                                            .filter_by(document_id=d.id).count(),
+                    "строк трудоемкости": len(labor_rows),
+                    "исходных строк трудоемкости": (source_labor
+                        if source_labor > len(labor_rows) else 0),
                     "надбавок 120": db.query(SecretAllowance)
                                       .filter_by(document_id=d.id).count(),
                     "правил замещения": db.query(Substitution)
@@ -822,15 +879,23 @@ def one_document(doc_id: int):
         if os.path.splitext(d.path)[1].lower() in WORKBOOK_TYPES and os.path.exists(d.path):
             threading.Thread(target=_warm_workbook, args=(d.path,),
                              daemon=True).start()
+        # Печать в PDF нужна и книге, и Word: карточка открывается на
+        # вкладке «Документ», а печать идёт секунды.
+        threading.Thread(target=_warm_pdf, args=(d.id,), daemon=True).start()
         return {
             "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
             "by": d.parsed_by, "summary": d.summary, "size": d.size,
+            "gave": json.loads(d.gave) if getattr(d, "gave", None) else None,
             "формат": os.path.splitext(d.path)[1].lower() or "без расширения",
             "версия": d.version or 1,
             "заменяет": (lambda p: _dt(p.uploaded) if p else None)(
                 db.get(Document, d.supersedes_id) if d.supersedes_id else None),
             "uploaded": _dt(d.uploaded), "case_id": d.case_id,
             "exists": os.path.exists(d.path),
+            "печать готова": _pdf_ready(d),
+            "onlyoffice": bool((os.environ.get("FOT_ONLYOFFICE_URL") or "").strip())
+                          and os.path.splitext(d.path)[1].lower() in
+                          sum(_OO_KIND.values(), ()),
             "employees": [{"code": e.code, "fio": e.fio, "position": e.position,
                            "rate": e.rate, "salary": e.salary,
                            "from": e.date_from, "to": e.date_to} for e in emp],
@@ -903,6 +968,13 @@ def _document_work(db, name):
             keys.add(k)
             fields.append([k, v])
     return fields
+
+
+def _doc_gave(db, doc_id):
+    """Дал ли документ хоть одну строку реестра — по ссылке на него."""
+    return any(db.query(model).filter_by(document_id=doc_id).count()
+               for model in (Employee, Contract, Inflow, LaborRow,
+                             SecretAllowance, Substitution))
 
 
 @app.post("/api/document/{doc_id}/proposals")
@@ -1010,7 +1082,12 @@ async def decide_proposals(doc_id: int, request: Request):
 
         left = sum(1 for pr in rows if pr.state == "предложено")
         if not left:
-            doc.state = "разобран" if any(added.values()) else "не распознан"
+            # Отклонить предложения — не значит «документ не прочитан»:
+            # книгу по шаблону разобрал знакомый обработчик, и её строки уже
+            # в реестре. Раньше отказ от лишней строки модели переводил
+            # разобранный документ в «не распознан».
+            doc.state = ("разобран" if any(added.values()) or _doc_gave(db, doc.id)
+                         else "не распознан")
         db.commit()
 
         if any(added.values()) and doc.case_id:
@@ -1028,7 +1105,9 @@ async def decide_proposals(doc_id: int, request: Request):
 
 #: Сколько показывать в предпросмотре. Карточка — это заглянуть в документ, а
 #: не прочитать его целиком: для того есть «Открыть файл».
-PREVIEW_CHARS = 2500
+#: Приказ с таблицей пределов — двенадцать тысяч знаков; на двух с половиной
+#: тысячах он обрывался на середине таблицы, ради которой его и открывают.
+PREVIEW_CHARS = 12000
 WORKBOOK_TYPES = (".xlsx", ".xlsm", ".xltx", ".xltm")
 PREVIEW_DIR = os.path.join(os.path.dirname(UPLOAD_DIR), "previews")
 os.makedirs(PREVIEW_DIR, exist_ok=True)
@@ -1096,15 +1175,17 @@ def _sheet_html(doc, sheet):
     сохраняет объединения, ширины колонок и начертание.
 
     Результат кладем рядом с файлом: у книги РКМ тридцать листов, и карточку
-    открывают не по одному разу. Файл документа не меняется — при повторной
-    загрузке заводится новая запись со своим номером, — поэтому кэш можно не
-    сбрасывать.
+    открывают не по одному разу. В ключ кэша входит отпечаток файла: номера
+    записей после удаления документов повторяются, и по одному номеру
+    показывалась прошлая книга — новая штатка на десять человек, а в рамке
+    предпросмотра прежняя на восемь, с чужими зарплатами и без подсветки.
     """
     import hashlib
 
     from xlsx2html.core import get_sheet, render_table, worksheet_to_data
 
-    key = hashlib.md5(("%d|%s" % (doc.id, sheet or "")).encode("utf-8")).hexdigest()
+    key = hashlib.md5(("%d|%s|%s" % (doc.id, doc.sha256 or os.path.getmtime(doc.path), sheet or ""))
+                      .encode("utf-8")).hexdigest()
     cached = os.path.join(PREVIEW_DIR, key + ".html")
     if os.path.exists(cached):
         with open(cached, encoding="utf-8") as f:
@@ -1114,6 +1195,315 @@ def _sheet_html(doc, sheet):
     ws = get_sheet(wb, sheet if sheet else 0)
     data = worksheet_to_data(ws, locale="ru", default_cell_border="none")
     html = render_table(data, lambda a, b: True, lambda a, b: True)
+    with open(cached, "w", encoding="utf-8") as f:
+        f.write(html)
+    return html
+
+
+def _unclip_columns(ws):
+    """Раздвинуть столбцы и строки, где текст обрезан.
+
+    Excel печатает лист как есть: «Наименование должности» в узком столбце
+    обрывается на «Наименов», если справа тоже что-то написано, а строка с
+    фиксированной высотой режет текст по верху. Читать такое нельзя.
+
+    Каждое обращение к ячейке через COM — отдельный вызов в Excel, и на
+    книге в тысячу ячеек это секунды. Поэтому значения читаем разом
+    (``UsedRange.Value``), свойства спрашиваем у столбцов, а не у ячеек, а
+    высоту строк подбираем одним вызовом на весь лист. Файл не меняется:
+    книга открыта только для чтения.
+    """
+    try:
+        ur = ws.UsedRange
+        if ur.Cells.Count > 20000:
+            return                      # огромный лист: печатаем как есть
+        rows, cols = ur.Rows.Count, ur.Columns.Count
+        vals = ur.Value
+        if rows == 1 and cols == 1:
+            return
+        if rows == 1:
+            vals = (vals,)
+        if cols == 1:
+            vals = tuple((v,) for v in vals)
+        # Свойства столбца целиком: None — в столбце они разные, тогда
+        # столбец не трогаем, чтобы не разъехалась авторская вёрстка.
+        widths, wrap, merged = [], [], []
+        for c in range(cols):
+            col = ur.Columns(c + 1)
+            widths.append(float(col.ColumnWidth or 0))
+            wrap.append(col.WrapText)
+            merged.append(col.MergeCells)
+        need = {}
+        for r in range(rows):
+            row = vals[r]
+            for c in range(cols - 1):
+                v, nxt = row[c], row[c + 1]
+                if not (isinstance(v, str) and v.strip()) or nxt in (None, ""):
+                    continue
+                if wrap[c] is not False or merged[c] is not False:
+                    continue
+                if len(v) > widths[c]:
+                    need[c] = max(need.get(c, 0), len(v))
+        # Ширина — по обрезанным ячейкам, а не по всему столбцу: длинный
+        # заголовок в A1 раздвинул бы первый столбец на полстраницы.
+        for c, chars in need.items():
+            ur.Columns(c + 1).ColumnWidth = min(60, max(widths[c], chars + 2))
+        # Высота — одним вызовом на весь лист: строка с фиксированной
+        # высотой 13 pt и шрифтом 11 pt печаталась с обрезанным текстом.
+        ur.Rows.AutoFit()
+    except Exception:  # noqa: BLE001 — не вышло раздвинуть: печатаем как есть
+        pass
+
+
+#: В PDF печатаем тем, что стоит на машине: сначала Office (он рисует ровно
+#: так, как документ выглядит у экономиста), потом LibreOffice.
+def _office_to_pdf(src, out):
+    try:
+        import pythoncom
+        import win32com.client as win32
+    except ImportError:
+        return False
+    ext = os.path.splitext(src)[1].lower()
+    excel = ext in WORKBOOK_TYPES
+    pythoncom.CoInitialize()
+    app = None
+    try:
+        app = win32.Dispatch("Excel.Application" if excel else "Word.Application")
+        app.Visible = False
+        app.DisplayAlerts = 0
+        if excel:
+            book = app.Workbooks.Open(src, ReadOnly=True, UpdateLinks=0)
+            try:
+                for ws in book.Worksheets:
+                    _unclip_columns(ws)
+                book.ExportAsFixedFormat(0, out)      # xlTypePDF
+            finally:
+                book.Close(False)
+        else:
+            d = app.Documents.Open(src, ReadOnly=True, AddToRecentFiles=False,
+                                   Visible=False, ConfirmConversions=False)
+            try:
+                d.SaveAs2(out, FileFormat=17)         # wdFormatPDF
+            finally:
+                d.Close(False)
+        return os.path.exists(out)
+    except Exception:  # noqa: BLE001 — офиса нет или файл не открылся
+        return False
+    finally:
+        try:
+            if app is not None:
+                app.Quit()
+        except Exception:  # noqa: BLE001
+            pass
+        pythoncom.CoUninitialize()
+
+
+def _soffice_to_pdf(src, out):
+    exe = shutil.which("soffice") or shutil.which("soffice.exe")
+    if exe is None:
+        for guess in (os.path.join("C:", os.sep, "Program Files", "LibreOffice",
+                                   "program", "soffice.exe"),
+                      os.path.join("C:", os.sep, "Program Files (x86)", "LibreOffice",
+                                   "program", "soffice.exe")):
+            if os.path.exists(guess):
+                exe = guess
+                break
+    if exe is None:
+        return False
+    outdir = os.path.dirname(out)
+    try:
+        subprocess.run([exe, "--headless", "--convert-to", "pdf", "--outdir", outdir, src],
+                       check=True, timeout=180,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001
+        return False
+    made = os.path.join(outdir, os.path.splitext(os.path.basename(src))[0] + ".pdf")
+    if os.path.exists(made):
+        if os.path.abspath(made) != os.path.abspath(out):
+            os.replace(made, out)
+        return True
+    return False
+
+
+#: Печать идёт секундами, поэтому один документ печатаем один раз.
+_PDF_LOCK = threading.Lock()
+
+
+def _pdf_ready(doc):
+    """Есть ли уже напечатанный PDF (или сам документ им и является)."""
+    import hashlib
+
+    ext = os.path.splitext(doc.path)[1].lower()
+    if ext == ".pdf":
+        return True
+    key = hashlib.md5(("pdf4|%d|%s|%s" % (doc.id, doc.sha256 or "", doc.path))
+                      .encode("utf-8")).hexdigest()
+    return os.path.exists(os.path.join(PREVIEW_DIR, key + ".pdf"))
+
+
+def _as_pdf(doc):
+    """PDF-вид документа: сам файл, готовый кэш или свежая печать."""
+    import hashlib
+
+    ext = os.path.splitext(doc.path)[1].lower()
+    if ext == ".pdf":
+        return doc.path
+    if ext not in (".doc", ".docx") and ext not in WORKBOOK_TYPES:
+        return None
+    key = hashlib.md5(("pdf4|%d|%s|%s" % (doc.id, doc.sha256 or "", doc.path))
+                      .encode("utf-8")).hexdigest()
+    out = os.path.join(PREVIEW_DIR, key + ".pdf")
+    if os.path.exists(out):
+        return out
+    src = os.path.abspath(doc.path)
+    with _PDF_LOCK:
+        if os.path.exists(out):
+            return out
+        if _office_to_pdf(src, out) or _soffice_to_pdf(src, out):
+            return out
+    return None
+
+
+#: Разметка, которую оставляем от Word: смысл, а не оформление.
+_KEEP_TAGS = {"p", "br", "b", "strong", "i", "em", "u", "sup", "sub",
+              "h1", "h2", "h3", "h4", "h5", "h6",
+              "ul", "ol", "li", "table", "thead", "tbody", "tr", "td", "th"}
+_KEEP_ALIGN = ("center", "right", "justify")
+
+
+def _word_html_file(doc):
+    """Напечатать документ Word в HTML и вернуть путь к файлу.
+
+    Рядом Word кладёт папку с картинками — она нужна, чтобы вид совпадал.
+    """
+    import hashlib
+
+    ext = os.path.splitext(doc.path)[1].lower()
+    if ext not in (".doc", ".docx"):
+        return None
+    key = hashlib.md5(("rich|%d|%s" % (doc.id, doc.path)).encode("utf-8")).hexdigest()
+    out = os.path.join(PREVIEW_DIR, key + ".htm")
+    if os.path.exists(out):
+        return out
+    src = os.path.abspath(doc.path)
+    try:
+        import pythoncom
+        import win32com.client as win32
+    except ImportError:
+        return None
+    pythoncom.CoInitialize()
+    app = None
+    try:
+        app = win32.Dispatch("Word.Application")
+        app.Visible = False
+        app.DisplayAlerts = 0
+        d = app.Documents.Open(src, ReadOnly=True, AddToRecentFiles=False,
+                               Visible=False, ConfirmConversions=False)
+        try:
+            d.WebOptions.AllowPNG = True
+            d.SaveAs2(out, FileFormat=10)      # wdFormatFilteredHTML
+        finally:
+            d.Close(False)
+        return out if os.path.exists(out) else None
+    except Exception:  # noqa: BLE001 — Word недоступен: остаётся наш разбор
+        return None
+    finally:
+        try:
+            if app is not None:
+                app.Quit()
+        except Exception:  # noqa: BLE001
+            pass
+        pythoncom.CoUninitialize()
+
+
+def _word_html(doc):
+    """Документ Word как размеченный текст: заголовки, списки, таблицы.
+
+    Печатает Word (отфильтрованный HTML), поэтому вид совпадает с тем, что
+    экономист видит в самом файле. Разметку чистим: остаются только теги из
+    ``_KEEP_TAGS``, из атрибутов — выравнивание и объединение ячеек.
+    """
+    import hashlib
+    import re
+
+    ext = os.path.splitext(doc.path)[1].lower()
+    if ext not in (".doc", ".docx"):
+        return None
+    key = hashlib.md5(("html|%d|%s" % (doc.id, doc.path)).encode("utf-8")).hexdigest()
+    cached = os.path.join(PREVIEW_DIR, key + ".html")
+    if os.path.exists(cached):
+        with open(cached, encoding="utf-8") as f:
+            return f.read()
+
+    src = os.path.abspath(doc.path)
+    raw_path = os.path.join(PREVIEW_DIR, key + ".htm")
+    ok = False
+    try:
+        import pythoncom
+        import win32com.client as win32
+
+        pythoncom.CoInitialize()
+        app = None
+        try:
+            app = win32.Dispatch("Word.Application")
+            app.Visible = False
+            app.DisplayAlerts = 0
+            d = app.Documents.Open(src, ReadOnly=True, AddToRecentFiles=False,
+                                   Visible=False, ConfirmConversions=False)
+            try:
+                d.SaveAs2(raw_path, FileFormat=10)      # wdFormatFilteredHTML
+            finally:
+                d.Close(False)
+            ok = os.path.exists(raw_path)
+        finally:
+            try:
+                if app is not None:
+                    app.Quit()
+            except Exception:  # noqa: BLE001
+                pass
+            pythoncom.CoUninitialize()
+    except Exception:  # noqa: BLE001 — Word недоступен: остаётся наш разбор
+        ok = False
+    if not ok:
+        return None
+
+    with open(raw_path, "rb") as f:
+        raw = f.read()
+    m = re.search(rb"charset=([\w-]+)", raw[:4000])
+    enc = (m.group(1).decode("ascii", "ignore") if m else "windows-1251")
+    try:
+        text = raw.decode(enc, "ignore")
+    except LookupError:
+        text = raw.decode("windows-1251", "ignore")
+
+    body = re.search(r"<body[^>]*>(.*)</body>", text, re.S | re.I)
+    html = body.group(1) if body else text
+    html = re.sub(r"(?is)<(script|style|xml)[^>]*>.*?</\1>", "", html)
+    html = re.sub(r"(?is)<!--.*?-->", "", html)
+    html = re.sub(r"(?is)<o:p[^>]*>.*?</o:p>", "", html)
+
+    def keep(mm):
+        closing, tag, attrs = mm.group(1), mm.group(2).lower(), mm.group(3) or ""
+        if tag not in _KEEP_TAGS:
+            return ""
+        if closing:
+            return "</%s>" % tag
+        out = []
+        al = re.search(r"""(?i)text-align\s*:\s*(\w+)""", attrs)
+        if al and al.group(1).lower() in _KEEP_ALIGN:
+            out.append('class="a%s"' % al.group(1).lower())
+        for name in ("colspan", "rowspan"):
+            sp = re.search(r"""(?i)\b%s\s*=\s*["']?(\d+)""" % name, attrs)
+            if sp:
+                out.append('%s="%s"' % (name, sp.group(1)))
+        return "<%s%s>" % (tag, (" " + " ".join(out)) if out else "")
+
+    html = re.sub(r"(?s)<(/?)([A-Za-z][\w:-]*)((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", keep, html)
+    html = re.sub(r"(?is)<p>\s*(&nbsp;|\s)*</p>", "", html)
+    html = re.sub(r"&nbsp;", " ", html)
+    html = re.sub(r"[ \t]{2,}", " ", html)
+    if len(re.sub(r"<[^>]+>", "", html).strip()) < 40:
+        return None
     with open(cached, "w", encoding="utf-8") as f:
         f.write(html)
     return html
@@ -1130,8 +1520,22 @@ def _preview(doc):
     ext = os.path.splitext(doc.path)[1].lower()
     if not os.path.exists(doc.path):
         return {"вид": "нет", "почему": "файла нет на диске"}
+    # «Как есть» — вид документа страницами. PDF уже такой, Word и книгу
+    # печатаем в PDF по требованию: печать идёт секунды, в карточке её нет.
+    printable = ext in (".pdf", ".doc", ".docx") or ext in WORKBOOK_TYPES
     if ext == ".pdf":
-        return {"вид": "документ"}
+        # Рядом с самим PDF — тот текст, который увидел разборщик: браузерную
+        # отрисовку документа не разметить, а текст размечается как обычная
+        # страница, и на нём работают маска и выделение.
+        out = {"вид": "документ"}
+        try:
+            text = docread.to_text(doc.path, PREVIEW_CHARS)
+        except Exception:  # noqa: BLE001 — скан без текста: остаётся вид документа
+            text = ""
+        if text.strip():
+            out["текст"] = text[:PREVIEW_CHARS]
+            out["обрезано"] = len(text) >= PREVIEW_CHARS
+        return out
     if ext in WORKBOOK_TYPES:
         try:
             import openpyxl
@@ -1140,15 +1544,25 @@ def _preview(doc):
             wb.close()
         except Exception as e:  # noqa: BLE001 — битая книга не должна ронять карточку
             return {"вид": "нет", "почему": str(e)[:200]}
-        return {"вид": "книга", "листы": names}
+        out = {"вид": "книга", "листы": names, "как есть": printable}
+        try:
+            text = docread.to_text(doc.path, PREVIEW_CHARS)
+        except Exception:  # noqa: BLE001 — книга без текста: остаются листы
+            text = ""
+        if text.strip():
+            out["текст"] = text[:PREVIEW_CHARS]
+            out["обрезано"] = len(text) >= PREVIEW_CHARS
+        return out
     try:
         text = docread.to_text(doc.path, PREVIEW_CHARS)
     except docread.Unreadable as e:
         return {"вид": "нет", "почему": str(e)}
     except Exception as e:  # noqa: BLE001
         return {"вид": "нет", "почему": str(e)[:200]}
-    return {"вид": "текст", "текст": text[:PREVIEW_CHARS],
-            "обрезано": len(text) >= PREVIEW_CHARS}
+    out = {"вид": "текст", "текст": text[:PREVIEW_CHARS],
+           "обрезано": len(text) >= PREVIEW_CHARS, "как есть": printable}
+    out["разметка"] = bool(_word_html_file(doc))
+    return out
 
 
 #: Что браузер показывает сам, не скачивая.
@@ -1163,7 +1577,7 @@ INLINE_TYPES = {
 
 
 @app.post("/api/document/{doc_id}/message")
-async def document_message(doc_id: int, background: BackgroundTasks, request: Request):
+def document_message(doc_id: int, background: BackgroundTasks, body: dict = Body(...)):
     """Разговор о документе: «тут ошибка» — прямо в карточке.
 
     Раньше неправильно разобранный документ было не исправить: реестр
@@ -1171,10 +1585,10 @@ async def document_message(doc_id: int, background: BackgroundTasks, request: Re
     документа; правка ложится в реестр, в память агента и в приговор для
     стенда; подсказанный вид — в переразбор.
     """
-    body = await request.json()
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "пустое сообщение")
+    fragment = body.get("fragment") or None
     db = session()
     try:
         doc = db.get(Document, doc_id)
@@ -1190,10 +1604,17 @@ async def document_message(doc_id: int, background: BackgroundTasks, request: Re
         if case is None:
             raise HTTPException(400, "сначала создайте план: разговор хранится при плане")
         cid = case.id
-        db.add(Message(case_id=cid, document_id=doc.id, who="экономист", text=text))
+        # В переписке — слова экономиста и выделенный им кусок; лист,
+        # строка и графа нужны агенту, а не читателю переписки, и уходят
+        # в подсказку модели.
+        shown = text
+        quote = str((fragment or {}).get("цитата") or "")[:200]
+        if quote:
+            shown = "%s\n\u25b8 «%s»" % (text, quote)
+        db.add(Message(case_id=cid, document_id=doc.id, who="экономист", text=shown))
         db.commit()
 
-        res = chat.reply_doc(db, doc, text)
+        res = chat.reply_doc(db, doc, text, fragment)
         if not res.get("ok"):
             db.add(Message(case_id=cid, document_id=doc.id, who="агент",
                            agent="intake", text="Не могу ответить: %s" % res.get("error")))
@@ -1219,7 +1640,16 @@ async def document_message(doc_id: int, background: BackgroundTasks, request: Re
         elif action == "переразобрать документ" and res.get("as_kind"):
             kind = res["as_kind"]
             owner = intake.OWNER.get(kind)
-            if case is not None:
+            # Замечание к строке — не повод менять вид документа: вопрос
+            # «почему не извлек 250 000» модель принимала за «это штатное
+            # расписание», и приказ уходил в разборщик книг, где .doc не
+            # читается вовсе. Тот же запрет, что и в общем разговоре.
+            refused = _cannot_reprocess(doc, owner)
+            if refused:
+                db.add(Message(case_id=cid, document_id=doc.id, who="агент",
+                               agent="intake", text=refused))
+                db.commit()
+            elif case is not None:
                 db.add(Correction(document_name=doc.name, document_kind=doc.kind,
                                   entity="вид документа", wrong=doc.kind, right=kind,
                                   note=text[:300], agent_version=version))
@@ -1234,6 +1664,226 @@ async def document_message(doc_id: int, background: BackgroundTasks, request: Re
                                   note=text[:300], agent_version=version))
                 db.commit()
         return {"ok": True, "action": action}
+    finally:
+        db.close()
+
+
+#: Что из строки реестра уходит в решатель: поле строки → графа входного
+#: файла. Порядок важен: по нему подписывается подсветка.
+SOLVER_FIELDS = {
+    "employees": [("code", "код строки"), ("fio", "ФИО"), ("position", "должность"),
+                  ("department", "подразделение"), ("rate", "ставка"),
+                  ("employment_type", "тип занятости"),
+                  ("employment_category", "категория занятости"),
+                  ("salary", "зарплата"), ("date_from", "дата начала"),
+                  ("date_to", "дата окончания"),
+                  ("allowed_contracts", "разрешенные договоры"),
+                  ("forbidden_contracts", "запрещенные договоры")],
+    "contracts": [("code", "код"), ("name", "название"), ("number", "номер"),
+                  ("kind", "тип договора"), ("account", "счет"), ("goz", "ГОЗ"),
+                  ("department", "подразделение"), ("priority", "Приоритет"),
+                  ("date_from", "дата начала"), ("date_to", "дата окончания"),
+                  ("fund", "фот"), ("kinds", "разрешенные выплаты"),
+                  ("allow_main", "основное место разрешено"),
+                  ("allow_part_time", "совместительство разрешено"),
+                  ("salary_deadline", "конечная дата выплат оклада"),
+                  ("allowance_deadline", "конечная дата выплат надбавок")],
+    "labor": [("contract_code", "договор"), ("position", "должность"),
+              ("person_months", "трудоемкость"), ("avg_cost", "средняя стоимость"),
+              ("headcount", "количество человек")],
+    "inflows": [("contract_code", "договор"), ("month", "месяц"), ("amount", "сумма")],
+    "secret": [("employee_code", "сотрудник"),
+               ("secret_contract_code", "договор секретности"), ("rate", "ставка 120")],
+    "substitutions": [("position", "должность"), ("replaced_by", "может быть замещена")],
+}
+
+
+def _norm_cell(v):
+    """Значение ячейки к виду, в котором его можно сравнить со строкой реестра."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return "да" if v else "нет"
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return ("%d" % f) if f == int(f) else ("%s" % round(f, 4))
+    s = str(v).strip()
+    if not s:
+        return None
+    low = s.replace(",", ".").replace(" ", "").replace("\u00a0", "")
+    try:
+        f = float(low)
+        return ("%d" % f) if f == int(f) else ("%s" % round(f, 4))
+    except ValueError:
+        pass
+    return " ".join(s.split()).lower()
+
+
+@app.get("/api/document/{doc_id}/marks")
+def document_marks(doc_id: int):
+    """Значения, которые из этого документа ушли в расчёт.
+
+    Отдаём не координаты (в книге они у каждого листа свои, а разбор идёт по
+    заголовкам), а сами значения с подписью графы входного файла: рамка
+    предпросмотра сама найдёт их в разметке листа и подсветит.
+    """
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        rows = {
+            "employees": db.query(Employee).filter_by(document_id=d.id).all(),
+            "contracts": db.query(Contract).filter_by(document_id=d.id).all(),
+            "labor": db.query(LaborRow).filter_by(document_id=d.id).all(),
+            "inflows": db.query(Inflow).filter_by(document_id=d.id).all(),
+            "secret": db.query(SecretAllowance).filter_by(document_id=d.id).all(),
+            "substitutions": db.query(Substitution).filter_by(document_id=d.id).all(),
+        }
+        marks, counts = {}, {}
+        marked_cells = []
+        for entity, items in rows.items():
+            if not items:
+                continue
+            counts[entity] = len(items)
+            for it in items:
+                details = []
+                if entity == "labor" and getattr(it, "details", None):
+                    try:
+                        details = json.loads(it.details)
+                    except (TypeError, ValueError):
+                        details = []
+                precise = any(d.get("cells") for d in details if isinstance(d, dict))
+                fields_for_values = SOLVER_FIELDS[entity]
+                if precise:
+                    # Число 1 из headcount совпадает с номером первой строки.
+                    # Для форм с адресами ячеек оставляем глобально только шифр
+                    # договора; остальные значения красим строго по координате.
+                    fields_for_values = [("contract_code", "договор")]
+                for attr, title in fields_for_values:
+                    key = _norm_cell(getattr(it, attr, None))
+                    if key is None or len(str(key)) < 1:
+                        continue
+                    marks.setdefault(str(key), title)
+                # У трудоёмкости агрегат хранит вход оптимизатора, а details —
+                # все строки формы до объединения. Маска «Извлечённые данные»
+                # должна показывать и этап, вид работ, даты и контрольную сумму.
+                if entity == "labor" and details:
+                    for detail in details:
+                        hours = detail.get("labor_unit") == "чел.-ч"
+                        fields = (("stage", "этап"), ("work_type", "вид работ"),
+                                  ("position", "должность"),
+                                  ("headcount", "количество человек"),
+                                  ("labor_per_person", "часов на человека" if hours
+                                   else "месяцев на человека"),
+                                  ("person_months", "всего человеко-часов" if hours
+                                   else "всего человеко-месяцев"),
+                                  ("avg_cost", "стоимость человеко-часа" if hours
+                                   else "стоимость человеко-месяца"),
+                                  ("total_cost", "сумма ФОТ"), ("from", "начало"),
+                                  ("to", "окончание"))
+                        for attr, title in fields:
+                            cell_id = (detail.get("cells") or {}).get(attr)
+                            if cell_id:
+                                marked_cells.append({"id": cell_id, "title": title})
+                            elif not precise:
+                                key = _norm_cell(detail.get(attr))
+                                if key is not None:
+                                    marks.setdefault(str(key), title)
+        # У нормативного документа строк реестра нет: он даёт величины
+        # справочнику должностей. Их записал разборщик — берём оттуда,
+        # иначе маска молчит там, где документ отработал.
+        if not marks and getattr(d, "gave", None):
+            try:
+                gave = json.loads(d.gave)
+            except ValueError:
+                gave = {}
+            given = gave.get("значения") or {}
+            if given:
+                marks = {str(k): v for k, v in given.items()}
+                counts["справочник должностей"] = len(marks)
+                lines = gave.get("строки") or []
+                if lines:
+                    return {"ok": True, "значения": marks, "строк": counts,
+                            "строки": lines}
+        return {"ok": True, "значения": marks, "строк": counts,
+                "ячейки": marked_cells}
+    finally:
+        db.close()
+
+
+@app.get("/api/document/{doc_id}/rich")
+def document_rich(doc_id: int):
+    """Документ Word его собственной вёрсткой — для вкладки «текстом».
+
+    Отдаём разметку, напечатанную Word: свои шрифты, отступы и таблицы. Из
+    неё убираем только скрипты — остальное и есть вид документа.
+    """
+    import re
+
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        path = _word_html_file(d)
+        if not path:
+            raise HTTPException(415, "нечем показать разметку документа")
+        with open(path, "rb") as f:
+            raw = f.read()
+        m = re.search(rb"charset=([\w-]+)", raw[:4000])
+        enc = (m.group(1).decode("ascii", "ignore") if m else "windows-1251")
+        try:
+            html = raw.decode(enc, "ignore")
+        except LookupError:
+            html = raw.decode("windows-1251", "ignore")
+        html = re.sub(r"(?is)<script[^>]*>.*?</script>", "", html)
+        # Картинки лежат в папке рядом; отдаём их своей ручкой.
+        folder = os.path.splitext(os.path.basename(path))[0] + ".files"
+        html = html.replace(folder + "/", "/api/document/%d/richfile/" % doc_id)
+        return HTMLResponse(html)
+    finally:
+        db.close()
+
+
+@app.get("/api/document/{doc_id}/richfile/{name}")
+def document_richfile(doc_id: int, name: str):
+    """Картинка из напечатанной разметки: только из своей папки."""
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(400, "недопустимое имя")
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        path = _word_html_file(d)
+        if not path:
+            raise HTTPException(404, "разметки нет")
+        folder = os.path.join(PREVIEW_DIR,
+                              os.path.splitext(os.path.basename(path))[0] + ".files")
+        full = os.path.join(folder, name)
+        if not os.path.isfile(full):
+            raise HTTPException(404, "файл не найден")
+        return FileResponse(full)
+    finally:
+        db.close()
+
+
+@app.get("/api/document/{doc_id}/asis")
+def document_asis(doc_id: int):
+    """Документ как он выглядит: PDF или напечатанный в PDF Word/книга."""
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        if not os.path.exists(d.path):
+            raise HTTPException(404, "файл не найден на диске")
+        path = _as_pdf(d)
+        if not path:
+            raise HTTPException(415, "нечем показать документ страницами")
+        return FileResponse(path, media_type="application/pdf",
+                            headers={"Content-Disposition": "inline"})
     finally:
         db.close()
 
@@ -1279,6 +1929,63 @@ def document_file(doc_id: int):
                 d.path, media_type=INLINE_TYPES[ext],
                 headers={"Content-Disposition": "inline"})
         return FileResponse(d.path, filename=d.name)
+    finally:
+        db.close()
+
+
+#: Что ONLYOFFICE считает текстом, таблицей и презентацией.
+_OO_KIND = {"word": (".doc", ".docx", ".rtf", ".odt", ".txt", ".pdf"),
+            "cell": (".xls", ".xlsx", ".xlsm", ".xltx", ".xltm", ".csv", ".ods"),
+            "slide": (".ppt", ".pptx", ".odp")}
+
+
+@app.get("/api/document/{doc_id}/oo")
+def document_onlyoffice(doc_id: int, request: Request):
+    """Настройка просмотрщика ONLYOFFICE для этого документа.
+
+    Файл забирает не браузер, а сам сервер ONLYOFFICE — по ссылке из
+    ``document.url``. Поэтому адрес нашего сервиса для него задаётся
+    отдельно (``FOT_SELF_URL``): изнутри докера «localhost» — это сам
+    контейнер, а не мы. Режим только для чтения: правку документов сервис
+    не ведёт, экономист смотрит и оставляет замечания.
+    """
+    api_url = (os.environ.get("FOT_ONLYOFFICE_URL") or "").strip()
+    if not api_url:
+        raise HTTPException(404, "ONLYOFFICE не настроен")
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        ext = os.path.splitext(d.path)[1].lower()
+        kind = next((k for k, exts in _OO_KIND.items() if ext in exts), None)
+        if kind is None:
+            raise HTTPException(415, "этот формат ONLYOFFICE не показывает")
+        base = (os.environ.get("FOT_SELF_URL") or "").strip().rstrip("/")
+        if not base:
+            base = str(request.base_url).rstrip("/")
+        # Ключ версии: пока файл тот же, сервер отдаёт документ из кэша.
+        key = (d.sha256 or "")[:20] or ("doc%d-%s" % (d.id, d.uploaded))
+        return {"apiUrl": api_url,
+                "documentType": kind,
+                "type": "desktop", "width": "100%", "height": "100%",
+                "document": {"fileType": ext.lstrip("."), "key": key,
+                             "title": d.name,
+                             "url": "%s/api/document/%d/file" % (base, d.id),
+                             "permissions": {"edit": False, "download": True,
+                                             "print": True, "comment": False,
+                                             "review": False}},
+                # Без имени пользователя просмотрщик спрашивает его сам —
+                # окно поверх документа при каждом открытии.
+                "editorConfig": {"mode": "view", "lang": "ru",
+                                 "user": {"id": "fot", "name": "Экономист"},
+                                 "customization": {"compactToolbar": True,
+                                                   "autosave": False, "chat": False,
+                                                   "comments": False,
+                                                   "feedback": False,
+                                                   "forcesave": False,
+                                                   "help": False,
+                                                   "zoom": 100}}}
     finally:
         db.close()
 
@@ -1364,6 +2071,17 @@ def _forget_document(db, doc):
     # файла, которого больше нет, не по чему. ON DELETE CASCADE в схеме есть,
     # но SQLite не применяет внешние ключи без PRAGMA foreign_keys.
     db.query(Proposal).filter_by(document_id=doc.id).delete()
+    # Величины справочника (оклад, П2556, П4, БЭП) живут в самом справочнике,
+    # а не в этой записи: по ним уже посчитаны планы, поэтому вместе с
+    # документом они не стираются. Но основание пропадает, и реестр должен
+    # это показать, а не ссылаться на удалённый файл.
+    try:
+        lost = reference.forget_source(doc.id)
+    except Exception:  # noqa: BLE001 — справочник может быть занят
+        lost = []
+    if lost:
+        gone["величин без основания"] = len(lost)
+        gone["_величины"] = ", ".join(lost)
     path = doc.path
     db.delete(doc)
     db.commit()
@@ -1391,7 +2109,11 @@ def delete_document(doc_id: int):
         name, case_id = doc.name, doc.case_id
         gone = _forget_document(db, doc)
         if case_id:
-            lost = ", ".join("%s %d" % (k, v) for k, v in gone.items() if v)
+            names = gone.pop("_величины", "")
+            lost = ", ".join("%s %d" % (k, v) for k, v in gone.items()
+                             if v and not str(k).startswith("_"))
+            if names:
+                lost += " (%s — теперь без основания, величины остались)" % names
             agents.say(db, case_id,
                        "Удален документ «%s»%s." % (name, ", с ним " + lost if lost else ""),
                        who="экономист")
@@ -1401,9 +2123,28 @@ def delete_document(doc_id: int):
 
 
 # ── лента и вопросы ─────────────────────────────────────────────
+def _running_run(db, case_id):
+    """Идущий прогон этого плана, если он есть.
+
+    Второй расчет того же плана не нужен никому: HiGHS занимает машину, и
+    оба прогона идут вдвое дольше. Случай не выдуманный — агент в ленте
+    предложил «пересчитать» во время расчета, и на восьми людях считались
+    сразу два плана.
+    """
+    return (db.query(Run).filter_by(case_id=case_id, status="идет")
+            .order_by(Run.id.desc()).first())
+
+
 @app.post("/api/case/{case_id}/message")
-async def post_message(case_id: int, background: BackgroundTasks, request: Request):
-    body = await request.json()
+def post_message(case_id: int, background: BackgroundTasks, body: dict = Body(...)):
+    """Реплика экономиста: пишем ее в ленту и отвечаем моделью.
+
+    Обработчик намеренно обычный (не async): модель отвечает секунды, а
+    запрос к ней блокирующий. В корутине он останавливал весь событийный
+    цикл — опрос ленты не отвечал, и реплика экономиста вместе с отметкой
+    «агент работает» появлялась на экране только вместе с ответом. Обычный
+    обработчик FastAPI выполняет в отдельном потоке, и лента живет.
+    """
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "пустое сообщение")
@@ -1461,6 +2202,13 @@ async def post_message(case_id: int, background: BackgroundTasks, request: Reque
             last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
                     .order_by(Run.id.desc()).first())
             if last is None:
+                db.commit()
+                return {"ok": True, "action": "закреплено"}
+            busy = _running_run(db, case_id)
+            if busy is not None:
+                agents.say(db, case_id,
+                           "Условие записано. Пересчитаю после расчета № %d — "
+                           "он сейчас идет." % busy.id, agent="tuning")
                 db.commit()
                 return {"ok": True, "action": "закреплено"}
             base = json.loads(last.settings) if last and last.settings else {}
@@ -1550,6 +2298,14 @@ async def post_message(case_id: int, background: BackgroundTasks, request: Reque
             return {"ok": True, "action": "расчет", "run_id": run.id}
 
         if action == "запустить расчет":
+            busy = _running_run(db, case_id)
+            if busy is not None:
+                agents.say(db, case_id,
+                           "Расчет № %d уже идет — дождитесь его, второй "
+                           "расчет того же плана только замедлит первый."
+                           % busy.id, agent="intake")
+                db.commit()
+                return {"ok": True, "action": "ничего"}
             if not case.passport:
                 agents.say(db, case_id,
                            "Считать пока не на чем: в деле нет ни сотрудников, "
@@ -1693,8 +2449,10 @@ def case_data(case_id: int):
             "labor": [{"contract": r.contract_code, "year": r.year,
                        "position": r.position, "page": r.salary_page,
                        "group": r.salary_group, "level": r.position_level,
-                       "person_months": r.person_months, "avg_cost": r.avg_cost,
-                       "headcount": r.headcount, "source": r.source}
+                        "person_months": r.person_months, "avg_cost": r.avg_cost,
+                        "headcount": r.headcount, "source": r.source,
+                        "months": json.loads(r.months) if r.months else None,
+                        "details": json.loads(r.details) if r.details else None}
                       for r in db.query(LaborRow).order_by(LaborRow.id).all()],
             "inflows": [{"contract": r.contract_code, "year": r.year,
                          "month": r.month, "amount": r.amount,
@@ -1711,6 +2469,8 @@ def case_data(case_id: int):
                                "source": s.source} for s in
                               db.query(Substitution).order_by(Substitution.id).all()],
             "reference": reference.read_rows(),
+            # Откуда каждая величина справочника: документ, дата, основание.
+            "reference_sources": reference.read_sources(),
         }
     finally:
         db.close()
@@ -1839,6 +2599,94 @@ async def post_reference(request: Request):
         finally:
             db.close()
     return {"ok": True, "applied": applied}
+
+
+@app.post("/api/document/{doc_id}/reference")
+async def document_reference(doc_id: int, request: Request):
+    """Записать в справочник расхождения, найденные этим документом.
+
+    Та же запись, что из чата дела, но из карточки документа: после неё в
+    карточке остаются только незаписанные строки, а дело получает пересчёт.
+    """
+    body = await request.json()
+    edits = body.get("edits") or []
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        applied = reference.apply(edits)
+        gave = {}
+        try:
+            gave = json.loads(d.gave) if d.gave else {}
+        except ValueError:
+            gave = {}
+        # Величина записана из этого документа — он и есть её источник.
+        for field in sorted({a["field"] for a in applied}):
+            reference.set_source(field, d.name, d.id, _dt(d.uploaded),
+                                 gave.get("основание"), gave.get("действует с"))
+        done = {(a["pos"], a["field"]) for a in applied}
+        # Строка без изменения — тоже записана: справочник уже такой.
+        asked = {(e.get("pos"), e.get("field")) for e in edits}
+        rest = [c for c in gave.get("расхождения") or []
+                if (c.get("pos"), c.get("field")) not in done
+                and (c.get("pos"), c.get("field")) not in asked]
+        gave["расхождения"] = rest
+        gave["расхождений"] = len(rest)
+        d.gave = json.dumps(gave, ensure_ascii=False)
+        d.summary = "расхождений %d" % len(rest)
+        if d.case_id:
+            agents.say(db, d.case_id,
+                       "Записал в справочник %d %s из «%s»."
+                       % (len(applied), intake._plural(len(applied), "значение",
+                                                       "значения", "значений"), d.name),
+                       agent="norms", document_id=d.id,
+                       payload={"kind": "reference_applied", "applied": applied})
+            if applied:
+                agents.handoff(db, d.case_id, "norms", "solver",
+                               "Справочник изменен — прежний план посчитан по "
+                               "старым величинам, нужен пересчет.")
+        db.commit()
+        return {"ok": True, "applied": applied, "осталось": rest}
+    finally:
+        db.close()
+
+
+@app.post("/api/document/{doc_id}/source")
+async def document_source(doc_id: int, request: Request):
+    """Назвать документ источником величин справочника: {"fields": ["П4"]}.
+
+    Скан без текстового слоя или письмо с нечитаемым слоем агент прочитать
+    не может, а предел из него в справочнике стоит — внесён рукой. Связь
+    «величина ← документ» экономист ставит сам; она уходит в основание
+    каждого расчёта.
+    """
+    body = await request.json()
+    fields = [str(f).strip() for f in (body.get("fields") or []) if str(f).strip()]
+    db = session()
+    try:
+        d = db.get(Document, doc_id)
+        if d is None:
+            raise HTTPException(404, "документ не найден")
+        gave = {}
+        try:
+            gave = json.loads(d.gave) if d.gave else {}
+        except ValueError:
+            gave = {}
+        done = [f for f in fields
+                if reference.set_source(f, d.name, d.id, _dt(d.uploaded),
+                                        gave.get("основание"), gave.get("действует с"))]
+        if done:
+            gave["источник для"] = sorted(set((gave.get("источник для") or []) + done))
+            d.gave = json.dumps(gave, ensure_ascii=False)
+            case_id = d.case_id or (db.query(Case).order_by(Case.updated.desc()).first() or Case(id=None)).id
+            if case_id:
+                agents.say(db, case_id, "«%s» назван источником величин справочника: %s."
+                           % (d.name, ", ".join(done)), who="экономист", document_id=d.id)
+            db.commit()
+        return {"ok": True, "fields": done, "sources": reference.read_sources()}
+    finally:
+        db.close()
 
 
 # ── расчет ──────────────────────────────────────────────────────
@@ -2232,7 +3080,8 @@ def _run_sources(db):
     return {"документы": docs,
             "агенты": {a: agents.version_of(a) for a in ("intake", "norms", "solver")},
             "справочник": {"файл": os.path.basename(reference.TEMPLATE),
-                           "должностей": len(reference.read_rows())}}
+                           "должностей": len(reference.read_rows()),
+                           "источники": reference.read_sources()}}
 
 
 def _write_sources_sheet(path, sources):
@@ -2264,7 +3113,11 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         case = db.get(Case, case_id)
         run = db.get(Run, run_id)
         with agents.working(db, case_id, "intake", "собирает входной файл для расчета") as w:
-            src = os.path.join(RESULT_DIR, "case%d_input.xlsx" % case_id)
+            # Вход — часть версии расчёта. Общее имя дела перезаписывалось
+            # при следующем запуске, и старый результат начинал сравниваться
+            # с новым составом сотрудников и ограничений.
+            src = os.path.join(RESULT_DIR, "case%d_run%d_input.xlsx" %
+                               (case_id, run_id))
             warn = []
             data = _registry_data(db, case)
             if settings:
@@ -2293,8 +3146,13 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         out = os.path.join(RESULT_DIR, "case%d_run%d.xlsx" % (case_id, run_id))
         with agents.working(db, case_id, "solver", "ищет план") as w:
             t0 = time.time()
-            p = subprocess.run([EXE, "solve", "-i", src, "-o", out],
-                               capture_output=True, text=True, timeout=1800, cwd=ROOT)
+            # Лимит — на стадию целей, а их девять. По умолчанию 120 с:
+            # на демо-наборе стадия «отклонение от П2556» в него не
+            # укладывалась, и оклад с надбавкой не доходили до предела.
+            limit = os.environ.get("FOT_SOLVE_TIME_LIMIT", "240")
+            p = subprocess.run([EXE, "solve", "-i", src, "-o", out,
+                                "--time-limit", str(limit)],
+                               capture_output=True, text=True, timeout=3600, cwd=ROOT)
             sec = round(time.time() - t0, 1)
             w["detail"] = "%s c" % sec
             db.commit()
@@ -2304,6 +3162,18 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         for line in (p.stdout or "").splitlines():
             if line.startswith("Статус:"):
                 solver_status = line.split(":", 1)[1].strip()
+        if p.returncode != 0 and not solver_status and not (p.stdout or "").strip():
+            # Решатель не сказал ничего: его сняли (перезапуск сервера, снятие
+            # процесса). Это не «решения нет» — разбор причин неразрешимости
+            # здесь только займёт машину экспериментами на полчаса.
+            run.status = "прерван"
+            case.stage = "прерван"
+            run.summary = json.dumps({"error": (p.stderr or "")[-800:]}, ensure_ascii=False)
+            db.commit()
+            agents.say(db, case_id, "Расчет прерван — решатель был остановлен. "
+                       "Запустите расчет заново.", agent="solver")
+            db.commit()
+            return
         if p.returncode != 0 and solver_status in ("NOT_SOLVED", "TIME_LIMIT", "UNKNOWN", "ошибка"):
             # Решатель не ответил в отведённое время — это не «решения нет»,
             # а «не успел»: разбор причин неразрешимости тут ни к чему.
@@ -2404,6 +3274,9 @@ async def solve(case_id: int, background: BackgroundTasks, request: Request):
             last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
                     .order_by(Run.id.desc()).first())
             settings = json.loads(last.settings) if last and last.settings else {}
+        busy = _running_run(db, case_id)
+        if busy is not None:
+            return {"ok": True, "run_id": busy.id, "идет": True}
         run = Run(case_id=case_id, settings=json.dumps(settings, ensure_ascii=False))
         db.add(run)
         db.commit()
@@ -2414,16 +3287,76 @@ async def solve(case_id: int, background: BackgroundTasks, request: Request):
         db.close()
 
 
+@app.delete("/api/case/{case_id}/run/{run_id}")
+def delete_run(case_id: int, run_id: int):
+    """Удалить версию расчёта: запись прогона и его файлы.
+
+    Версии копятся: каждый пересчёт после правки данных или фразы в чате —
+    ещё одна. Экономисту нужно уметь убрать неудачную, иначе список версий
+    превращается в свалку, а на показе непонятно, какую открывать. Данные
+    реестра при этом не трогаются: прогон — это только результат счёта.
+    """
+    db = session()
+    try:
+        run = db.get(Run, run_id)
+        if run is None or run.case_id != case_id:
+            raise HTTPException(404, "прогон не найден")
+        case = db.get(Case, case_id)
+        for path in (run.input_path, run.result_path,
+                     os.path.join(RESULT_DIR, "case%d_run%d.json" % (case_id, run_id)),
+                     os.path.join(RESULT_DIR, "case%d_run%d_report.xlsx" % (case_id, run_id))):
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+        db.delete(run)
+        db.commit()
+        # Последняя удачная версия ушла — план снова «готов к расчету»,
+        # иначе он числится посчитанным, а показывать нечего.
+        left = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
+                .order_by(Run.id.desc()).first())
+        if case is not None and left is None and case.stage == "посчитано":
+            case.stage = "готово к расчету"
+        agents.say(db, case_id, "Удалена версия расчета № %d." % run_id, who="экономист")
+        db.commit()
+        return {"ok": True, "run_id": run_id,
+                "осталось": db.query(Run).filter_by(case_id=case_id).count()}
+    finally:
+        db.close()
+
+
 @app.get("/api/case/{case_id}/result/{run_id}")
 def download_result(case_id: int, run_id: int):
+    """Скачать план: разделы отчёта листами (как на экране) плюс листы решателя.
+
+    Раньше отдавался файл решателя, и в нём не было половины таблиц вкладки
+    «План ФОТ». Книга собирается при первом скачивании и хранится рядом с
+    результатом; пересобирается, если результат изменился.
+    """
     db = session()
     try:
         run = db.get(Run, run_id)
         if run is None or run.case_id != case_id or not run.result_path:
             raise HTTPException(404, "результат не найден")
-        return FileResponse(run.result_path, filename="план_ФОТ_%d.xlsx" % run_id)
+        src, out = run.input_path, run.result_path
+        summary = json.loads(run.summary) if run.summary else {}
+        versions = [{"номер": r.id, "статус": r.status, "секунд": r.seconds, "дата": _dt(r.created)}
+                    for r in db.query(Run).filter_by(case_id=case_id).order_by(Run.id).all()]
     finally:
         db.close()
+    if not (src and os.path.exists(src) and os.path.exists(out)):
+        return FileResponse(out, filename="план_ФОТ_%d.xlsx" % run_id)
+    book = os.path.join(RESULT_DIR, "case%d_run%d_report.xlsx" % (case_id, run_id))
+    if not os.path.exists(book) or os.path.getmtime(book) < os.path.getmtime(out):
+        import export_report
+        try:
+            export_report.build(src, out, book, goals=summary.get("цели"), versions=versions)
+        except Exception as exc:  # noqa: BLE001 — без отчёта остаётся файл решателя
+            agents_log = "выгрузка отчёта не собралась: %s" % exc
+            print(agents_log)
+            return FileResponse(out, filename="план_ФОТ_%d.xlsx" % run_id)
+    return FileResponse(book, filename="план_ФОТ_%d.xlsx" % run_id)
 
 
 @app.get("/api/health")
