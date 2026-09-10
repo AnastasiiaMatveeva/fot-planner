@@ -270,6 +270,27 @@ class GoalMetric:
 
 
 @dataclass
+class AuditViolation:
+    """Нарушение правила в готовом плане, найденное проверкой результата.
+
+    Решатель говорит, нашлось ли решение его модели; аудит говорит, годится ли
+    это решение по правилам организации. Это разные вопросы: ошибка в модели
+    даёт план со статусом OPTIMAL и дробной ставкой, и статус решателя об этом
+    молчит. Поэтому нарушение — запись с номером правила, чтобы от него можно
+    было дойти до строки свода и до случая стенда.
+    """
+
+    rule_id: str          # RATE-001 — номер правила в docs/ПРАВИЛА_РЕШАТЕЛЯ.md
+    severity: str         # error — план не годится; warning — требует внимания
+    message: str          # человеку: кто, когда, что не так
+    employee_id: str | None = None
+    contract_id: str | None = None
+    month: int | None = None
+    actual: float | str | None = None
+    expected: str | None = None
+
+
+@dataclass
 class SalaryStabilityRules:
     """Ограничения и допуски по окладу (salary)."""
 
@@ -394,3 +415,7 @@ class PlanningResult:
     open_rate_attributions: list[OpenRateAttribution] = field(default_factory=list)
     # Цели решателя с их значениями в готовом плане — лист «цели» в выгрузке.
     goals: list[GoalMetric] = field(default_factory=list)
+    # Проверка результата по правилам организации, отдельно от статуса
+    # решателя: «решение модели найдено» и «план годится» — разные вопросы.
+    audit_status: str = "NOT_RUN"  # OK | FAIL | NOT_RUN
+    audit_violations: list[AuditViolation] = field(default_factory=list)

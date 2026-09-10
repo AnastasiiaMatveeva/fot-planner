@@ -45,9 +45,19 @@ def main(argv: list[str] | None = None) -> int:
             time_limit_sec=args.time_limit,
         )
         print(f"Статус: {result.solver_status}")
+        # Статус решателя говорит о его модели, аудит — о правилах
+        # организации. Тот, кто читает вывод (в том числе сервис), должен
+        # видеть оба: план бывает OPTIMAL и негодным одновременно.
+        print(f"Аудит: {result.audit_status}")
+        for v in result.audit_violations[:20]:
+            print(f"  [{v.rule_id}] {v.message}")
         print(f"Назначений: {len(result.allocations)}, дефицитов: {len(result.deficits)}")
         print(f"Целевая функция: {result.objective_value:.2f}, время: {result.solve_time_sec} с")
         print(f"Результат: {Path(args.output).resolve()}")
+        if result.audit_status == "FAIL":
+            # План записан: экономисту нужно видеть, что именно вышло не так.
+            # Но готовым он не считается, и код возврата об этом говорит.
+            return 3
         if result.conflicts:
             print("Конфликты/ошибки:")
             for c in result.conflicts[:10]:

@@ -34,6 +34,7 @@ from fot_planner.payment_split import (
     salary_position_options,
 )
 from fot_planner.payment_kind import LABOR_PAYMENT_KINDS
+from fot_planner.result_audit import audit as audit_result
 from fot_planner.models import (
     ADMIN_COMPLEXITY_FRAGMENT_FACTOR,
     ADMIN_COMPLEXITY_SCHEME_CHANGE_FACTOR,
@@ -2264,7 +2265,7 @@ def solve(
         status_name = "FEASIBLE"
     objective_value = last_objective_value if status_name in ("OPTIMAL", "FEASIBLE") else 0.0
     goals = _goal_metrics(stage_values, taste) if status_name in ("OPTIMAL", "FEASIBLE") else []
-    return PlanningResult(
+    result = PlanningResult(
         year=year,
         allocations=allocations,
         deficits=deficits,
@@ -2279,6 +2280,14 @@ def solve(
         open_rate_attributions=open_rate_attributions,
         goals=goals,
     )
+    # Решатель отвечает за свою модель, аудит — за правила организации. План
+    # со статусом OPTIMAL и дробной ставкой возможен, если условие записано
+    # неверно; статус решателя об этом молчит, поэтому проверка отдельная.
+    if status_name in ("OPTIMAL", "FEASIBLE"):
+        report = audit_result(ctx, result)
+        result.audit_status = report.status
+        result.audit_violations = report.violations
+    return result
 
 
 def _compute_balances(

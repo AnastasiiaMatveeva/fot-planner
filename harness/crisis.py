@@ -192,6 +192,12 @@ class Plan:
 # ── инварианты: обязаны выполняться в любом удачном плане ────────────────
 def invariants(p: Plan):
     out = []
+    # Шаг ставки и прочее, что умеет проверка результата, стенд не повторяет:
+    # он требует, чтобы её поймал сам сервис. Правило, живущее только в
+    # стенде, в работе не работает.
+    if p.res.audit_status == "FAIL":
+        out += ["проверка результата, %s: %s" % (v.rule_id, v.message)
+                for v in p.res.audit_violations]
     ctx = p.ctx
     months = range(1, 13)
     active = lambda e, m: opt.employee_active_in_month(e, YEAR, m)  # noqa: E731
@@ -206,9 +212,6 @@ def invariants(p: Plan):
             rates = [(c, v, main) for (ee, c, mm), (v, main) in p.rate.items() if ee == e.id and mm == m]
             mains = [c for c, v, main in rates if main]
             if rates:
-                for c, v, _ in rates:
-                    if abs(v / 0.25 - round(v / 0.25)) > 1e-6:
-                        out.append(f"шаг ставки {e.id} {c} м{m}: {v}")
                 # Основное — одно на человека, а не на строку: у второй
                 # строки (совместительство) основного быть не должно.
                 person = " ".join(str(e.full_name or "").lower().split()) or e.id

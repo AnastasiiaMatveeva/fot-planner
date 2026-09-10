@@ -3159,9 +3159,14 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
 
         run.seconds = sec
         solver_status = ""
+        audit_status, audit_lines = "", []
         for line in (p.stdout or "").splitlines():
             if line.startswith("Статус:"):
                 solver_status = line.split(":", 1)[1].strip()
+            elif line.startswith("Аудит:"):
+                audit_status = line.split(":", 1)[1].strip()
+            elif audit_status and line.startswith("  ["):
+                audit_lines.append(line.strip())
         if p.returncode != 0 and not solver_status and not (p.stdout or "").strip():
             # Решатель не сказал ничего: его сняли (перезапуск сервера, снятие
             # процесса). Это не «решения нет» — разбор причин неразрешимости
@@ -3184,6 +3189,21 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
             agents.say(db, case_id, "Расчет не уложился в отведенное время (сервер был занят "
                        "другими расчетами). Запустите еще раз, когда предыдущие расчеты "
                        "завершатся.", agent="solver")
+            db.commit()
+            return
+        if audit_status == "FAIL":
+            # Решатель свою модель решил, но план не проходит правила
+            # организации. Готовым его показывать нельзя: экономист увидит
+            # числа, которых кадровик не оформит.
+            run.status = "не прошёл проверку"
+            case.stage = "не прошёл проверку"
+            run.summary = json.dumps({"аудит": audit_lines}, ensure_ascii=False)
+            db.commit()
+            agents.say(db, case_id, "\n".join(
+                ["План посчитан, но не прошёл проверку результата:"]
+                + audit_lines[:10]
+                + ["Это ошибка расчёта, а не данных: такие числа в приказ не "
+                   "попадут. План не считается готовым."]), agent="solver")
             db.commit()
             return
         if p.returncode != 0:
