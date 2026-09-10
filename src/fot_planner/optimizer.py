@@ -94,6 +94,30 @@ DEFICIT_TOTAL_TOLERANCE = 1.0
 LABOR_CLOSE_TIEBREAK = 1.0
 LEX_STAGE_TOLERANCE = 1.0   # рубль: стадии считаются в рублях и усл. ед., а нулевую стадию с допуском 0,01 MIP не удерживал
 MIP_REL_GAP = 0.005
+MIN_CONTRACT_REMAINDER = 1000.0
+
+
+def _add_contract_remainder_rules(model, contracts, alloc):
+    """Итоговый остаток ФОТ: ноль либо минимум 1000 рублей (не касса месяца)."""
+    model.has_contract_remainder = pyo.Var(list(contracts), domain=pyo.Binary)
+    for cid, contract in contracts.items():
+        spent = _sum_terms(alloc[k] for k in alloc if k[1] == cid)
+        remaining = contract.total_fot - spent
+        flag = model.has_contract_remainder[cid]
+        model.cons.add(remaining >= MIN_CONTRACT_REMAINDER * flag)
+        model.cons.add(remaining <= max(0.0, contract.total_fot) * flag)
+    return _sum_terms(model.has_contract_remainder.values())
+
+
+def _invalid_rounded_remainders(contracts, allocations):
+    """Проверка фактически выдаваемых сумм в целых копейках."""
+    paid = defaultdict(int)
+    for row in allocations:
+        paid[row.contract_id] += round(row.amount * 100)
+    return [(c.id, (round(c.total_fot * 100) - paid[c.id]) / 100)
+            for c in contracts
+            if (round(c.total_fot * 100) - paid[c.id]) != 0
+            and (round(c.total_fot * 100) - paid[c.id]) < round(MIN_CONTRACT_REMAINDER * 100)]
 
 
 def _month_inflow(ctx: PlanningContext, contract_id: str, month: int) -> float:
@@ -537,7 +561,8 @@ def _goal_metrics(stage_values: dict[str, float], taste: list[dict]) -> list:
     for no, (label, value) in enumerate(stage_values.items(), start=1):
         goals.append(GoalMetric(
             code="stage%d" % no, name=label, value=round(value, 2),
-            unit="₽" if label in rubles else "усл. ед.", priority="стадия %d" % no,
+            unit="договоров" if label == "число договоров с остатком ФОТ" else
+                 "₽" if label in rubles else "усл. ед.", priority="стадия %d" % no,
         ))
     for t in taste:
         if t["raw"] is None:
@@ -1560,6 +1585,8 @@ def solve(
             if m < 12:
                 model.cons.add(model.carry[(c_id, m)] == model.close[(c_id, m)])
 
+    remainder_count = _add_contract_remainder_rules(model, contracts, alloc)
+
     for c_id in contract_list:
         c = contracts[c_id]
         if not c.position_rules:
@@ -1986,6 +2013,20 @@ def solve(
         if status_name not in ("OPTIMAL", "FEASIBLE"):
             return _solver_failed(stage_label)
 
+    remainder_minimum_proven = True
+    if contract_list:
+        remainder_label = "число договоров с остатком ФОТ"
+        status_name, elapsed, stage_obj = _run_minimize_stage(
+            model, remainder_count, per_stage_limit,
+            tolerance=0.0, label=remainder_label, integer_objective=True,
+        )
+        solve_time += elapsed
+        if status_name not in ("OPTIMAL", "FEASIBLE"):
+            return _solver_failed(remainder_label)
+        remainder_minimum_proven = status_name == "OPTIMAL"
+        stage_values[remainder_label] = stage_obj
+        last_objective_value = stage_obj
+
     # Одна взвешенная стадия для «вкусовых» целей — того, на что финансист
     # даёт претензии. Каждое слагаемое нормировано на свой масштаб, поэтому
     # веса — чистые приоритеты: значимо только их отношение друг к другу.
@@ -2187,6 +2228,20 @@ def solve(
                 )
             )
 
+    invalid_remainders = _invalid_rounded_remainders(ctx.contracts, allocations)
+    if invalid_remainders:
+        return PlanningResult(
+            year=year, allocations=[], deficits=[], contract_balances=[],
+            conflicts=[ConflictRecord(
+                code="CONTRACT_REMAINDER_INVALID",
+                message=(f"Договор {cid}: остаток ФОТ после округления выплат {amount:.2f} ₽. "
+                         "Допустим только ноль либо не менее 1000 ₽; результат не принят."),
+            ) for cid, amount in invalid_remainders],
+            solver_status="VALIDATION_FAILED", objective_value=0.0,
+            solve_time_sec=round(time.perf_counter() - t0, 3),
+            payroll_limit_mode=payroll_limit_mode,
+        )
+
     balances = _compute_balances(
         ctx,
         allocations,
@@ -2205,6 +2260,8 @@ def solve(
             )
         )
 
+    if status_name == "OPTIMAL" and not remainder_minimum_proven:
+        status_name = "FEASIBLE"
     objective_value = last_objective_value if status_name in ("OPTIMAL", "FEASIBLE") else 0.0
     goals = _goal_metrics(stage_values, taste) if status_name in ("OPTIMAL", "FEASIBLE") else []
     return PlanningResult(
