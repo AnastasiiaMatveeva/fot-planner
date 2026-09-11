@@ -29,29 +29,41 @@
 * «сквозной» — `scripts/demo_offline.py`: демо-набор считается целиком, без
   сервиса и модели, и проверяется, что план сходится.
 
-Случай из `harness/known_red.txt` остаётся красным в выводе, но вердикт не
-портит: причина у него разобрана и ждёт человека. Рядом печатается, сколько
-дней он там лежит, — чтобы список разбирали, а не копили.
-
-Код возврата 1, если хоть одна часть не прошла по новой причине.
+Известный провал остаётся failed. Разработческий режим может дать
+baseline_compatible; --strict отклоняет и известные провалы.
+--report PATH сохраняет JSON без содержимого документов и вывода стендов.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
+import platform
 import subprocess
 import sys
+import tempfile
 import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import parts as P  # noqa: E402
+import check_results as R  # noqa: E402
 
 ROOT = P.ROOT
 
 
-def run(title, args, known):
-    """Прогнать часть обвязки. Возвращает (заголовок, ок, секунды, хвост)."""
-    t0 = time.time()
+def run(title, args, known, *, strict=False):
+    """Прогнать часть и сохранить измеренные факты отдельно от вердикта."""
+    t0 = time.monotonic()
+    started = datetime.now(timezone.utc).isoformat()
+    command = P.command(args)
+    # Это hash только точки входа, не версии всех транзитивных зависимостей.
+    entry = Path(ROOT) / args[0]
+    entry_hash = (hashlib.sha256(entry.read_bytes()).hexdigest()
+                  if entry.suffix in {".py", ".cjs", ".js"} and entry.is_file() else None)
     e = dict(os.environ)
     # Скрипты импортируют app/main.py; без этого импорт помечает живой расчёт
     # сервера «прерванным».
@@ -59,27 +71,39 @@ def run(title, args, known):
     e["PYTHONIOENCODING"] = "utf-8"
     print("── %s ─────────────────────────────" % title, flush=True)
     try:
-        p = subprocess.run(P.command(args), cwd=ROOT, env=e, text=True,
+        p = subprocess.run(command, cwd=ROOT, env=e, text=True,
                            encoding="utf-8", errors="replace",
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except OSError as exc:
         # Нет исполнителя (например, Node): часть не проверена. Это провал, а
         # не пропуск — иначе приёмка молча позеленеет без проверки.
         print("не запустилось: %s" % exc, flush=True)
-        return title, False, time.time() - t0, "не запустилось: %s не найден" % args[0]
-    out = p.stdout or ""
+        returncode, out = None, ""
+    else:
+        returncode, out = p.returncode, p.stdout or ""
     print(out.rstrip(), flush=True)
-    tail = [l for l in out.splitlines() if l.startswith("итого")] or \
-           [l for l in out.splitlines() if l.strip()][-1:]
-    bad = P.failed_cases(out)
-    fresh = [b for b in bad if b not in known]
-    # Часть считается прошедшей, если всё красное в ней — разобранное и
-    # записанное. Стенд, упавший целиком, случаев не печатает: тогда верим
-    # коду возврата.
-    ok = (p.returncode == 0) or (bool(bad) and not fresh)
-    note = "" if not bad or fresh else "; известных %d (%s)" % (
-        len(bad), ", ".join(bad))
-    return title, ok, time.time() - t0, (tail[-1] if tail else "") + note
+    return {**R.assess(args, returncode, out, known, strict=strict),
+            "title": title, "command": command, "started_at": started,
+            "duration_seconds": round(time.monotonic() - t0, 4),
+            "returncode": returncode, "entrypoint_sha256": entry_hash,
+            "stdout_sha256": hashlib.sha256(out.encode("utf-8")).hexdigest()}
+
+
+def write_report(path, report):
+    """Старый отчёт не должен заменяться наполовину записанным JSON."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
+                                         prefix=".check-", suffix=".tmp", delete=False) as file:
+            temp = Path(file.name)
+            json.dump(report, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+        os.replace(temp, target)
+    finally:
+        if temp is not None and temp.exists():
+            temp.unlink()
 
 
 def main():
@@ -92,6 +116,8 @@ def main():
                     help="добавить сквозной счёт демо-набора (минуты)")
     ap.add_argument("--only", default="", help="часть имени документа для стенда разбора")
     ap.add_argument("--limit", type=int, default=240, help="лимит решателя на стадию, с")
+    ap.add_argument("--strict", action="store_true", help="известные провалы тоже блокируют приёмку")
+    ap.add_argument("--report", help="путь к JSON-отчёту текущего запуска")
     args = ap.parse_args()
 
     parts = [(t, list(a)) for t, a, _ in P.PARTS]
@@ -112,8 +138,8 @@ def main():
                       "Перед коммитом — scripts/check.py\n", flush=True)
             if not parts:
                 print("изменений в проверяемых местах нет")
-                return 0
-    elif args.quick:
+    # Даже при недоступном git --quick не должен неожиданно вызвать модель.
+    if args.quick or (args.changed and not args.full):
         parts = [(t, a) for t, a in parts if t != "разбор документов"]
     if args.only:
         parts = [(t, a + ["--only", args.only] if t == "разбор документов" else a)
@@ -126,18 +152,33 @@ def main():
                        "--out", out]))
 
     known = P.known_red()
-    rows = [run(t, a, known) for t, a in parts]
+    rows = [run(t, a, known, strict=args.strict) for t, a in parts]
     print("\n══ приёмка ══")
-    for title, ok, sec, tail in rows:
-        print("  %-28s %-9s %5.0f с  %s" % (title, "прошло" if ok else "НЕ ПРОШЛО", sec, tail))
+    for row in rows:
+        print("  %-28s %-20s %5.0f с  %s" % (
+            row["title"], row["acceptance_status"], row["duration_seconds"], row["reason"]))
     red = P.known_red_report()
     if red:
         print("\nкрасное по разобранной причине, ждёт человека:")
         print("\n".join(red))
-    bad = [r for r in rows if not r[1]]
-    print("\n%s" % ("всё прошло" if not bad else
-                    "не прошло: " + ", ".join(r[0] for r in bad)))
-    return 1 if bad else 0
+    status = R.overall(rows)
+    exit_code = 0 if status == "passed" or (not args.strict and (
+        status == "baseline_compatible" or not rows)) else 1
+    print("\nитог: %s" % status)
+    if args.report:
+        report = {"schema_version": 1, "run_id": str(uuid.uuid4()),
+                  "created_at": datetime.now(timezone.utc).isoformat(),
+                  "mode": "strict" if args.strict else "developer",
+                  "selection": {key: getattr(args, key) for key in ("quick", "changed", "full", "only", "limit")},
+                  "environment": {"python": platform.python_version(), "platform": platform.platform()},
+                  "scope": "selected existing suites; not full capability qualification",
+                  "acceptance_status": status, "exit_code": exit_code, "suites": rows}
+        try:
+            write_report(args.report, report)
+        except OSError as exc:
+            print("Не удалось сохранить отчёт: %s" % exc, file=sys.stderr)
+            return 1
+    return exit_code
 
 
 if __name__ == "__main__":

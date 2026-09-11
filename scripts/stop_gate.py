@@ -28,6 +28,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import parts as P  # noqa: E402
+import check_results as R  # noqa: E402
 
 STATE = os.path.join(P.ROOT, "outputs", "stop_gate.json")
 PAUSE = 600  # секунд между прогонами
@@ -42,8 +43,8 @@ def _say(text):
     sys.stderr.flush()
 
 
-def run(args):
-    """Прогнать часть стенда. Возвращает (номера упавших случаев, строка итога)."""
+def run(args, known):
+    """Тот же разработческий вердикт, что у CLI; ошибки не списываются."""
     try:
         p = subprocess.run(P.command(args), cwd=P.ROOT, text=True,
                            encoding="utf-8", errors="replace",
@@ -52,14 +53,9 @@ def run(args):
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except OSError as exc:
         # Нет исполнителя — часть не проверена, и ворота об этом говорят.
-        return ["не запустилось"], "%s не найден: %s" % (args[0], exc)
+        return R.assess(args, None, "", known)
     out = p.stdout or ""
-    tail = [l for l in out.splitlines() if l.startswith("итого")]
-    if p.returncode != 0 and not tail:
-        # Стенд упал целиком: это провал, а не «случаев нет».
-        last = [l for l in out.splitlines() if l.strip()][-1:]
-        return ["стенд упал целиком"], (last[0][:120] if last else "без вывода")
-    return P.failed_cases(out), (tail[-1] if tail else "итога нет")
+    return R.assess(args, p.returncode, out, known)
 
 
 def load():
@@ -97,12 +93,11 @@ def main():
 
     known, fresh, lines = P.known_red(), [], []
     for title, args in chosen:
-        bad, tail = run(args)
-        fresh += ["%s: %s" % (title, b) for b in bad if b not in known]
-        old = [b for b in bad if b in known]
-        lines.append("  %-18s %s%s" % (
-            title, tail, "" if not old else "; из них известных %d (%s)"
-            % (len(old), ", ".join(old))))
+        result = run(args, known)
+        status = result["acceptance_status"]
+        if status not in {"passed", "baseline_compatible"}:
+            fresh.append("%s: %s" % (title, result["reason"]))
+        lines.append("  %-18s %s: %s" % (title, status, result["reason"]))
     save({"at": time.time(), "ok": not fresh})
     if not fresh:
         return 0

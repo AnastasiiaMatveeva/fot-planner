@@ -24,6 +24,9 @@ PY = VENV if os.path.exists(VENV) else sys.executable
 #: Часть приёмки → чем запускается → какие правки её касаются.
 #: Часть без списка файлов касается всего и в выборке по изменениям не участвует.
 PARTS = (
+    ("вердикт приёмки", ["scripts/test_check_results.py"],
+     ("scripts/check.py", "scripts/check_results.py", "scripts/test_check_results.py",
+      "scripts/parts.py", "scripts/stop_gate.py", "harness/known_red.txt")),
     ("хуки правок", ["scripts/test_lint_changed.py"],
      (".claude/settings.json", "scripts/lint_changed.py",
       "scripts/test_lint_changed.py")),
@@ -95,7 +98,8 @@ def known_red():
     """Случаи, которые падают по разобранной причине: номер → (причина, дата)."""
     out = {}
     try:
-        text = io.open(KNOWN, encoding="utf-8").read()
+        with io.open(KNOWN, encoding="utf-8") as file:
+            text = file.read()
     except OSError:
         return out
     num = None

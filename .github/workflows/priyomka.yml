@@ -28,4 +28,11 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
           FOT_SKIP_ORPHANS: '1'
-        run: python scripts/check.py --quick
+        run: python scripts/check.py --quick --strict --report outputs/ci-check.json
+      - name: Сохранить отчёт приёмки
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-check-report
+          path: outputs/ci-check.json
+          if-no-files-found: error
