@@ -24,6 +24,9 @@ PY = VENV if os.path.exists(VENV) else sys.executable
 #: Часть приёмки → чем запускается → какие правки её касаются.
 #: Часть без списка файлов касается всего и в выборке по изменениям не участвует.
 PARTS = (
+    ("хуки правок", ["scripts/test_lint_changed.py"],
+     (".claude/settings.json", "scripts/lint_changed.py",
+      "scripts/test_lint_changed.py")),
     ("разбор документов", ["harness/run.py"],
      ("app/docread.py", "app/intake.py", "app/reference.py", "app/llm.py",
       "harness/run.py", "harness/cases.py")),
