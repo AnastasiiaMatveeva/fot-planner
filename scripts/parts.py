@@ -37,6 +37,8 @@ PARTS = (
     ("разбор документов", ["harness/run.py"],
      ("app/docread.py", "app/intake.py", "app/reference.py", "app/llm.py",
       "harness/run.py", "harness/cases.py")),
+    ("миграции базы", ["harness/migrations.py"],
+     ("migrations/", "scripts/migrate.py", "app/db.py", "harness/migrations.py")),
     ("жизненный цикл прогонов", ["harness/lifecycle.py"],
      ("app/main.py", "app/db.py", "harness/lifecycle.py")),
     ("поведение чата", ["harness/chat.py"],
