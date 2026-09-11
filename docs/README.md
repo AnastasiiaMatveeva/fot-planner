@@ -66,7 +66,7 @@
 | `frontend-standards.md` | `ИНТЕРФЕЙС.md` |
 | `no-explanatory-text.md` | `ИНТЕРФЕЙС.md` и `AGENTS.md` |
 | `no-duplicate-data.md` | `ИНТЕРФЕЙС.md` |
-| `payment-deadline-source.md` | открытое решение в `ИСТОЧНИКИ.md` |
+| `payment-deadline-source.md` | подтверждённое решение SOURCE-001 в `ИСТОЧНИКИ.md` |
 | `min-balance-not-input.md` | открытое решение в `ИСТОЧНИКИ.md` |
 | `economist-source-documents.md` | `ИСТОЧНИКИ.md` |
 | `labor-row-attribution.md` | правила решателя и ADR об атрибуции |
