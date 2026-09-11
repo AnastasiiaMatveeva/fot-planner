@@ -2,15 +2,6 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "demo-ui",
-      "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": [
-        "docs/ui/serve.py"
-      ],
-      "port": 8760,
-      "url": "http://127.0.0.1:8760"
-    },
-    {
       "name": "app",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": [

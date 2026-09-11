@@ -1,13 +1,4 @@
-# рабочие файлы локального сервера демонстрации
-_uploaded.xlsx
-_built_input.xlsx
-_scenario.xlsx
-_scenario_result.xlsx
-_result.xlsx
-_result.json
-_base_result.xlsx
 __pycache__/
-_reference_update.xlsx
 
 # ключи моделей: оба написания, в репозиторий не попадают
 .env
