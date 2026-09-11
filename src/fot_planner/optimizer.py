@@ -95,30 +95,29 @@ DEFICIT_TOTAL_TOLERANCE = 1.0
 LABOR_CLOSE_TIEBREAK = 1.0
 LEX_STAGE_TOLERANCE = 1.0   # рубль: стадии считаются в рублях и усл. ед., а нулевую стадию с допуском 0,01 MIP не удерживал
 MIP_REL_GAP = 0.005
-MIN_CONTRACT_REMAINDER = 1000.0
+#: Остаток до копейки считается нулём: выплаты округляются до копеек. Шире
+#: допуск делать нельзя — с рублём решатель оставлял рубль на «пустом» договоре.
+CONTRACT_REMAINDER_EPS = 0.01
 
 
 def _add_contract_remainder_rules(model, contracts, alloc):
-    """Итоговый остаток ФОТ: ноль либо минимум 1000 рублей (не касса месяца)."""
+    """Признак «на договоре остаётся ФОТ» для стадии, которая минимизирует число
+    таких договоров.
+
+    Минимального размера остатка нет. Порог «ноль либо не меньше 1 000 ₽» снят
+    владельцем продукта 11.09.2026: он делал неразрешимыми планы, где любое
+    размещение оставляет на договоре хвост меньше порога (кризис-случаи 09 и
+    26), а делового смысла в нём не нашлось. Осталась цель: чем меньше
+    договоров с неосвоенным ФОТ, тем лучше.
+    """
     model.has_contract_remainder = pyo.Var(list(contracts), domain=pyo.Binary)
     for cid, contract in contracts.items():
         spent = _sum_terms(alloc[k] for k in alloc if k[1] == cid)
         remaining = contract.total_fot - spent
         flag = model.has_contract_remainder[cid]
-        model.cons.add(remaining >= MIN_CONTRACT_REMAINDER * flag)
-        model.cons.add(remaining <= max(0.0, contract.total_fot) * flag)
+        model.cons.add(remaining <= CONTRACT_REMAINDER_EPS
+                       + max(0.0, contract.total_fot) * flag)
     return _sum_terms(model.has_contract_remainder.values())
-
-
-def _invalid_rounded_remainders(contracts, allocations):
-    """Проверка фактически выдаваемых сумм в целых копейках."""
-    paid = defaultdict(int)
-    for row in allocations:
-        paid[row.contract_id] += round(row.amount * 100)
-    return [(c.id, (round(c.total_fot * 100) - paid[c.id]) / 100)
-            for c in contracts
-            if (round(c.total_fot * 100) - paid[c.id]) != 0
-            and (round(c.total_fot * 100) - paid[c.id]) < round(MIN_CONTRACT_REMAINDER * 100)]
 
 
 def _month_inflow(ctx: PlanningContext, contract_id: str, month: int) -> float:
@@ -2228,20 +2227,6 @@ def solve(
                     equivalence_group=assigned_group,
                 )
             )
-
-    invalid_remainders = _invalid_rounded_remainders(ctx.contracts, allocations)
-    if invalid_remainders:
-        return PlanningResult(
-            year=year, allocations=[], deficits=[], contract_balances=[],
-            conflicts=[ConflictRecord(
-                code="CONTRACT_REMAINDER_INVALID",
-                message=(f"Договор {cid}: остаток ФОТ после округления выплат {amount:.2f} ₽. "
-                         "Допустим только ноль либо не менее 1000 ₽; результат не принят."),
-            ) for cid, amount in invalid_remainders],
-            solver_status="VALIDATION_FAILED", objective_value=0.0,
-            solve_time_sec=round(time.perf_counter() - t0, 3),
-            payroll_limit_mode=payroll_limit_mode,
-        )
 
     balances = _compute_balances(
         ctx,

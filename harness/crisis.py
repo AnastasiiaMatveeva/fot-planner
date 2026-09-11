@@ -865,6 +865,30 @@ def c31(limit):
     return p, out
 
 
+@case("32", "Остаток ФОТ без порога: хвост 300 ₽ допустим, договор с остатком один")
+def c32(limit):
+    # Денег на 300 ₽ больше, чем зарплаты за год: хвост неизбежен. Прежний
+    # порог «ноль либо не меньше 1 000 ₽» делал такой план неразрешимым; теперь
+    # хвост допустим, а стадия оставляет его на одном договоре, а не на двух.
+    path = build("c32", [emp("E1", "Инженер", 100000)],
+                 [ctr("C_A", 600000), ctr("C_B", 600300)],
+                 {"C_A": [600000] + [0] * 11, "C_B": [600300] + [0] * 11})
+    ctx, res = solve(path, limit)
+    p, out = Plan(ctx, res), []
+    expect(p.status == "OPTIMAL", f"статус {p.status}", out)
+    if p.status != "OPTIMAL":
+        return p, out
+    fot = {c.id: c.total_fot for c in ctx.contracts}
+    paid = {c: 0.0 for c in fot}
+    for (e, c, m, k), v in p.pay.items():
+        paid[c] += v
+    left = {c: round(fot[c] - paid[c], 2) for c in fot}
+    with_rest = [c for c, v in left.items() if v > 1.0]
+    expect(len(with_rest) == 1, f"договоров с остатком {len(with_rest)}: {left}", out)
+    expect(abs(sum(left.values()) - 300) < 2, f"общий остаток {sum(left.values()):.2f} вместо 300", out)
+    return p, out
+
+
 # ── запуск ───────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
