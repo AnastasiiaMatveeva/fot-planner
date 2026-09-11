@@ -6,16 +6,18 @@ const sandbox={PlanIssues:issues};vm.createContext(sandbox);vm.runInContext(fixt
 const data=sandbox.fixture;
 assert.equal(data.issues.length,7);
 assert.equal(new Set(data.issues.map(i=>i.id)).size,7);
-// У каждого замечания три величины: факт, предел, разница (у статусных —
-// прочерки, но графы те же).
-for(const issue of data.issues){assert.ok(issue.target.row);
+// У каждого замечания есть раздел назначения и три величины: факт, предел,
+// разница. Точная строка может отсутствовать у правила «в целом» — тогда
+// переход открывает сам раздел.
+for(const issue of data.issues){assert.ok(issue.target.section);
   assert.deepEqual(Object.keys(issue.metrics),['fact','limit','diff']);
   assert.ok(issue.id.startsWith('demo:'));}
 assert.equal(data.issues.find(i=>i.rule==='pay.deficit').severity,'warning');
 assert.equal(data.issues.find(i=>i.rule==='labor.чел-мес').severity,'warning');
 assert.equal(data.issues.find(i=>i.rule==='p4.exceeded').target.month,4);
 assert.equal(data.issues.find(i=>i.rule==='p4.exceeded').target.column,11);
-assert.equal(data.issues.find(i=>i.rule==='check.0').target.row,'rule:0:0');
+assert.equal(data.issues.find(i=>i.rule==='check.0').target.section,6);
+assert.equal(data.issues.find(i=>i.rule==='check.0').target.row,null);
 assert.equal(data.issues.find(i=>i.rule==='cash.negative').target.column,3);
 assert.equal(issues.collect({},null,{}).length,1);
 assert.equal(issues.collect({},[{'состояние':'соблюдено'}],{}).length,0);
@@ -31,6 +33,7 @@ console.log('Diagnostic contract tests passed: seven categories, stable targets,
 
 // Verify adapters point at rows emitted by the real report table builders.
 const source=fs.readFileSync(require.resolve('../app/static/app.js'),'utf8');
+assert.ok(!source.includes("note.className='issue-empty'"));
 const grids=[];const report=JSON.parse(JSON.stringify(data.report));
 Object.assign(report,{'кто':[],'незакрыто':[]});
 const ctx={esc:String,vrep:report,repMon:[3],MON:Array.from({length:12},(_,i)=>String(i+1)),repGoalsHtml:()=>'',secH:()=>'',chip:()=>'',rp:String,rf:String,rm:String,rs:String,nc:(v)=>v,gc:()=>'',monHead:()=>[],monGroupRow:()=>[],repT:(h,r)=>{grids.push(r);return '';}};

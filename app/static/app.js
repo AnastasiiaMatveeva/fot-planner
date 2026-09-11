@@ -2273,7 +2273,9 @@ function openPlanIssue(id) {
     // Ключ по человеку и виду выплаты: строк столько же, сколько договоров,
     // и годится первая — она приведёт глаз в нужное место таблицы.
     if(!row && /^pay:/.test(issue.target.row||'')) row=section.querySelector('[data-review-key^="'+issue.target.row+'"]');
-    if(!row) { var note=document.createElement('p');note.className='issue-empty';note.textContent='Точная строка недоступна в этой версии отчёта. '+issue.subject+' — '+issue.title;section.prepend(note);return; }
+    // Если точной строки нет, пользователь уже находится в нужном разделе.
+    // Не добавляем в отчёт пояснительный текст от агента.
+    if(!row) return;
     var fold=row.closest('details');if(fold)fold.open=true;
     row.classList.add('review-target');row.tabIndex=-1;
     var cell=issue.target.column==null?null:row.querySelector('[data-source-col="'+issue.target.column+'"]');
