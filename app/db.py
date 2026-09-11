@@ -323,6 +323,16 @@ class Run(Base):
     # «на основании чего» и через год, когда документы уже заменены.
     sources: Mapped[str | None] = mapped_column(Text, default=None)    # JSON
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+    # Кто считает и жив ли он. Перезапуск сервера раньше помечал «прерван»
+    # любой прогон со статусом «идет» — в том числе живой расчёт другого
+    # процесса. Теперь у прогона есть исполнитель (хост:pid:метка) и
+    # heartbeat, который тот обновляет, пока считает; брошенным признаётся
+    # только прогон, чей heartbeat давно замолчал.
+    executor: Mapped[str | None] = mapped_column(String(120), default=None)
+    heartbeat: Mapped[dt.datetime | None] = mapped_column(DateTime, default=None)
+    # Ключ операции от клиента: повтор той же команды возвращает тот же
+    # прогон, а не второй расчёт; тот же ключ с другими данными — конфликт.
+    operation_id: Mapped[str | None] = mapped_column(String(80), default=None)
 
     case: Mapped[Case] = relationship(back_populates="runs")
 
@@ -496,7 +506,8 @@ _ADDED_COLUMNS = {
                   # на него: величины справочника должностей.
                   ("gave", "TEXT")],
     "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
-    "runs": [("sources", "TEXT")],
+    "runs": [("sources", "TEXT"), ("executor", "VARCHAR(120)"),
+             ("heartbeat", "DATETIME"), ("operation_id", "VARCHAR(80)")],
     "labor_rows": [("headcount", "FLOAT"), ("months", "TEXT"),
                    ("details", "TEXT")],
     "verdicts": [("grade", "VARCHAR(20)")],

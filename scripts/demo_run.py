@@ -30,7 +30,9 @@ import uuid
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 DEMO = os.path.join(ROOT, "data", "demo")
-BASE = "http://127.0.0.1:8770"
+# Адрес сервера можно подменить: стенд поднимает приложение на временной
+# базе и другом порту, чтобы не трогать живые данные.
+BASE = os.environ.get("FOT_BASE_URL", "http://127.0.0.1:8770")
 FILES = ["Штатное расписание 2026.xlsx", "Договоры 2026.xlsx",
          "РКМ ГОЗ Радар-26.xlsx", "Структура цены Грант-26.xlsx"]
 #: Тестовые документы прежних прогонов — их строки мешают демо-реестру.

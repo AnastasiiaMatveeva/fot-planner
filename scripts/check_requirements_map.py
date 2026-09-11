@@ -32,7 +32,8 @@ ROOT = os.path.abspath(os.path.join(HERE, ".."))
 MAP = os.path.join(ROOT, "docs", "requirements-map.json")
 TZ = os.path.join(ROOT, "docs", "ТЗ_РАЗВИТИЕ_АГЕНТОВ.md")
 RULES = os.path.join(ROOT, "docs", "ПРАВИЛА_РЕШАТЕЛЯ.md")
-STANDS = {"crisis": "harness/crisis.py", "audit": "harness/audit.py", "chat": "harness/chat.py"}
+STANDS = {"crisis": "harness/crisis.py", "audit": "harness/audit.py", "chat": "harness/chat.py",
+          "lifecycle": "harness/lifecycle.py"}
 
 
 def read(path):
@@ -52,6 +53,8 @@ def stand_of(case_id):
         return "audit"
     if case_id.startswith("ч"):
         return "chat"
+    if case_id.startswith("л"):
+        return "lifecycle"
     return "crisis"
 
 
@@ -75,7 +78,7 @@ def rule_case_refs():
     for m in re.finditer(r"\(([^()]*)\)", read(RULES)):
         inner = m.group(1)
         for token in re.split(r"[,\s;]+", inner.split(";")[0]):
-            if re.fullmatch(r"\d{2}b?|а\d{2}|ч\d{2}б?", token):
+            if re.fullmatch(r"\d{2}b?|а\d{2}|ч\d{2}б?|л\d{2}", token):
                 refs.append(token)
             elif re.fullmatch(r"а\d{2}–а\d{2}", token):
                 a, b = token.split("–")

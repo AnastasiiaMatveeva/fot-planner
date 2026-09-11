@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
+import socket
 import logging
 import fastapi
 import os
@@ -77,27 +79,77 @@ app = FastAPI(title="Планирование ФОТ")
 init_db()
 
 
+#: Исполнитель этого процесса: хост, pid и случайная метка. Пишется в прогон
+#: при запуске; по нему видно, чей расчёт идёт, а не только что «идет».
+EXECUTOR = "%s:%d:%s" % (socket.gethostname(), os.getpid(), uuid.uuid4().hex[:6])
+#: Как часто идущий прогон подтверждает, что жив, и после какого молчания
+#: его можно признать брошенным. Порог — четыре пропущенных удара: один
+#: пропуск бывает от занятой машины, четыре подряд — от мёртвого процесса.
+HEARTBEAT_SEC = 15
+STALE_SEC = 4 * HEARTBEAT_SEC
+
+
+def _run_is_stale(run):
+    """Прогон без свежего heartbeat. Прогоны до этой графы (None) — тоже:
+    подтвердить, что они живы, некому."""
+    if run.heartbeat is None:
+        return True
+    return (now() - run.heartbeat).total_seconds() > STALE_SEC
+
+
 def _close_orphans():
     """Строки работы и прогоны, брошенные прошлым запуском.
 
     Фоновая задача живёт в процессе сервера: перезапуск её убивает, а строка
     «агент работает» и прогон «идет» остаются навсегда — в шапке плана
     висит агент, которого нет. При старте закрываем такие следы честно.
+
+    Честно — значит не трогая чужой живой расчёт: второй экземпляр сервера
+    или стенд, поднятый рядом, раньше помечал прерванным прогон, который в
+    эту секунду считал другой процесс (RUN-002). Брошенным считается только
+    прогон, чей heartbeat замолчал дольше STALE_SEC. Строки работы агентов
+    к прогону не привязаны, поэтому их закрываем лишь когда живых прогонов
+    нет вовсе.
     """
     from db import Activity, Run, session as _session
     db = _session()
     try:
-        stale_acts = db.query(Activity).filter_by(state="идет").all()
-        for a in stale_acts:
-            a.state = "прервано"
-            a.detail = "сервис был перезапущен, работа не завершена"
-        stale_runs = db.query(Run).filter_by(status="идет").all()
+        running = db.query(Run).filter_by(status="идет").all()
+        stale_runs = [r for r in running if _run_is_stale(r)]
+        alive = len(running) - len(stale_runs)
         for r in stale_runs:
             r.status = "прерван"
+        stale_acts = []
+        if not alive:
+            stale_acts = db.query(Activity).filter_by(state="идет").all()
+            for a in stale_acts:
+                a.state = "прервано"
+                a.detail = "сервис был перезапущен, работа не завершена"
         if stale_acts or stale_runs:
             db.commit()
+        return {"прервано": len(stale_runs), "живых": alive}
     finally:
         db.close()
+
+
+def _heartbeat(run_id, stop):
+    """Пока идёт расчёт, раз в HEARTBEAT_SEC отмечать, что прогон жив.
+
+    Работает в своём потоке со своей сессией: основной поток занят
+    подпроцессом решателя и к базе не обращается.
+    """
+    while not stop.wait(HEARTBEAT_SEC):
+        s = session()
+        try:
+            r = s.get(Run, run_id)
+            if r is None or r.status != "идет":
+                return
+            r.heartbeat = now()
+            s.commit()
+        except Exception:  # noqa: BLE001 — пропущенный удар не роняет расчёт
+            pass
+        finally:
+            s.close()
 
 
 # Стенды и скрипты импортируют этот модуль ради сборщика входа и путей — и
@@ -2139,6 +2191,37 @@ def _running_run(db, case_id):
             .order_by(Run.id.desc()).first())
 
 
+def _start_run(db, case_id, settings, operation_id=None):
+    """Единственный вход для нового прогона. Возвращает (прогон, создан ли).
+
+    Прогон заводился в четырёх местах: кнопка, претензия в чате, закрепление
+    и «посчитай». Каждое по-своему проверяло занятость, и ни одно не
+    записывало, кто считает. Теперь запуск один: занятый план возвращает
+    идущий прогон; ключ операции от клиента (RUN-001) делает повтор той же
+    команды безопасным — вернётся тот же прогон, — а тот же ключ с другими
+    данными отклоняется как конфликт, потому что молча заменить данные
+    операции хуже, чем отказать.
+    """
+    payload = json.dumps(settings or {}, ensure_ascii=False, sort_keys=True)
+    if operation_id:
+        same = db.query(Run).filter_by(operation_id=operation_id).first()
+        if same is not None:
+            same_payload = json.dumps(json.loads(same.settings or "{}"),
+                                      ensure_ascii=False, sort_keys=True)
+            if same.case_id != case_id or same_payload != payload:
+                raise HTTPException(409, "операция %s уже выполнена с другими данными"
+                                    % operation_id)
+            return same, False
+    busy = _running_run(db, case_id)
+    if busy is not None:
+        return busy, False
+    run = Run(case_id=case_id, settings=payload, executor=EXECUTOR,
+              heartbeat=now(), operation_id=operation_id or None)
+    db.add(run)
+    db.commit()
+    return run, True
+
+
 @app.post("/api/case/{case_id}/message")
 def post_message(case_id: int, background: BackgroundTasks, body: dict = Body(...)):
     """Реплика экономиста: пишем ее в ленту и отвечаем моделью.
@@ -2216,9 +2299,7 @@ def post_message(case_id: int, background: BackgroundTasks, body: dict = Body(..
                 db.commit()
                 return {"ok": True, "action": "закреплено"}
             base = json.loads(last.settings) if last and last.settings else {}
-            run = Run(case_id=case_id, settings=json.dumps(base, ensure_ascii=False))
-            db.add(run)
-            db.commit()
+            run, _created = _start_run(db, case_id, base)
             agents.say(db, case_id, "Пересчитываю план с этими условиями.", agent="tuning")
             db.commit()
             background.add_task(_solve, case_id, run.id, base)
@@ -2295,9 +2376,12 @@ def post_message(case_id: int, background: BackgroundTasks, body: dict = Body(..
                 db.commit()
                 return {"ok": True, "action": "ничего"}
             agents.say(db, case_id, "\n".join(lines), agent="solver")
-            run = Run(case_id=case_id, settings=json.dumps(new_settings, ensure_ascii=False))
-            db.add(run)
-            db.commit()
+            run, created = _start_run(db, case_id, new_settings)
+            if not created:
+                agents.say(db, case_id, "Условие записано. Пересчитаю после расчета № %d — "
+                           "он сейчас идет." % run.id, agent="tuning")
+                db.commit()
+                return {"ok": True, "action": "закреплено", "run_id": run.id}
             background.add_task(_solve, case_id, run.id, new_settings)
             return {"ok": True, "action": "расчет", "run_id": run.id}
 
@@ -2317,9 +2401,11 @@ def post_message(case_id: int, background: BackgroundTasks, body: dict = Body(..
                            "и фондами договоров.", agent="intake")
                 db.commit()
                 return {"ok": True, "action": "ничего"}
-            run = Run(case_id=case_id, settings="{}")
-            db.add(run)
-            db.commit()
+            run, created = _start_run(db, case_id, {})
+            if not created:
+                agents.say(db, case_id, "Расчет № %d уже идет." % run.id, agent="tuning")
+                db.commit()
+                return {"ok": True, "action": "ничего", "run_id": run.id}
             background.add_task(_solve, case_id, run.id, None)
             return {"ok": True, "action": "расчет", "run_id": run.id}
 
@@ -3136,6 +3222,8 @@ def _write_sources_sheet(path, sources):
 
 def _solve(case_id: int, run_id: int, settings: dict | None):
     db = session()
+    stop = threading.Event()
+    threading.Thread(target=_heartbeat, args=(run_id, stop), daemon=True).start()
     try:
         case = db.get(Case, case_id)
         run = db.get(Run, run_id)
@@ -3302,6 +3390,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         agents.say(db, case_id, "Расчет не выполнен: %s" % exc, agent="solver")
         db.commit()
     finally:
+        stop.set()
         db.close()
 
 
@@ -3321,12 +3410,10 @@ async def solve(case_id: int, background: BackgroundTasks, request: Request):
             last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
                     .order_by(Run.id.desc()).first())
             settings = json.loads(last.settings) if last and last.settings else {}
-        busy = _running_run(db, case_id)
-        if busy is not None:
-            return {"ok": True, "run_id": busy.id, "идет": True}
-        run = Run(case_id=case_id, settings=json.dumps(settings, ensure_ascii=False))
-        db.add(run)
-        db.commit()
+        run, created = _start_run(db, case_id, settings,
+                                  operation_id=str(body.get("operation_id") or "") or None)
+        if not created:
+            return {"ok": True, "run_id": run.id, "идет": run.status == "идет"}
         agents.say(db, case_id, "Запускаю расчет.", who="экономист")
         background.add_task(_solve, case_id, run.id, settings)
         return {"ok": True, "run_id": run.id}
