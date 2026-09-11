@@ -41,7 +41,8 @@ import docread           # noqa: E402
 import intake            # noqa: E402
 import llm               # noqa: E402
 import reference         # noqa: E402
-from db import (         # noqa: E402
+from db import (
+    Decision, record_decision,         # noqa: E402
     Activity, Case, Contract, Correction, Document, Employee, Inflow, LaborRow,
     Message, Proposal, Question, Run, SecretAllowance, Substitution, Verdict,
     RESULT_DIR, UPLOAD_DIR, init_db, now, session,
@@ -513,13 +514,17 @@ def _muted(case):
         return set()
 
 
-def _set_muted(db, case, doc_id, muted):
+def _set_muted(db, case, doc_id, muted, grounds="флажок в карточке документа"):
     ids = _muted(case)
     if muted:
         ids.add(doc_id)
     else:
         ids.discard(doc_id)
     case.muted_docs = json.dumps(sorted(ids))
+    from fot_planner.harness_local import decisions as D
+    record_decision(db, kind="состав плана", subject_kind="план", subject_id=case.id,
+                    subject_digest=D.digest(sorted(ids)), scope="план %d" % case.id,
+                    action={"документ": doc_id, "исключён": bool(muted)}, grounds=grounds)
     db.commit()
 
 
@@ -946,6 +951,9 @@ def all_documents():
                     source_labor += 1
             out.append({
                 "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
+            # Хеш версии документа: форма возвращает его с решением, и сервер
+            # не применит решение к документу, который с тех пор заменили.
+            "sha256": d.sha256,
                 "version": d.version or 1,
                 "by": d.parsed_by, "summary": d.summary, "size": d.size,
                 "uploaded": _dt(d.uploaded), "case_id": d.case_id,
@@ -1098,11 +1106,25 @@ async def decide_proposals(doc_id: int, request: Request):
     body = await request.json()
     take = {int(x) for x in (body.get("accept") or [])}
     drop = {int(x) for x in (body.get("reject") or [])}
+    expected = str(body.get("document_sha256") or "") or None
     db = session()
     try:
         doc = db.get(Document, doc_id)
         if doc is None:
             raise HTTPException(404, "документ не найден")
+        from fot_planner.harness_local import decisions as D
+        scope = "план %d" % doc.case_id if doc.scope == "план" and doc.case_id else "организация"
+        if D.stale(expected, doc.sha256):
+            # Форма показывала другую версию документа. Молча применить её
+            # решение к новой версии нельзя (VER-004, UI-002): отказ, и он
+            # тоже записывается — это решение, которого не было.
+            record_decision(db, kind="данные", subject_kind="документ", subject_id=doc.id,
+                            subject_digest=D.digest(doc.sha256, sorted(take), sorted(drop)),
+                            scope=scope, action={"принято": sorted(take), "отклонено": sorted(drop)},
+                            grounds="карточка документа", precondition=expected,
+                            outcome="отклонено: документ изменился после открытия формы")
+            db.commit()
+            raise HTTPException(409, "документ изменился после открытия формы — откройте карточку заново")
         rows = (db.query(Proposal)
                 .filter(Proposal.document_id == doc_id,
                         Proposal.state == "предложено").all())
@@ -1200,6 +1222,14 @@ async def decide_proposals(doc_id: int, request: Request):
             # разобранный документ в «не распознан».
             doc.state = ("разобран" if any(added.values()) or _doc_gave(db, doc.id)
                          else "не распознан")
+        decided = [pr for pr in rows if pr.id in take or pr.id in drop]
+        if decided:
+            record_decision(db, kind="данные", subject_kind="документ", subject_id=doc.id,
+                            subject_digest=D.digest(doc.sha256, [(pr.id, pr.entity, pr.payload) for pr in decided]),
+                            scope=scope,
+                            action={"принято": sorted(pr.id for pr in decided if pr.id in take),
+                                    "отклонено": sorted(pr.id for pr in decided if pr.id in drop)},
+                            grounds="карточка документа", precondition=expected)
         db.commit()
 
         if any(added.values()) and doc.case_id:
@@ -2414,7 +2444,8 @@ def post_message(case_id: int, background: BackgroundTasks, body: dict = Body(..
                            agent="intake")
                 db.commit()
                 return {"ok": True, "action": "ничего"}
-            _set_muted(db, case, doc.id, action == "исключить документ")
+            _set_muted(db, case, doc.id, action == "исключить документ",
+                       grounds="реплика: %s" % (text or "")[:200])
             return {"ok": True, "action": "флажок", "document": doc.name}
 
         if action == "претензия к плану":
@@ -2685,6 +2716,28 @@ def _run_files(pair):
     return src, out
 
 
+@app.get("/api/decisions")
+def list_decisions(case_id: int | None = None, document_id: int | None = None, limit: int = 100):
+    """Решения по плану или документу, новые сверху."""
+    db = session()
+    try:
+        q = db.query(Decision)
+        if document_id is not None:
+            q = q.filter(Decision.subject_kind == "документ", Decision.subject_id == str(document_id))
+        elif case_id is not None:
+            doc_ids = [str(d.id) for d in db.query(Document).filter_by(case_id=case_id).all()]
+            q = q.filter(((Decision.subject_kind == "план") & (Decision.subject_id == str(case_id)))
+                         | ((Decision.subject_kind == "документ") & Decision.subject_id.in_(doc_ids or ["-"])))
+        rows = q.order_by(Decision.id.desc()).limit(max(1, min(limit, 500))).all()
+        return [{"id": r.id, "created": _dt(r.created), "actor": r.actor, "actor_source": r.actor_source,
+                 "kind": r.kind, "subject_kind": r.subject_kind, "subject_id": r.subject_id,
+                 "subject_digest": r.subject_digest, "scope": r.scope,
+                 "action": json.loads(r.action) if r.action else None, "grounds": r.grounds,
+                 "precondition": r.precondition, "outcome": r.outcome} for r in rows]
+    finally:
+        db.close()
+
+
 @app.get("/api/case/{case_id}/run/{run_id}/manifest")
 def run_manifest(case_id: int, run_id: int):
     """Снимок прогона и его сверка с хранилищем: на чём считали и цело ли оно."""
@@ -2777,12 +2830,27 @@ async def document_reference(doc_id: int, request: Request):
     """
     body = await request.json()
     edits = body.get("edits") or []
+    expected = str(body.get("document_sha256") or "") or None
     db = session()
     try:
         d = db.get(Document, doc_id)
         if d is None:
             raise HTTPException(404, "документ не найден")
+        from fot_planner.harness_local import decisions as D
+        if D.stale(expected, d.sha256):
+            record_decision(db, kind="норма", subject_kind="документ", subject_id=d.id,
+                            subject_digest=D.digest(d.sha256, edits), scope="организация",
+                            action={"правок": len(edits)}, grounds="карточка документа",
+                            precondition=expected, outcome="отклонено: документ изменился после открытия формы")
+            db.commit()
+            raise HTTPException(409, "документ изменился после открытия формы — откройте карточку заново")
         applied = reference.apply(edits)
+        if edits:
+            # Норма меняется для всей организации: справочник один.
+            record_decision(db, kind="норма", subject_kind="документ", subject_id=d.id,
+                            subject_digest=D.digest(d.sha256, edits), scope="организация",
+                            action={"правок": len(applied), "поля": sorted({a["field"] for a in applied})},
+                            grounds="карточка документа", precondition=expected)
         gave = {}
         try:
             gave = json.loads(d.gave) if d.gave else {}

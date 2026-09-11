@@ -1102,6 +1102,21 @@ def _months_text(a, b):
     return MON_SHORT[a - 1] if a == b else "%s–%s" % (MON_SHORT[a - 1], MON_SHORT[b - 1])
 
 
+
+def _save_plan_settings(db, case, d, text):
+    """Условие плана из чата — решение экономиста, а не побочный эффект
+    запроса: записывается с оператором, хешем настроек и репликой как
+    основанием (VER-004)."""
+    from db import record_decision
+    from fot_planner.harness_local import decisions as D
+    case.plan_settings = json.dumps(d, ensure_ascii=False)
+    record_decision(db, kind="настройка плана", subject_kind="план", subject_id=case.id,
+                    subject_digest=D.digest_settings(d), scope="план %d" % case.id,
+                    action={"назначений": len(d.get("назначения") or []),
+                            "запретов": len(d.get("запреты") or []),
+                            "настройки": d.get("настройки") or {}},
+                    grounds="реплика: %s" % (text or "")[:200])
+
 def apply_fixes(db, case, fixes, text=""):
     """Закрепить, запретить или снять. Возвращает (строки эха, вопросы).
 
@@ -1164,7 +1179,7 @@ def apply_fixes(db, case, fixes, text=""):
             "Закрепил" if key == "назначения" else "Запретил", emp.fio or emp.code, ctr.code,
             _months_text(a, b), note, kind,
             (", %s ₽ в месяц" % _shown(rec["сумма"])) if rec["сумма"] else ""))
-    case.plan_settings = json.dumps(d, ensure_ascii=False)
+    _save_plan_settings(db, case, d, text)
     return lines, questions
 
 
@@ -1212,7 +1227,7 @@ def apply_settings(db, case, settings, text=""):
                 continue
             d["настройки"][name] = max(1, n)
             lines.append("Договоров оклада в год — не больше %d." % max(1, n))
-    case.plan_settings = json.dumps(d, ensure_ascii=False)
+    _save_plan_settings(db, case, d, text)
     return lines
 
 

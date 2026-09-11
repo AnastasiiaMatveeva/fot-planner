@@ -4603,7 +4603,7 @@ function openDocument(id) {
         api("/api/document/" + d.id + "/proposals", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accept: accept, reject: reject }),
+          body: JSON.stringify({ accept: accept, reject: reject, document_sha256: d.sha256 || null }),
         }).then(function () {
           close();
           loadRegistry();
@@ -4633,7 +4633,7 @@ function openDocument(id) {
         btn.textContent = "Записываю…";
         api("/api/document/" + d.id + "/reference", {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ edits: edits }),
+          body: JSON.stringify({ edits: edits, document_sha256: d.sha256 || null }),
         }).then(function (r) {
           var g = Object.assign({}, d.gave || {}, { "расхождения": r["осталось"] || [] });
           d.gave = g;

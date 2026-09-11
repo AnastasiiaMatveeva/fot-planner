@@ -6,6 +6,7 @@ import re
 
 CASE_SCRIPTS = {"harness/crisis.py", "harness/chat.py", "harness/audit.py",
                 "harness/lifecycle.py", "harness/migrations.py", "harness/manifest.py",
+                "harness/decisions.py",
                 "scripts/check_requirements_map.py"}
 CASE = re.compile(r"^\[(\S+)\]\s+(ОК|ПРОВАЛ)(?:\s|$)", re.M)
 SUMMARY = re.compile(r"^итого: (\d+) случаев, провалов (\d+)\s*$", re.M)

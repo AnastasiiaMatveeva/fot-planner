@@ -497,6 +497,40 @@ class Proposal(Base):
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
 
 
+class Decision(Base):
+    """Локальное решение: кто, что, над какой версией предмета и почему.
+
+    Принятая строка, записанная норма, исключённый документ, условие плана
+    из чата — решения человека. От них оставались только следствия; теперь
+    есть запись с оператором, хешем предмета и предусловием (VER-004).
+    """
+
+    __tablename__ = "decisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+    actor: Mapped[str | None] = mapped_column(String(120), default=None)
+    actor_source: Mapped[str | None] = mapped_column(String(60), default=None)
+    kind: Mapped[str] = mapped_column(String(40))           # данные | норма | состав плана | настройка плана
+    subject_kind: Mapped[str] = mapped_column(String(40))   # документ | план
+    subject_id: Mapped[str] = mapped_column(String(80))
+    subject_digest: Mapped[str | None] = mapped_column(String(64), default=None)
+    scope: Mapped[str | None] = mapped_column(String(120), default=None)
+    action: Mapped[str | None] = mapped_column(Text, default=None)      # JSON
+    grounds: Mapped[str | None] = mapped_column(Text, default=None)
+    precondition: Mapped[str | None] = mapped_column(String(64), default=None)
+    outcome: Mapped[str | None] = mapped_column(String(120), default=None)
+
+
+def record_decision(db, **fields):
+    """Записать решение; действующее лицо берётся у локального оператора,
+    а не из аргументов — подпись клиента личностью не является (NFR-002)."""
+    from fot_planner.harness_local import decisions as _d
+    row = Decision(**_d.make(**fields))
+    db.add(row)
+    return row
+
+
 #: Колонки, добавленные к уже существующим таблицам. create_all создает
 #: недостающие таблицы, но не колонки, а базу с делами экономиста мы не
 #: пересоздаем. SQLite умеет ADD COLUMN, этого достаточно.
