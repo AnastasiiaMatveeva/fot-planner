@@ -8,7 +8,7 @@
 Три скорости, по цене:
 
     scripts/check.py --changed   # только то, чего коснулась правка
-    scripts/check.py --quick     # чат и правила решателя, около минуты
+    scripts/check.py --quick     # всё без модели, около минуты
     scripts/check.py             # плюс разбор документов моделью, минуты
     scripts/check.py --full      # плюс сквозной счёт демо-набора
 
@@ -18,6 +18,10 @@
   сверяются с ожиданиями (`harness/cases.py`);
 * «чат» — `harness/chat.py`: что сервис делает с репликой экономиста; ответ
   модели подставляется записью, поэтому проверка идёт секунды и без сети;
+* «проверка результата» — `harness/audit.py`: аудит готового плана по
+  карточкам правил, миллисекунды;
+* «список замечаний» — `scripts/test-issues.cjs` на Node: контракт замечания и
+  переход к строке отчёта;
 * «правила» — `harness/crisis.py`: тридцать маленьких задач, по одной на
   правило решателя (2556, П4, БЭП, 120, 152, приоритет, замещение, ставки);
 * «сквозной» — `scripts/demo_offline.py`: демо-набор считается целиком, без
@@ -52,9 +56,15 @@ def run(title, args, known):
     e["FOT_SKIP_ORPHANS"] = "1"
     e["PYTHONIOENCODING"] = "utf-8"
     print("── %s ─────────────────────────────" % title, flush=True)
-    p = subprocess.run([P.PY] + args, cwd=ROOT, env=e, text=True,
-                       encoding="utf-8", errors="replace",
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        p = subprocess.run(P.command(args), cwd=ROOT, env=e, text=True,
+                           encoding="utf-8", errors="replace",
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        # Нет исполнителя (например, Node): часть не проверена. Это провал, а
+        # не пропуск — иначе приёмка молча позеленеет без проверки.
+        print("не запустилось: %s" % exc, flush=True)
+        return title, False, time.time() - t0, "не запустилось: %s не найден" % args[0]
     out = p.stdout or ""
     print(out.rstrip(), flush=True)
     tail = [l for l in out.splitlines() if l.startswith("итого")] or \
@@ -75,7 +85,7 @@ def main():
     ap.add_argument("--changed", action="store_true",
                     help="только части, которых коснулись изменения с последнего коммита")
     ap.add_argument("--quick", action="store_true",
-                    help="чат и правила решателя: минута, без обращений к модели")
+                    help="всё, кроме разбора документов: минута, без обращений к модели")
     ap.add_argument("--full", action="store_true",
                     help="добавить сквозной счёт демо-набора (минуты)")
     ap.add_argument("--only", default="", help="часть имени документа для стенда разбора")

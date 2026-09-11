@@ -32,10 +32,24 @@ PARTS = (
     ("проверка результата", ["harness/audit.py"],
      ("src/fot_planner/result_audit.py", "src/fot_planner/models.py",
       "harness/audit.py")),
+    ("список замечаний", ["node", "scripts/test-issues.cjs"],
+     ("app/static/issues.js", "app/static/issues-demo.js", "app/static/app.js",
+      "scripts/test-issues.cjs")),
     ("правила решателя", ["harness/crisis.py", "--limit", "60"],
      ("src/fot_planner/", "app/build_input.py", "app/rules.py",
       "harness/crisis.py")),
 )
+
+
+def command(args):
+    """Команда части приёмки.
+
+    Стенды на Python идут интерпретатором проекта, остальное — как записано:
+    проверка списка замечаний живёт на Node. Отдельная функция нужна, чтобы
+    ворота и команда приёмки запускали части одинаково.
+    """
+    args = list(args)
+    return [PY] + args if args and str(args[0]).endswith(".py") else args
 
 
 class GitUnavailable(RuntimeError):

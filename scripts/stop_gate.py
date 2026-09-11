@@ -44,17 +44,21 @@ def _say(text):
 
 def run(args):
     """Прогнать часть стенда. Возвращает (номера упавших случаев, строка итога)."""
-    p = subprocess.run([P.PY] + args, cwd=P.ROOT, text=True,
-                       encoding="utf-8", errors="replace",
-                       env={**os.environ, "FOT_SKIP_ORPHANS": "1",
-                            "PYTHONIOENCODING": "utf-8"},
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        p = subprocess.run(P.command(args), cwd=P.ROOT, text=True,
+                           encoding="utf-8", errors="replace",
+                           env={**os.environ, "FOT_SKIP_ORPHANS": "1",
+                                "PYTHONIOENCODING": "utf-8"},
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        # Нет исполнителя — часть не проверена, и ворота об этом говорят.
+        return ["не запустилось"], "%s не найден: %s" % (args[0], exc)
     out = p.stdout or ""
     tail = [l for l in out.splitlines() if l.startswith("итого")]
     if p.returncode != 0 and not tail:
         # Стенд упал целиком: это провал, а не «случаев нет».
         last = [l for l in out.splitlines() if l.strip()][-1:]
-        return ["стенд не запустился"], (last[0][:120] if last else "без вывода")
+        return ["стенд упал целиком"], (last[0][:120] if last else "без вывода")
     return P.failed_cases(out), (tail[-1] if tail else "итога нет")
 
 
