@@ -896,7 +896,8 @@ def one_document(doc_id: int):
             "onlyoffice": bool((os.environ.get("FOT_ONLYOFFICE_URL") or "").strip())
                           and os.path.splitext(d.path)[1].lower() in
                           sum(_OO_KIND.values(), ()),
-            "employees": [{"code": e.code, "fio": e.fio, "position": e.position,
+            "employees": [{"code": e.code, "person_code": e.person_code,
+                            "fio": e.fio, "position": e.position,
                            "rate": e.rate, "salary": e.salary,
                            "from": e.date_from, "to": e.date_to} for e in emp],
             "contracts": [{"code": c.code, "name": c.name, "number": c.number,
@@ -1021,7 +1022,9 @@ async def decide_proposals(doc_id: int, request: Request):
                            agent_version=version, grade=pr.grade))
             if pr.entity == "сотрудник":
                 db.add(Employee(
-                    code=str(f.get("code") or ""), fio=f.get("fio"),
+                    code=str(f.get("code") or ""),
+                    person_code=str(f.get("person_code") or f.get("code") or ""),
+                    fio=f.get("fio"),
                     position=f.get("position"), rate=f.get("rate"),
                     salary=f.get("salary"), department=f.get("department"),
                     employment_type=f.get("employment"),
@@ -1671,7 +1674,8 @@ def document_message(doc_id: int, background: BackgroundTasks, body: dict = Body
 #: Что из строки реестра уходит в решатель: поле строки → графа входного
 #: файла. Порядок важен: по нему подписывается подсветка.
 SOLVER_FIELDS = {
-    "employees": [("code", "код строки"), ("fio", "ФИО"), ("position", "должность"),
+    "employees": [("code", "код строки"), ("person_code", "табельный номер"),
+                  ("fio", "ФИО"), ("position", "должность"),
                   ("department", "подразделение"), ("rate", "ставка"),
                   ("employment_type", "тип занятости"),
                   ("employment_category", "категория занятости"),
@@ -2427,7 +2431,8 @@ def case_data(case_id: int):
         return {
             # Поля отдаются все, какие есть в контракте входного файла: то, что
             # уходит в расчет, экономист должен видеть и проверить.
-            "employees": [{"code": e.code, "fio": e.fio, "position": e.position,
+            "employees": [{"code": e.code, "person_code": e.person_code,
+                            "fio": e.fio, "position": e.position,
                            "department": e.department, "rate": e.rate,
                            "employment": e.employment_type,
                            "category": e.employment_category,
@@ -2917,11 +2922,11 @@ def _solver_warnings(path):
 
 
 def _review_result(db, case_id, run_id, out):
-    """Агент проверки: пересказать предупреждения решателя экономисту.
+    """Агент проверки: сверить готовый план по всему пакету правил.
 
-    Решатель пишет их в лист результата, который в интерфейсе не виден.
-    Список — детерминированный, слова — модели: она называет числа и
-    говорит, на что смотреть, но ничего не добавляет от себя.
+    Числовые проверки остаются детерминированными. Модель получает их полный
+    структурированный результат и может найти противоречия между правилами,
+    но не может изменить план или придумать отсутствующие в пакете числа.
     """
     try:
         rows = _solver_warnings(out)
@@ -2930,33 +2935,54 @@ def _review_result(db, case_id, run_id, out):
                    agent="checker")
         db.commit()
         return
-    if not rows:
-        agents.say(db, case_id, "Проверки решателя замечаний не нашли.", agent="checker",
-                   payload={"kind": "review", "run_id": run_id, "строк": 0})
-        db.commit()
-        return
     lines = []
     for r in rows:
         where = " · ".join(str(x) for x in (r["объект"], r["месяц"]) if x not in (None, "", "—"))
         amount = (" — %s ₽" % _money(r["сумма"])) if isinstance(r["сумма"], (int, float)) else ""
         lines.append("%s, %s: %s%s%s" % (r["уровень"], r["раздел"], r["что"],
                                         (" (%s)" % where) if where else "", amount))
-    text = "Предупреждения решателя (%d):\n" % len(rows) + "\n".join("• " + x for x in lines[:12])
+    text = ("Предупреждения решателя (%d):\n" % len(rows) +
+            ("\n".join("• " + x for x in lines[:12]) if lines else "нет") )
     if len(lines) > 12:
         text += "\n• … и еще %d" % (len(lines) - 12)
-    # Слова — от модели, если она доступна; список остаётся как есть.
+    # Модель видит не только предупреждения решателя, но и независимую
+    # сверку входного файла с готовым планом. В строки передаём ограниченный
+    # объём: все состояния правил, факт и несколько самых узких мест.
+    evidence = []
+    try:
+        run = db.get(Run, run_id)
+        src = run.input_path if run else None
+        if src and os.path.exists(src):
+            import rules as rules_mod
+            for rule in rules_mod.check(src, out):
+                evidence.append({
+                    "правило": rule.get("правило"),
+                    "тип": rule.get("тип"),
+                    "состояние": rule.get("состояние"),
+                    "проверено": rule.get("проверено"),
+                    "нарушений": rule.get("нарушений"),
+                    "факт": rule.get("факт"),
+                    "предел": rule.get("предел_общий"),
+                    "строки": (rule.get("строки") or [])[:4],
+                })
+    except Exception as exc:  # noqa: BLE001 — числовая проверка не роняет расчет
+        evidence.append({"ошибка_пакета_проверок": str(exc)[:200]})
+    packet = json.dumps({"предупреждения": lines, "правила": evidence},
+                        ensure_ascii=False, default=str)
     name, model, _why = llm.provider()
     if name and name != "anthropic":
         try:
             raw = llm._call_openai_compatible(
-                "Предупреждения решателя по готовому плану ФОТ:\n" + "\n".join(lines),
+                "Пакет проверки готового плана ФОТ (JSON):\n" + packet,
                 "проверка", model, llm._endpoint(name), api_key=llm._key(name),
                 schema=llm._use_schema(name), no_thinking=llm._no_thinking(name),
                 insecure=llm._truthy(os.environ.get("FOT_LLM_INSECURE_TLS")),
-                system="Ты — агент проверки результата в сервисе планирования ФОТ. "
-                       "Экономисту нужно две-четыре фразы: что решатель отметил, с числами, "
-                       "и на что смотреть в первую очередь. Ничего не добавляй от себя, "
-                       "не советуй того, чего нет в списке.",
+                 system="Ты — независимый агент проверки результата в сервисе планирования ФОТ. "
+                        "Сверь все правила из JSON между собой, ищи пропуски, противоречия "
+                        "и подозрительные числа вроде ставки 0,86. Используй только числа и "
+                        "факты из JSON, ничего не выдумывай. Экономисту дай 4–6 коротких фраз: "
+                        "сначала нарушения, затем самые важные места для проверки. Если всё "
+                        "согласовано, так и скажи.",
                 shape='Ответь одним объектом JSON: {"reply": "текст для экономиста"}',
                 json_schema={"type": "object", "properties": {"reply": {"type": "string"}},
                              "required": ["reply"], "additionalProperties": False},
@@ -2966,7 +2992,8 @@ def _review_result(db, case_id, run_id, out):
         except Exception:  # noqa: BLE001 — без модели остаётся список
             pass
     agents.say(db, case_id, text, agent="checker",
-               payload={"kind": "review", "run_id": run_id, "строк": len(rows)})
+               payload={"kind": "review", "run_id": run_id,
+                        "строк": len(rows), "правил": len(evidence)})
     db.commit()
 
 

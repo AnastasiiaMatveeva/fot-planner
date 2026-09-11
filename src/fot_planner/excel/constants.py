@@ -21,6 +21,9 @@ SHEET_SUBSTITUTIONS = "правила_замещения"
 EMPLOYEE_COLUMN_ALIASES: dict[str, str] = {
     # Лист SHEET_EMPLOYEES / «сотрудники».
     "код строки": "id",
+    "табельный номер": "person_id",
+    "табельный": "person_id",
+    "person_id": "person_id",
     "фио": "full_name",
     "должность": "position",
     "подразделение": "department",

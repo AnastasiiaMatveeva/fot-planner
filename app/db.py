@@ -100,6 +100,7 @@ class Employee(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     case_id: Mapped[int | None] = mapped_column(ForeignKey("cases.id"), default=None)
     code: Mapped[str] = mapped_column(String(60))
+    person_code: Mapped[str | None] = mapped_column(String(60), default=None)
     fio: Mapped[str | None] = mapped_column(String(200), default=None)
     position: Mapped[str | None] = mapped_column(String(200), default=None)
     rate: Mapped[float | None] = mapped_column(Float, default=None)
@@ -500,6 +501,7 @@ _ADDED_COLUMNS = {
                    ("details", "TEXT")],
     "verdicts": [("grade", "VARCHAR(20)")],
     "employees": [
+        ("person_code", "VARCHAR(60)"),
         ("department", "VARCHAR(200)"),
         ("employment_type", "VARCHAR(40)"),
         ("employment_category", "VARCHAR(40)"),

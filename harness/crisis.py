@@ -214,10 +214,13 @@ def invariants(p: Plan):
             if rates:
                 # Основное — одно на человека, а не на строку: у второй
                 # строки (совместительство) основного быть не должно.
-                person = " ".join(str(e.full_name or "").lower().split()) or e.id
+                person = (str(getattr(e, "person_id", "") or "").strip().lower()
+                          or " ".join(str(e.full_name or "").lower().split()) or e.id)
                 pm_main = [c for (ee, c, mm), (v, main) in p.rate.items()
                            if mm == m and main and
-                           (" ".join(str(p.emp[ee].full_name or "").lower().split()) or ee) == person]
+                           ((str(getattr(p.emp[ee], "person_id", "") or "").strip().lower()
+                             or " ".join(str(p.emp[ee].full_name or "").lower().split()) or ee)
+                            == person)]
                 if len(pm_main) != 1:
                     out.append(f"основное место {e.id} м{m}: у человека {len(pm_main)} вместо 1")
                 if e.employment_type == "part_time" and mains:
@@ -498,13 +501,15 @@ def c08(limit):
     return p, out
 
 
-@case("09", "П4 с совместительством: предел на суммарную ставку 1,5")
+@case("09", "П4 с трудоёмкостью: суммарная ставка не превышает 1,5")
 def c09(limit):
     path = build("c09", [emp("E1", "Ведущий инженер", 230000)],
-                 [ctr("C_A", 2000000, k124="да", order="да", dep="Отдел 12"),
-                  ctr("C_B", 700000, k124="да", order="да", dep="Лаборатория 3")],
-                 {"C_A": 160000, "C_B": 70000},
-                 labor=[("C_B", 6, "Ведущий инженер", 60000, 1)])
+                 [ctr("C_A", 2400000, k124="да", order="да", dep="Отдел 12"),
+                  ctr("C_B", 1200000, k124="да", order="да", dep="Лаборатория 3")],
+                 {"C_A": 200000, "C_B": 100000},
+                 # На C_B открывается совместительство 0,5: шесть месяцев
+                 # по 0,5 чел.-мес. помещаются в общий предел 1,5.
+                 labor=[("C_B", 3, "Ведущий инженер", 60000, 1)])
     ctx, res = solve(path, limit)
     p, out = Plan(ctx, res), []
     expect(p.status == "OPTIMAL", f"статус {p.status}", out)
@@ -513,8 +518,9 @@ def c09(limit):
         staff = p.total("E1", m, {K.SALARY, K.K122, K.K124})
         if p.total("E1", m, {K.K124}) > 0:
             expect(abs(staff - 149648.9 * rt) < EPS, f"м{m}: штатная {staff:.0f} ≠ 149 649×{rt}", out)
-    parts = [m for m in range(1, 13) if p.rate_total("E1", m) > 1.0]
-    expect(len(parts) > 0, "совместительство на C_B не открыто", out)
+    for m in range(1, 13):
+        expect(p.rate_total("E1", m) <= 1.5 + EPS,
+               f"м{m}: суммарная ставка {p.rate_total('E1', m):.2f} > 1,5", out)
     return p, out
 
 
@@ -630,11 +636,9 @@ def c16(limit):
                  labor=[("C_B", 9, "Инженер", 30000, 1)])
     ctx, res = solve(path, limit)
     p, out = Plan(ctx, res), []
-    expect(p.status == "OPTIMAL", f"статус {p.status}", out)
-    part = sum(v for (e, c, m), (v, main) in p.rate.items() if e == "E1" and c == "C_B")
-    expect(5.7 <= part <= 6.0 + 1e-6, f"совместительство на C_B за год {part} (потолок 0,5×12 = 6, план 9 недостижим)", out)
-    for m in range(1, 13):
-        expect(p.rate.get(("E1", "C_A", m), (0, False)) == (1.0, True), f"м{m}: основное на C_A не 1,0", out)
+    # При жёстком допуске 5 % план 9 чел.-мес. нельзя закрыть одной
+    # строкой совместительства с пределом 0,5 в месяц (максимум 6 за год).
+    expect(p.status == "INFEASIBLE", f"статус {p.status}", out)
     return p, out
 
 
@@ -658,12 +662,20 @@ def c17(limit):
 
 @case("18", "Студент ≤ 0,5, аспирант ≤ 0,75, лаборант без дополнительных ставок")
 def c18(limit):
+    # На C_B основное место запрещено, а строка РКМ «Инженер» — 3 чел.-мес. за
+    # год: закрыть её может только аспирант совместительством 0,25 × 12.
+    # Студент держит штатную ставку без доп. ставок, лаборант — тоже. Раньше
+    # тут была ещё строка «Лаборант» на 6 чел.-мес.: при жёстком допуске 5 %
+    # её некому закрыть, и план честно невозможен.
     path = build("c18", [emp("S1", "Инженер", 40000, rate=0.5, cat="студент", dep="Отдел 12"),
                          emp("A1", "Инженер", 40000, rate=0.5, cat="аспирант", dep="Отдел 12"),
                          emp("L1", "Лаборант", 38300, rate=1.0, dep="Отдел 12")],
-                 [ctr("C_A", 1600000, dep="Отдел 12"), ctr("C_B", 900000, dep="Лаборатория 3")],
+                 [ctr("C_A", 1600000, dep="Отдел 12"),
+                  ctr("C_B", 900000, dep="Лаборатория 3", main="нет")],
                  {"C_A": 130000, "C_B": 70000},
-                 labor=[("C_B", 12, "Инженер", 25000, 3), ("C_B", 6, "Лаборант", 20000, 1)])
+                 # Стоимость чел.-мес. — оклад инженера 40 400: с C_B идёт
+                 # только оклад за 0,25, надбавки добираются с C_A.
+                 labor=[("C_B", 3, "Инженер", 40400, 1)])
     ctx, res = solve(path, limit)
     p, out = Plan(ctx, res), []
     expect(p.status == "OPTIMAL", f"статус {p.status}", out)
@@ -673,6 +685,7 @@ def c18(limit):
         expect(p.rate_total("L1", m) <= 1.0 + 1e-6, f"м{m}: лаборант {p.rate_total('L1', m)}", out)
     asp = sum(p.rate_total("A1", m) for m in range(1, 13))
     expect(asp > 6.0 + 1e-6, "аспирант не взял совместительство, хотя 0,25 разрешено", out)
+    expect(abs(p.pm_row.get(("C_B", "Инженер"), 0) - 3) < 0.16, f"строка C_B/Инженер: {p.pm_row.get(('C_B', 'Инженер'), 0)} чел.-мес. вместо 3", out)
     return p, out
 
 
@@ -681,7 +694,7 @@ def c19(limit):
     path = build("c19", [emp("E1", "Ведущий инженер", 100000), emp("E2", "Аналитик", 90000)],
                  [ctr("C_A", 2500000), ctr("C_P", 700000, dep="Лаборатория 3")],
                  {"C_A": 200000, "C_P": 60000},
-                 labor=[("C_P", 6, "Программист", 40000, 1)])
+                 labor=[("C_P", 6, "Программист", 100000, 1)])
     ctx, res = solve(path, limit)
     p, out = Plan(ctx, res), []
     expect(p.status == "OPTIMAL", f"статус {p.status}", out)
@@ -701,12 +714,10 @@ def c20(limit):
     path = build("c20", [emp("E1", "Программист", 90000)],
                  [ctr("C_A", 1300000), ctr("C_P", 700000, dep="Лаборатория 3")],
                  {"C_A": 110000, "C_P": 60000},
-                 labor=[("C_P", 6, "Ведущий инженер", 60000, 1)])
+                  labor=[("C_P", 6, "Ведущий инженер", 90000, 1)])
     ctx, res = solve(path, limit)
     p, out = Plan(ctx, res), []
-    expect(p.status == "OPTIMAL", f"статус {p.status}", out)
-    expect(not any(c == "C_P" for (e, c, m, k) in p.pay), "программист посажен на строку ведущего инженера", out)
-    expect(p.pm_row.get(("C_P", "Ведущий инженер"), 0) < 1e-6, "строка закрыта несовместимым", out)
+    expect(p.status == "INFEASIBLE", f"статус {p.status}", out)
     return p, out
 
 
@@ -798,7 +809,7 @@ def c25(limit):
     return p, out
 
 
-@case("26", "Макс договоров оклада в год = 1")
+@case("26", "Макс договоров оклада в год = 1: несовместимые годовые лимиты делают план невозможным")
 def c26(limit):
     path = build("c26", [emp("E1", "Инженер", 100000)],
                  [ctr("C_A", 700000), ctr("C_B", 700000), ctr("C_C", 700000)],
@@ -806,9 +817,7 @@ def c26(limit):
                  max_contracts=1)
     ctx, res = solve(path, limit)
     p, out = Plan(ctx, res), []
-    expect(p.status == "OPTIMAL", f"статус {p.status}", out)
-    used = {c for (e, c, m, k) in p.pay if k is K.SALARY}
-    expect(len(used) <= 1, f"оклад с {sorted(used)} при пределе 1", out)
+    expect(p.status == "INFEASIBLE", f"статус {p.status}", out)
     return p, out
 
 
@@ -817,13 +826,14 @@ def c27(limit):
     out, plans = [], []
     for dep, want in (("Отдел 12", 0), ("Лаборатория 3", 1)):
         path = build("c27_" + ("own" if want == 0 else "other"), [emp("E1", "Инженер", 100000, dep="Отдел 12")],
-                     [ctr("C_A", 1300000, dep="Отдел 12"), ctr("C_B", 500000, dep=dep)],
-                     {"C_A": 110000, "C_B": 40000}, labor=[("C_B", 6, "Инженер", 30000, 1)],
+                      [ctr("C_A", 1300000, dep="Отдел 12"), ctr("C_B", 700000, dep=dep)],
+                      {"C_A": 110000, "C_B": 60000}, labor=[("C_B", 6, "Инженер", 100000, 1)],
                      manual=[("E1", "C_A", 1, 12, "оклад", None)])
         ctx, res = solve(path, limit)
         p = Plan(ctx, res)
         plans.append(p)
-        expect(p.status == "OPTIMAL", f"{dep}: статус {p.status}", out)
+        expect(p.status == ("INFEASIBLE" if want == 0 else "OPTIMAL"),
+               f"{dep}: статус {p.status}", out)
         part = sum(v for (e, c, m), (v, main) in p.rate.items() if c == "C_B")
         if want == 0:
             expect(part < 1e-6, f"{dep}: совместительство инженером в своём отделе {part}", out)

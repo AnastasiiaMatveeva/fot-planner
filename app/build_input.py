@@ -64,21 +64,33 @@ def fill_employees(ws, rows, warn, year=None):
     if no_dates:
         warn.append("У сотрудников %s не задан срок работы — приняты границы "
                     "года плана."
-                    % ", ".join(sorted(no_dates)[:6]))
+                     % ", ".join(sorted(no_dates)[:6]))
+    headers = [str(c.value or "").strip().lower() for c in ws[1]]
+    if "табельный номер" not in headers:
+        ws.insert_cols(2)
+        ws.cell(1, 2).value = "табельный номер"
+        headers = [str(c.value or "").strip().lower() for c in ws[1]]
     _clear(ws)
     for e in rows:
-        ws.append([
-            e.code, e.fio, e.position, e.department or "", e.rate,
+        values = {
+            "код строки": e.code,
+            "табельный номер": e.person_code or e.code,
+            "фио": e.fio,
+            "должность": e.position,
+            "подразделение": e.department or "",
+            "ставка": e.rate,
             # Тип и категория занятости раньше проставлялись жестко: любой
             # сотрудник уходил в расчет как основное место. Совместительство
             # так выразить нельзя, а на нем держится половина модели.
-            e.employment_type or "по расчету",
-            e.employment_category or "основной",
-            e.salary,
-            e.date_from or ("01.01.%d" % year if year else ""),
-            e.date_to or ("31.12.%d" % year if year else ""),
-            e.allowed_contracts or None, e.forbidden_contracts or None,
-        ])
+            "тип занятости": e.employment_type or "по расчету",
+            "категория занятости": e.employment_category or "основной",
+            "зарплата": e.salary,
+            "дата начала": e.date_from or ("01.01.%d" % year if year else ""),
+            "дата окончания": e.date_to or ("31.12.%d" % year if year else ""),
+            "разрешенные договоры": e.allowed_contracts or None,
+            "запрещенные договоры": e.forbidden_contracts or None,
+        }
+        ws.append([values.get(name) for name in headers])
 
 
 def fill_contracts(ws, rows, warn, year=None):

@@ -21,6 +21,7 @@ from fot_planner.payment_kind import (
 
 EmploymentCategory = Literal["regular", "student", "graduate_student"]
 EmploymentType = Literal["auto", "main", "part_time"]
+MAX_LABOR_TOLERANCE = 0.05
 
 
 @dataclass
@@ -33,6 +34,10 @@ class Employee:
     department: str
     rate: float
     monthly_wage: float
+    # Идентификатор физического человека. ``id`` идентифицирует строку
+    # штатного расписания; несколько строк одного человека имеют один
+    # табельный номер.
+    person_id: str | None = None
     start_date: date | None = None
     end_date: date | None = None
     allowed_contracts: list[str] = field(default_factory=list)
@@ -335,7 +340,7 @@ class PlanningContext:
 class AllocationRecord:
     """Одна строка плана: с какого договора сколько заплатили сотруднику в месяце."""
 
-    employee_id: str  # табельный номер
+    employee_id: str  # код строки штатного расписания
     contract_id: str  # код договора / проекта
     year: int
     month: int  # 1–12

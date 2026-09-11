@@ -9,7 +9,13 @@ from fot_planner.contract_calendar import (
     payment_kind_enabled,
     payment_month_count,
 )
-from fot_planner.models import ConflictRecord, PAYMENT_KINDS, PaymentKind, PlanningContext
+from fot_planner.models import (
+    MAX_LABOR_TOLERANCE,
+    ConflictRecord,
+    PAYMENT_KINDS,
+    PaymentKind,
+    PlanningContext,
+)
 from fot_planner.open_rate_rules import (
     MAIN_QUARTERS_MAX,
     PART_QUARTERS_MAX,
@@ -100,6 +106,9 @@ def _labor_rows_by_group_only(ctx: PlanningContext) -> list[ConflictRecord]:
 
 
 def _person_key(employee) -> str:
+    person_id = str(getattr(employee, "person_id", "") or "").strip().lower()
+    if person_id:
+        return person_id
     name = str(getattr(employee, "full_name", "") or "").strip().lower()
     return " ".join(name.split()) or employee.id
 
@@ -109,7 +118,8 @@ def _employment_structure_conflicts(ctx: PlanningContext) -> list[ConflictRecord
 
     Совместительства без основного не бывает: внешний совместитель в модели
     не предусмотрен, основное место у каждого здесь. Строки одного человека
-    узнаются по ФИО.
+    узнаются по табельному номеру; ФИО используется только для старых файлов,
+    в которых отдельного номера ещё нет.
     """
     by_person: dict[str, list] = {}
     for e in ctx.employees:
@@ -154,6 +164,14 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
     conflicts += _employment_structure_conflicts(ctx)
     emp_ids = {e.id for e in ctx.employees}
     contract_ids = {c.id for c in ctx.contracts}
+
+    tolerance = float(ctx.salary_stability.goz_labor_tolerance)
+    if not 0 <= tolerance <= MAX_LABOR_TOLERANCE:
+        conflicts.append(ConflictRecord(
+            code="INVALID_LABOR_TOLERANCE",
+            message=("Допуск трудоёмкости должен быть от 0 до 5 %, "
+                     f"получено {tolerance * 100:g} %"),
+        ))
 
     for e in ctx.employees:
         if e.rate <= 0:

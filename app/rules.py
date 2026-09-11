@@ -130,7 +130,9 @@ def _read_input(path):
         if not code:
             continue
         data["employees"].append({
-            "code": str(code), "fio": row.get("фио") or str(code),
+            "code": str(code),
+            "person_code": str(row.get("табельный номер") or code),
+            "fio": row.get("фио") or str(code),
             "position": str(row.get("должность") or ""),
             "department": str(row.get("подразделение") or ""),
             "rate": _num(row.get("ставка")) or 1.0,

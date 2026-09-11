@@ -46,6 +46,7 @@ from fot_planner.models import (
     DeficitRecord,
     LaborPaymentAttribution,
     LaborPmAttribution,
+    MAX_LABOR_TOLERANCE,
     ManualAssignment,
     ManualProhibition,
     OpenRateAttribution,
@@ -82,6 +83,8 @@ BIG_M = 1e7
 # При use=1 переменная alloc должна быть положительной (исключение нулевых начислений при активном use).
 MIN_USE_ALLOC = 1.0
 # Минимальная сумма на договоре при use=1 для переменной выплаты (запрет хвостов 1–100 ₽).
+# Владелец продукта 11.09.2026: рублёвых хвостов «24 999 + 1» быть не должно —
+# рубль уходит в надбавку целиком, а не отдельной выплатой.
 MIN_FLEX_FRAGMENT_AMOUNT = 1_000.0
 UNIFORM_SPEND_TOLERANCE_AMOUNT = 1_000.0
 UNIFORM_SPEND_TOLERANCE_RATIO = 0.01
@@ -106,15 +109,26 @@ def _add_contract_remainder_rules(model, contracts, alloc):
 
     Минимального размера остатка нет. Порог «ноль либо не меньше 1 000 ₽» снят
     владельцем продукта 11.09.2026: он делал неразрешимыми планы, где любое
-    размещение оставляет на договоре хвост меньше порога (кризис-случаи 09 и
-    26), а делового смысла в нём не нашлось. Осталась цель: чем меньше
+    размещение оставляет на договоре хвост меньше порога, а делового смысла в
+    нём не нашлось. Осталась цель: чем меньше
     договоров с неосвоенным ФОТ, тем лучше.
     """
     model.has_contract_remainder = pyo.Var(list(contracts), domain=pyo.Binary)
     for cid, contract in contracts.items():
-        spent = _sum_terms(alloc[k] for k in alloc if k[1] == cid)
+        alloc_terms = [alloc[k] for k in alloc if k[1] == cid]
+        # Для пустого договора ``remaining`` — обычное число. Сравнение
+        # такого числа с Pyomo-выражением даёт Python-булево ``True`` и
+        # ConstraintList его отвергает. При этом признак остатка можно
+        # определить напрямую: неиспользованный договор с положительным
+        # ФОТ всегда имеет остаток.
+        if not alloc_terms:
+            model.cons.add(model.has_contract_remainder[cid] ==
+                           int(float(contract.total_fot) > CONTRACT_REMAINDER_EPS))
+            continue
+        spent = _sum_terms(alloc_terms)
         remaining = contract.total_fot - spent
         flag = model.has_contract_remainder[cid]
+        model.cons.add(remaining >= -CONTRACT_REMAINDER_EPS)
         model.cons.add(remaining <= CONTRACT_REMAINDER_EPS
                        + max(0.0, contract.total_fot) * flag)
     return _sum_terms(model.has_contract_remainder.values())
@@ -168,6 +182,9 @@ def _contract_allows_payment(contract, kind: PaymentKind) -> bool:
 
 
 def _employee_person_key(employee) -> str:
+    person_id = str(getattr(employee, "person_id", "") or "").strip().lower()
+    if person_id:
+        return person_id
     name = str(getattr(employee, "full_name", "") or "").strip().lower()
     return " ".join(name.split()) or employee.id
 
@@ -1027,9 +1044,6 @@ def solve(
                 total_due = employee_monthly_payment_due(e)
                 if total_due <= 0:
                     continue
-                has_payment_vars = any(k[0] == e.id and k[2] == m for k in alloc_keys)
-                if not has_payment_vars:
-                    continue
                 agg_key = (e.id, m)
                 deficit_agg_keys.append(agg_key)
     deficit_agg_key_set = set(deficit_agg_keys)
@@ -1133,6 +1147,10 @@ def solve(
             labor_employee_balance_keys, domain=pyo.NonNegativeReals, bounds=(0, BIG_M)
         )
     model.cons = pyo.ConstraintList()
+    # Технический маркер для условий, которые невозможно выразить как
+    # нетривиальное булево выражение (например, нет ни одного источника
+    # выплаты для активной строки).
+    model.infeasible_marker = pyo.Var(domain=pyo.NonNegativeReals)
 
     is_main = {}
     open_rate_q = {}
@@ -1558,6 +1576,12 @@ def solve(
                 alloc[k] for k in alloc_keys if k[0] == e.id and k[2] == m
             ]
             if not all_allocs:
+                if allow_deficit and (e.id, m) in deficit_agg_key_set:
+                    model.cons.add(deficit[(e.id, m)] == total_due)
+                else:
+                    # Активная строка с положенной зарплатой не может исчезнуть
+                    # из модели только потому, что ни один договор ей не подходит.
+                    model.cons.add(model.infeasible_marker <= -1)
                 continue
 
             if allow_deficit:
@@ -1801,10 +1825,38 @@ def solve(
                 model.cons.add(model.year_use[(e_id, c_id)] >= uvar)
             model.cons.add(model.year_use[(e_id, c_id)] <= _sum_terms(month_vars))
 
-        for e in ctx.employees:
-            flags = [model.year_use[(e.id, c_id)] for e_id, c_id in year_contract_keys if e_id == e.id]
-            if flags:
-                model.cons.add(_sum_terms(flags) <= max_contracts_per_year)
+        # Лимит относится к физическому человеку, а не к строке штатного
+        # расписания. Если две его должности получают оклад с одного договора,
+        # договор считается один раз.
+        person_contract_keys = []
+        person_rows = defaultdict(list)
+        for employee in ctx.employees:
+            person_rows[_employee_person_key(employee)].append(employee.id)
+        for person, employee_ids in person_rows.items():
+            contracts_for_person = sorted({
+                c_id for e_id, c_id in year_contract_keys if e_id in employee_ids
+            })
+            person_contract_keys.extend((person, c_id) for c_id in contracts_for_person)
+        if person_contract_keys:
+            model.person_year_use = pyo.Var(person_contract_keys, domain=pyo.Binary)
+            for person, c_id in person_contract_keys:
+                row_flags = [
+                    model.year_use[(e_id, c_id)]
+                    for e_id in person_rows[person]
+                    if (e_id, c_id) in model.year_use
+                ]
+                flag = model.person_year_use[(person, c_id)]
+                if row_flags:
+                    for row_flag in row_flags:
+                        model.cons.add(flag >= row_flag)
+                    model.cons.add(flag <= _sum_terms(row_flags))
+                else:
+                    model.cons.add(flag == 0)
+            for person in person_rows:
+                flags = [model.person_year_use[(person, c_id)]
+                         for p, c_id in person_contract_keys if p == person]
+                if flags:
+                    model.cons.add(_sum_terms(flags) <= max_contracts_per_year)
 
     if uniform_dev_keys:
         for key in uniform_dev_keys:
@@ -1830,12 +1882,16 @@ def solve(
         amount_expr = (
             labor_payment_terms_for_row(labor_pay, lp_idx, months) if labor_payment_keys else None
         )
-        if pm_expr is None and amount_expr is None:
-            continue
-
-        tol = stab.goz_labor_tolerance
+        tol = min(max(float(stab.goz_labor_tolerance), 0.0), MAX_LABOR_TOLERANCE)
         pm_low = (1.0 - tol) * plan_pm
         pm_high = (1.0 + tol) * plan_pm
+        pm_missing = pm_expr is None or (isinstance(pm_expr, (int, float)) and pm_expr == 0)
+        amount_missing = amount_expr is None or (isinstance(amount_expr, (int, float)) and amount_expr == 0)
+        if pm_missing:
+            model.cons.add(model.infeasible_marker <= -1)
+        else:
+            model.cons.add(pm_expr >= pm_low)
+            model.cons.add(pm_expr <= pm_high)
         if pm_expr is not None and lp_idx in labor_dev_keys:
             model.cons.add(model.labor_dev[lp_idx] >= pm_expr - pm_high)
             model.cons.add(model.labor_dev[lp_idx] >= pm_low - pm_expr)
@@ -1847,13 +1903,20 @@ def solve(
                     continue
                 plan_m = lp.monthly.get(m, 0.0)
                 month_expr = labor_pm_terms_for_row(labor_pm, lp_idx, [m])
-                if month_expr is None:
+                if month_expr is None or (isinstance(month_expr, (int, float)) and month_expr == 0):
+                    model.cons.add(model.infeasible_marker <= -1)
                     continue
+                model.cons.add(month_expr >= (1.0 - tol) * plan_m)
+                model.cons.add(month_expr <= (1.0 + tol) * plan_m)
                 model.cons.add(model.labor_month_dev[key] >= month_expr - (1.0 + tol) * plan_m)
                 model.cons.add(model.labor_month_dev[key] >= (1.0 - tol) * plan_m - month_expr)
-        if amount_expr is not None and lp_idx in labor_amount_dev_keys and plan_amount > 0:
+        if plan_amount > 0 and amount_missing:
+            model.cons.add(model.infeasible_marker <= -1)
+        if amount_expr is not None and not amount_missing and lp_idx in labor_amount_dev_keys and plan_amount > 0:
             amt_low = (1.0 - tol) * plan_amount
             amt_high = (1.0 + tol) * plan_amount
+            model.cons.add(amount_expr >= amt_low)
+            model.cons.add(amount_expr <= amt_high)
             model.cons.add(model.labor_amount_dev[lp_idx] >= amount_expr - amt_high)
             model.cons.add(model.labor_amount_dev[lp_idx] >= amt_low - amount_expr)
         if (

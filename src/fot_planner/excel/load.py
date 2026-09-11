@@ -501,6 +501,11 @@ def _load_employees(
                 department=str(r.get("department", "")).strip(),
                 rate=float(r["rate"]),
                 monthly_wage=_resolve_monthly_wage(r),
+                person_id=(
+                    str(r.get("person_id")).strip()
+                    if _has_value(r.get("person_id"))
+                    else None
+                ),
                 start_date=_parse_date(r.get("start_date")),
                 end_date=_parse_date(r.get("end_date")),
                 allowed_contracts=_split_list(r.get("allowed_contracts")),
@@ -1054,4 +1059,3 @@ def _load_weights(settings: pd.DataFrame) -> OptimizationWeights:
             setattr(w, attr, float(row[col]))
 
     return w
-

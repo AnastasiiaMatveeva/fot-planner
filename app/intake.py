@@ -369,6 +369,7 @@ def _store_passport(db, case, passport, doc):
         return _store_context(db, ctx, doc)
     for e in passport.get("employees") or []:
         db.add(Employee(code=str(e.get("code") or ""),
+                        person_code=str(e.get("person_code") or e.get("code") or ""),
                         fio=e.get("fio"), position=e.get("pos"),
                         department=e.get("department"),
                         employment_type=e.get("employment_type"),
@@ -463,7 +464,8 @@ def _store_context(db, ctx, doc):
 
     counts = {}
     for e in ctx.employees:
-        db.add(Employee(code=e.id, fio=e.full_name, position=e.position,
+        db.add(Employee(code=e.id, person_code=e.person_id or e.id,
+                        fio=e.full_name, position=e.position,
                         department=e.department or None, rate=e.rate,
                         salary=e.monthly_wage,
                         employment_type=_EMPLOYMENT_RU.get(e.employment_type),

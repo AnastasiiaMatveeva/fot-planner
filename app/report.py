@@ -84,6 +84,7 @@ def _extra_input(path):
     for row in _rows_of(wb["сотрудники"]):
         if row.get("код строки"):
             emp[str(row["код строки"])] = {
+                "табельный": str(row.get("табельный номер") or row.get("код строки")),
                 "категория занятости": str(row.get("категория занятости") or "").strip().lower(),
                 "тип занятости": str(row.get("тип занятости") or "").strip().lower(),
             }
@@ -386,7 +387,7 @@ def report(input_path, result_path):
                          else ("основное место работы" if months_main == months_on
                                else "основное / совместительство")))
             register.append({
-                "табельный": e["code"], "отдел": e["department"] or None, "фио": e["fio"],
+                "табельный": e.get("person_code") or e["code"], "отдел": e["department"] or None, "фио": e["fio"],
                 "категория персонала": cat, "должность": e["position"], "занятость": how,
                 "тип занятости": ("внешний совместитель" if outer_part else "основной"),
                 "лицевой счет оклада": acc, "договор": code,
@@ -428,7 +429,7 @@ def report(input_path, result_path):
                 "макс совм": max(part_vals) if part_vals else None,
             })
         rates_tbl.append({
-            "табельный": e["code"], "фио": e["fio"], "штатная": e["rate"],
+            "табельный": e.get("person_code") or e["code"], "фио": e["fio"], "штатная": e["rate"],
             "категория занятости": cat_emp or None,
             "тип занятости": ("внешний совместитель" if outer_part else None),
             "договоры": contracts_r,
@@ -464,7 +465,7 @@ def report(input_path, result_path):
             if p["amount"]:
                 tot[p["month"] - 1] = (tot[p["month"] - 1] or 0.0) + p["amount"]
                 org_m[p["month"] - 1] += p["amount"]
-        monthly.append({"табельный": e["code"], "фио": e["fio"], "строки": lines,
+        monthly.append({"табельный": e.get("person_code") or e["code"], "фио": e["fio"], "строки": lines,
                         "итого": [_r(v) if v is not None else None for v in tot],
                         "год": _r(sum(v or 0.0 for v in tot))})
 
@@ -502,7 +503,7 @@ def report(input_path, result_path):
         if not limit or not rate:
             continue
         total = _sum(rr, {"оклад", "122", "124"})
-        p4.append({"табельный": ecode, "фио": rr[0]["fio"], "месяц": m,
+        p4.append({"табельный": emp_extra.get(ecode, {}).get("табельный") or ecode, "фио": rr[0]["fio"], "месяц": m,
                    "оклад": _r(_sum(rr, {"оклад"})), "122": _r(_sum(rr, {"122"})),
                    "124": _r(_sum(rr, {"124"})), "итого": _r(total), "ставка": _r(rate),
                    "предел": _r(limit * rate), "запас": _r(limit * rate - total),
@@ -561,7 +562,7 @@ def report(input_path, result_path):
                 sum_m[i] += pay_m[i] or 0.0
                 if rate_m[i]:
                     heads_m[i] += 1
-            people.append({"табельный": ecode, "фио": fio, "должность": position,
+            people.append({"табельный": emp_extra.get(ecode, {}).get("табельный") or ecode, "фио": fio, "должность": position,
                            "ставка": rate_m, "начислено": pay_m,
                            "средняя": [(_r(pay_m[i] / rate_m[i]) if rate_m[i] else None)
                                        for i in range(12)],
@@ -625,7 +626,7 @@ def report(input_path, result_path):
     settings = [{"имя": k, "значение": st.get(k)} for k in
                 ("допуск трудоёмкости", "макс договоров оклада в год", "разрешить дефицит")
                 if st.get(k) is not None]
-    deficits = [{"табельный": d["emp"], "фио": d["fio"], "месяц": d["month"],
+    deficits = [{"табельный": emp_extra.get(d["emp"], {}).get("табельный") or d["emp"], "фио": d["fio"], "месяц": d["month"],
                  "положено": _r(d["due"]), "выплачено": _r(d["paid"]), "дефицит": _r(d["gap"]),
                  "причина": d["why"]} for d in (res.get("deficits") or []) if d["gap"] > 0.5]
     return {

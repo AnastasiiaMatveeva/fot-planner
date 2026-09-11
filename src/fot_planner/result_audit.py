@@ -20,9 +20,20 @@ OPTIMAL достаётся плану со ставкой 0,86 — нефизи�
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 
-from fot_planner.models import AuditViolation, PlanningResult
+from fot_planner.contract_calendar import contract_allows_payment_month, payment_kind_enabled
+from fot_planner.labor_rules import planned_labor_amount
+from fot_planner.models import (
+    MAX_LABOR_TOLERANCE,
+    AuditViolation,
+    PaymentKind,
+    PlanningResult,
+    labor_row_id,
+)
+from fot_planner.payment_split import employee_monthly_payment_due
+from fot_planner.validation import employee_active_in_month
 
 #: Шаг ставки. Кадровое оформление меньшей доли не знает: приказом открывают
 #: четверть, половину, три четверти, целую.
@@ -91,6 +102,155 @@ def _is_step(value: float) -> bool:
     return abs(value / RATE_STEP - round(value / RATE_STEP)) <= RATE_EPS
 
 
+def _person_key(employee) -> str:
+    number = str(getattr(employee, "person_id", "") or "").strip().lower()
+    if number:
+        return number
+    return " ".join(str(getattr(employee, "full_name", "") or "").lower().split()) or employee.id
+
+
+@check("SALARY-001", "Полная месячная зарплата")
+def _full_salary(ctx, result: PlanningResult) -> list[AuditViolation]:
+    """План не может молча потерять активную строку сотрудника."""
+    if not getattr(ctx, "contracts", None):
+        return []
+    paid = defaultdict(float)
+    for a in result.allocations:
+        paid[(a.employee_id, a.month)] += float(a.amount)
+    for d in result.deficits:
+        paid[(d.employee_id, d.month)] += float(d.amount)
+    out = []
+    for e in ctx.employees:
+        due = employee_monthly_payment_due(e)
+        if due <= 0:
+            continue
+        for month in range(1, 13):
+            if not employee_active_in_month(e, ctx.year, month):
+                continue
+            actual = paid[(e.id, month)]
+            if abs(actual - due) > 1.0:
+                out.append(AuditViolation(
+                    rule_id="SALARY-001", severity="error",
+                    message=(f"{_who(ctx, e.id)}, {_month_name(month)}: выплачено "
+                             f"{_fmt(actual)} ₽ вместо {_fmt(due)} ₽"),
+                    employee_id=e.id, month=month, actual=round(actual, 2),
+                    expected="полная месячная зарплата"))
+    return out
+
+
+@check("PAYMENT-001", "Разрешённый вид выплаты и срок")
+def _payment_window(ctx, result: PlanningResult) -> list[AuditViolation]:
+    contracts = {c.id: c for c in getattr(ctx, "contracts", [])}
+    if not contracts:
+        return []
+    out = []
+    for a in result.allocations:
+        if a.amount <= 0.01:
+            continue
+        c = contracts.get(a.contract_id)
+        if c is None:
+            continue
+        if not payment_kind_enabled(c, a.payment_kind):
+            out.append(AuditViolation(
+                rule_id="PAYMENT-001", severity="error",
+                message=(f"{_who(ctx, a.employee_id)}, {_month_name(a.month)}, "
+                         f"договор {a.contract_id}: вид {a.payment_kind.name} запрещён"),
+                employee_id=a.employee_id, contract_id=a.contract_id, month=a.month,
+                expected="вид разрешён договором"))
+        elif not contract_allows_payment_month(c, ctx.year, a.month, a.payment_kind):
+            out.append(AuditViolation(
+                rule_id="PAYMENT-001", severity="error",
+                message=(f"{_who(ctx, a.employee_id)}, {_month_name(a.month)}, "
+                         f"договор {a.contract_id}: выплата вне окна"),
+                employee_id=a.employee_id, contract_id=a.contract_id, month=a.month,
+                expected="в пределах срока договора и выплат"))
+    return out
+
+
+@check("LABOR-001", "Трудоёмкость в пределах допуска")
+def _labor_tolerance(ctx, result: PlanningResult) -> list[AuditViolation]:
+    plans = getattr(ctx, "labor_plans", None) or []
+    if not plans:
+        return []
+    pm = defaultdict(float)
+    amount = defaultdict(float)
+    for a in result.labor_pm_attributions:
+        pm[(a.labor_row_id, a.month)] += float(a.person_months)
+    for a in result.labor_payment_attributions:
+        amount[a.labor_row_id] += float(a.amount)
+    tol = min(max(float(ctx.salary_stability.goz_labor_tolerance), 0.0), MAX_LABOR_TOLERANCE)
+    out = []
+    for lp in plans:
+        row = labor_row_id(lp)
+        target_amount = planned_labor_amount(lp)
+        actual_pm = sum(pm[(row, m)] for m in range(1, 13))
+        if abs(actual_pm - lp.person_months) > max(0.01, abs(lp.person_months) * tol + 1e-6):
+            out.append(AuditViolation(
+                rule_id="LABOR-001", severity="error",
+                message=(f"{lp.contract_id}/{lp.position or lp.equivalence_group}: "
+                         f"{_fmt(actual_pm)} чел.-мес. вместо {_fmt(lp.person_months)} "
+                         f"(допуск {tol * 100:g} %)"),
+                contract_id=lp.contract_id, actual=round(actual_pm, 4),
+                expected=f"{lp.person_months} ± {tol * 100:g} %"))
+        if target_amount > 0 and abs(amount[row] - target_amount) > max(1.0, target_amount * tol):
+            out.append(AuditViolation(
+                rule_id="LABOR-001", severity="error",
+                message=(f"{lp.contract_id}/{lp.position or lp.equivalence_group}: "
+                         f"{_fmt(amount[row])} ₽ по трудоёмкости вместо "
+                         f"{_fmt(target_amount)} ₽ (допуск {tol * 100:g} %)"),
+                contract_id=lp.contract_id, actual=round(amount[row], 2),
+                expected=f"{target_amount} ± {tol * 100:g} %"))
+    return out
+
+
+@check("PERSON-001", "Ограничения человека")
+def _person_limits(ctx, result: PlanningResult) -> list[AuditViolation]:
+    employees = {e.id: e for e in getattr(ctx, "employees", [])}
+    if not employees:
+        return []
+    by_person = defaultdict(list)
+    for r in result.open_rate_attributions:
+        employee = employees.get(r.employee_id)
+        key = _person_key(employee) if employee is not None else str(r.employee_id)
+        by_person[key].append(r)
+    out = []
+    for key, rows in by_person.items():
+        for month in range(1, 13):
+            active = [r for r in rows if r.month == month and r.open_rate > RATE_EPS]
+            total = sum(r.open_rate for r in active)
+            if total > 1.5 + RATE_EPS:
+                out.append(AuditViolation(
+                    rule_id="PERSON-001", severity="error",
+                    message=f"табельный номер {key}, {_month_name(month)}: ставка {total:g} > 1,5",
+                    month=month, actual=round(total, 6), expected="не больше 1,5"))
+    return out
+
+
+@check("FOT-001", "ФОТ договора и касса")
+def _contract_money(ctx, result: PlanningResult) -> list[AuditViolation]:
+    contracts = {c.id: c for c in getattr(ctx, "contracts", [])}
+    if not contracts:
+        return []
+    spent = defaultdict(float)
+    for a in result.allocations:
+        spent[a.contract_id] += float(a.amount)
+    out = []
+    for cid, c in contracts.items():
+        if spent[cid] > float(c.total_fot) + 1.0:
+            out.append(AuditViolation(
+                rule_id="FOT-001", severity="error",
+                message=f"договор {cid}: выплаты {_fmt(spent[cid])} ₽ выше ФОТ {_fmt(c.total_fot)} ₽",
+                contract_id=cid, actual=round(spent[cid], 2), expected=str(c.total_fot)))
+    for b in result.contract_balances:
+        if b.closing_balance < -1.0:
+            out.append(AuditViolation(
+                rule_id="FOT-001", severity="error",
+                message=f"договор {b.contract_id}, {_month_name(b.month)}: касса { _fmt(b.closing_balance) } ₽ ниже нуля",
+                contract_id=b.contract_id, month=b.month, actual=round(b.closing_balance, 2),
+                expected="не ниже нуля"))
+    return out
+
+
 @check("RATE-001", "Шаг открытой ставки")
 def _rate_step(ctx, result: PlanningResult) -> list[AuditViolation]:
     """Открытая ставка кратна 0,25 и не отрицательна.
@@ -122,9 +282,20 @@ def _rate_step(ctx, result: PlanningResult) -> list[AuditViolation]:
 
 
 def _fmt(value: float) -> str:
-    """Число по-русски: запятая и без хвоста нулей."""
-    text = ("%.4f" % value).rstrip("0").rstrip(".")
-    return (text or "0").replace(".", ",")
+    """Число по-русски: тысячи через пробел, запятая, без хвоста нулей.
+
+    Так экономист видит суммы везде в сервисе («160 000 ₽»); ставка 0,86 при
+    этом остаётся ставкой, а не «0,8600».
+    """
+    text = ("%.4f" % value).rstrip("0").rstrip(".") or "0"
+    sign, text = ("-", text[1:]) if text.startswith("-") else ("", text)
+    whole, _, frac = text.partition(".")
+    groups = []
+    while len(whole) > 3:
+        groups.insert(0, whole[-3:])
+        whole = whole[:-3]
+    groups.insert(0, whole)
+    return sign + " ".join(groups) + ("," + frac if frac else "")
 
 
 def audit(ctx, result: PlanningResult) -> AuditReport:
