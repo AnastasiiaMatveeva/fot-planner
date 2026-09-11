@@ -34,7 +34,9 @@
 Технические решения с причинами находятся в [`architecture/`](architecture/):
 
 - [`ADR-labor-attribution.md`](architecture/ADR-labor-attribution.md);
-- [`ADR-solver-performance.md`](architecture/ADR-solver-performance.md).
+- [`ADR-solver-performance.md`](architecture/ADR-solver-performance.md);
+- [`ADR-local-harness.md`](architecture/ADR-local-harness.md) — локальный слой
+  версий, решений и проверок по ТЗ развития агентов.
 
 ## Действующая работа по развитию агентов
 
@@ -43,6 +45,10 @@
   документ описывает целевую доработку, а не уже реализованные возможности.
 - [`IMPLEMENTATION-STATUS.md`](IMPLEMENTATION-STATUS.md) — текущий пакет,
   уточнения к ТЗ, свидетельства проверок, пробелы и следующий шаг.
+- [`requirements-map.json`](requirements-map.json) — машиночитаемая карта:
+  способности каталога с фактическими обработчиками, 40 требований ТЗ со
+  статусом и пробелом, связь свода правил с случаями. Проверяется
+  `scripts/check_requirements_map.py` в приёмке.
 
 Предметные правила остаются в канонических документах выше. Локальные пакеты
 L0–L5 сохраняют автономный demo-ui; интеграция I1/I2 требует отдельного поручения.

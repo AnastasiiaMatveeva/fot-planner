@@ -37,7 +37,7 @@ ID требований записываются с областью, напри
 
 | Пакет | Состояние | Следующее обязательство |
 | --- | --- | --- |
-| L0 | in_progress: начата регистрация и исходная сверка | Полная инвентаризация, карта требований/пробелов, ADR и замеры производительности |
+| L0 | done: инвентаризация, карта требований, ADR и baseline (L0.3) | Проверить критерии L0 и начать L1 |
 | L1 | not_started | История, снимки, решения, атомарность, восстановление и миграции на изолированных данных |
 | L2 | not_started | Каталог, применимость, область исправлений и версионные эталоны |
 | L3 | частично: QA-003 существующего harness; остальное not_started | Полнота предметных проверок, раздельные статусы, сравнение кандидатов |
@@ -180,4 +180,70 @@ Stop сохраняет старый десятиминутный кеш и не
 Следующий пакет работы: завершить пункты L0 — инвентаризацию обработчиков,
 машинную карту требований/пробелов, ADR и воспроизводимый performance baseline.
 Экономические правила, UI, `app/data/` и `.env` этим изменением не затронуты.
-Изменения локальные, без commit/push и без миграции данных.
+Закоммичено 11.09.2026 (`2e509a4`) после строгого quick: шесть частей passed.
+
+## Checkpoint L0.3 — инвентаризация ролей, карта требований, ADR, baseline
+
+Дата / исполнитель: 11.09.2026, Claude (Fable); не предметный утверждающий.
+Пакет / часть / requirement IDs: L0 целиком; `FOT-HARNESS-TZ-001/CAP-002`
+(инвентаризация), `QA-001` (карта, частично), `NFR-001` (baseline измерен),
+`DOC-002`.
+Исходный commit / состояние дерева: `2e509a4`, дерево чистое.
+
+### Инвентаризация девяти ключей раздела 7
+
+Проверено чтением маршрутов `@app.*` в `app/main.py`, вызовов
+`agents.working / say / handoff` и обработчиков; не по тексту `does`.
+
+| Ключ | Обработчик | Модель | Проверки | Вывод |
+| --- | --- | --- | --- | --- |
+| intake | `_process`, `intake._store_context` (шаблон, без модели), `intake._store_passport` + `llm.freeform` (незнакомая форма), `decide_proposals` | optional | `harness/run.py` 10 случаев (нужна модель); `demo_offline` для шаблона | implemented |
+| tuning | `post_message` → `chat.reply` (модель классифицирует) → `parse_settings/parse_months/apply_settings` (код) | optional | ч05–ч17 | implemented |
+| solver | `_solve` → CLI `fot-planner solve` → `optimizer.solve` + `result_audit.audit` | none | 31 crisis, 15 audit, demo_offline | implemented |
+| infeasible | `_explain_failure`: сверка с реестром и опыты решателем с одним ослабленным условием | none | нет автоматического случая; только demo_run.py по API | implemented, tests not_run |
+| scenario | **нет**: ни маршрута, ни вызова — только запись в каталоге | — | нет | catalogue_only, `real=True` неверно |
+| norms | `intake.run_norms` → дифф справочника → `POST /api/document/{id}/reference` | required | случаи разбора приказа/справки/письма (нужна модель) | implemented |
+| checker | `_review_result`: пакет из 16 условий `app/rules.py` + предупреждения; модель только пересказывает | optional | нет | implemented, tests not_run |
+| memo | **нет**: только запись в каталоге | — | нет | catalogue_only, `real=True` неверно |
+| reconcile | нет | — | нет | declared, `real=False` честно |
+
+Что переиспользовано: существующие стенды и каталог; ничего в коде
+обработчиков не менялось.
+
+Файлы и версии:
+- `docs/requirements-map.json` — карта: 9 способностей, 40 требований ТЗ
+  (все ID раздела 5), связь свода правил с случаями через сам свод;
+- `scripts/check_requirements_map.py` — валидатор карты, часть приёмки
+  «карта требований» (`scripts/parts.py`), протокол `cases-v1`;
+- `docs/architecture/ADR-local-harness.md` — хранилище, service layer,
+  канонический JSON `fot-json-v1`, версии, каталог, имена профилей CLI,
+  порог NFR-001;
+- `docs/evidence/FOT-HARNESS-TZ-001/L0.3-baseline.json` — три прогона.
+
+Команды / среда / exit codes (Windows 10, Python 3.11.9):
+
+```text
+.venv/Scripts/python.exe scripts/check_requirements_map.py            → 0, 6 из 6
+.venv/Scripts/python.exe scripts/check_requirements_map.py --map <испорченная копия> → 1, 5 провалов из 6
+scripts/demo_offline.py --limit 240 --out <run1..3>                    → 0 ×3, OPTIMAL
+.venv/Scripts/python.exe scripts/check.py --quick --strict --report docs/evidence/FOT-HARNESS-TZ-001/L0.3-quick.json
+```
+
+Положительные случаи: к01–к06 на действующей карте; три прогона baseline
+с одинаковой суммой выплат 14 793 893 ₽.
+Отрицательные случаи: испорченная копия карты (выдуманный случай ч99,
+пропущенный INT-003, несуществующий файл, `implemented` без обработчика,
+скрытое расхождение `real` с каталогом) — валидатор краснеет по каждому
+пункту, к01–к05 ПРОВАЛ.
+Evidence refs / hashes: `L0.3-baseline.json` (медиана решателя 28,6 с,
+предел 31,46 с), `L0.3-quick.json` (run_id внутри).
+Миграция / restart / rollback: не требуются; откат — удалить четыре файла и
+строку части в `scripts/parts.py`.
+Непройденное / not_run / known debt: T-* ТЗ по-прежнему `not_run`; у infeasible
+и checker нет случаев; входной файл baseline не заморожен побайтно (см.
+limitations в evidence).
+Открытое предметное решение и ответственный: `real=True` у scenario и memo —
+снять флаг или реализовать обработчик; решение владельца продукта.
+Следующий конкретный шаг: L1 — миграции на изолированной копии, RunManifest
+и артефакты по ADR, operation ID для `solve` и `message` (RUN-001),
+исправление `_close_orphans` (RUN-002).

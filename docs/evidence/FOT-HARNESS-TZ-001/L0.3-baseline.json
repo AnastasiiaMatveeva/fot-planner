@@ -1,0 +1,51 @@
+{
+  "requirement": "FOT-HARNESS-TZ-001/NFR-001",
+  "checkpoint": "L0.3",
+  "date": "2026-09-11",
+  "command": "scripts/demo_offline.py --limit 240 --out <run_i>",
+  "input": "data/demo (4 файла), справочник docs/ui/demo_input.xlsx, без обращений к модели",
+  "code_head": "2e509a4d1cd45b6a4989398b50e3a4a9c31f5932",
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.19045-SP0",
+    "pyomo": "6.10.0",
+    "highspy": "1.14.0"
+  },
+  "runs": [
+    {
+      "run": 1,
+      "solver_status": "OPTIMAL",
+      "solve_seconds": 29.6,
+      "total_paid": 14793893,
+      "wall_seconds_input_to_result": 32.1,
+      "input_sha256": "0242eaf52bef61d2ca616ec45a44e50405857a99ffd906b583078124c434b91d"
+    },
+    {
+      "run": 2,
+      "solver_status": "OPTIMAL",
+      "solve_seconds": 22.6,
+      "total_paid": 14793893,
+      "wall_seconds_input_to_result": 25.2,
+      "input_sha256": "b44802eebe5be182dcf441ca9412fbe07b8cf86a570b1ef8fb08c24ee7b5859f"
+    },
+    {
+      "run": 3,
+      "solver_status": "OPTIMAL",
+      "solve_seconds": 28.6,
+      "total_paid": 14793893,
+      "wall_seconds_input_to_result": 31.1,
+      "input_sha256": "76fc83650f136b2ea4fb1d720217e3b626f3522f27d4e1c71382ec7794c5e3bd"
+    }
+  ],
+  "solve_seconds_median": 28.6,
+  "threshold_rule": "медиана после изменения обвязки не хуже baseline более чем на max(1 с, 10 %)",
+  "threshold_seconds": 2.86,
+  "max_allowed_median_seconds": 31.46,
+  "limitations": [
+    "Входная книга собирается заново при каждом прогоне: данные одинаковы, байты xlsx различаются (метки времени в zip), поэтому input_sha256 не совпадают. Для строгого T-NFR-001 нужен замороженный входной файл.",
+    "Прогоны шли последовательно в фоне, пока в той же машине выполнялись лёгкие проверки; разброс 22,6–29,6 с частично отсюда.",
+    "Измерено время решателя из листа «Итог расчета», а не время всего скрипта.",
+    "Планы всех трёх прогонов совпадают по сумме выплат (total_paid), статус OPTIMAL."
+  ],
+  "status": "measured; T-NFR-001 как автоматическая проверка not_run"
+}

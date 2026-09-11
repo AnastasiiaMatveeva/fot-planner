@@ -1,0 +1,504 @@
+{
+  "schema_version": 1,
+  "run_id": "3476b144-ff30-45f8-87f8-a23194156bf0",
+  "created_at": "2026-09-11T16:37:14.017670+00:00",
+  "mode": "strict",
+  "selection": {
+    "quick": true,
+    "changed": false,
+    "full": false,
+    "only": "",
+    "limit": 240
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.19045-SP0"
+  },
+  "scope": "selected existing suites; not full capability qualification",
+  "acceptance_status": "passed",
+  "exit_code": 0,
+  "suites": [
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [],
+      "protocol": "process-exit",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "вердикт приёмки",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "scripts/test_check_results.py"
+      ],
+      "started_at": "2026-09-11T16:35:36.316693+00:00",
+      "duration_seconds": 0.313,
+      "returncode": 0,
+      "entrypoint_sha256": "6ec0e1ae867e788ee527ec3cabb435dfc1b864b7b73fbe790b62381cb7602c9c",
+      "stdout_sha256": "43ce3a73e354d366bd80cf6d1016e3523e4466d5b85d8c16efb1cdc30278f4c7"
+    },
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [
+        {
+          "id": "к01",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "к02",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "к03",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "к04",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "к05",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "к06",
+          "verdict": "passed",
+          "known_reason": null
+        }
+      ],
+      "protocol": "cases-v1",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "карта требований",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "scripts/check_requirements_map.py"
+      ],
+      "started_at": "2026-09-11T16:35:36.615189+00:00",
+      "duration_seconds": 0.078,
+      "returncode": 0,
+      "entrypoint_sha256": "45106b4e8e8a0600af49f229169d4b340cb8f3cd079af9846ce90323f9c276f6",
+      "stdout_sha256": "ee941decf786a430771c9aedf33a9e41b50f9d8b35a74b0fb5d555da2c9adf1f"
+    },
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [],
+      "protocol": "process-exit",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "хуки правок",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "scripts/test_lint_changed.py"
+      ],
+      "started_at": "2026-09-11T16:35:36.698889+00:00",
+      "duration_seconds": 0.094,
+      "returncode": 0,
+      "entrypoint_sha256": "95916b8de42ab0110113adebda2a2fa74924e16b71779bd94382f691f351ac0d",
+      "stdout_sha256": "d0cb9ae80a8db97f2b90087a83b20ace6578eb1815df8b7346957df5a49539e2"
+    },
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [
+        {
+          "id": "ч01",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч02",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч03",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч04",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч05",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч06",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч06б",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч07",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч08",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч09",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч10",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч11",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч12",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч13",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч14",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч15",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч16",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "ч17",
+          "verdict": "passed",
+          "known_reason": null
+        }
+      ],
+      "protocol": "cases-v1",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "поведение чата",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "harness/chat.py"
+      ],
+      "started_at": "2026-09-11T16:35:36.794185+00:00",
+      "duration_seconds": 5.375,
+      "returncode": 0,
+      "entrypoint_sha256": "89f95748e77f8412cf33f5f73a3a4e8b7e8e78e2bad70f1e682a78c8ab6530a0",
+      "stdout_sha256": "34633e84794c2364ae25a81eda86c8ce2226a5e50d8d526fb9fdbc2f3b22d24f"
+    },
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [
+        {
+          "id": "а01",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а02",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а03",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а04",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а05",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а06",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а07",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а08",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а09",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а10",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а11",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а12",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а13",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а14",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "а15",
+          "verdict": "passed",
+          "known_reason": null
+        }
+      ],
+      "protocol": "cases-v1",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "проверка результата",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "harness/audit.py"
+      ],
+      "started_at": "2026-09-11T16:35:42.166742+00:00",
+      "duration_seconds": 0.125,
+      "returncode": 0,
+      "entrypoint_sha256": "9189fb111e5b7dbf41421a844d984a899d512bd4fbb718411e6f861ecb791e30",
+      "stdout_sha256": "10d2d4c6566b73cdf3376f2178462b11f7b6a39b2ff77627c730ceff25addc02"
+    },
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [],
+      "protocol": "process-exit",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "список замечаний",
+      "command": [
+        "node",
+        "scripts/test-issues.cjs"
+      ],
+      "started_at": "2026-09-11T16:35:42.296226+00:00",
+      "duration_seconds": 0.094,
+      "returncode": 0,
+      "entrypoint_sha256": null,
+      "stdout_sha256": "33de43994240f8c68a2de2b529bb54a6973bd79a2856078486c416d90c186593"
+    },
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [
+        {
+          "id": "01",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "02",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "03",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "04",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "05",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "06",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "07",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "08",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "09",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "10",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "11",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "11b",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "12",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "13",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "14",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "15",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "16",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "17",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "18",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "19",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "20",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "21",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "22",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "23",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "24",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "25",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "26",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "27",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "28",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "31",
+          "verdict": "passed",
+          "known_reason": null
+        },
+        {
+          "id": "32",
+          "verdict": "passed",
+          "known_reason": null
+        }
+      ],
+      "protocol": "cases-v1",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "правила решателя",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "harness/crisis.py",
+        "--limit",
+        "60"
+      ],
+      "started_at": "2026-09-11T16:35:42.394948+00:00",
+      "duration_seconds": 91.625,
+      "returncode": 0,
+      "entrypoint_sha256": "e8f4e6c4a9d17f472cfe98aea3d51a73e50c93c9736e5f50792e4b002bfb17de",
+      "stdout_sha256": "2fb50948651fefd4e7204b94e4833da2a0d6cbbc5f08b994eef56acd1a9f8ba0"
+    }
+  ]
+}
