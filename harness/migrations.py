@@ -24,6 +24,15 @@ import time
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 PY = sys.executable
 MIGRATE = os.path.join(ROOT, "scripts", "migrate.py")
+sys.path.insert(0, ROOT)
+import migrations as M  # noqa: E402
+
+#: Ожидания стенда берутся из самого реестра шагов: новый шаг не должен
+#: ломать стенд, он должен им проверяться. «Старая» база — без граф всех
+#: шагов после исходной схемы.
+STEPS = M.steps()
+TOP = STEPS[-1].VERSION
+LEGACY_DROP = [(t, n) for s in STEPS if s.VERSION > 1 for t, cols in s.COLUMNS.items() for n, _ in cols]
 CASES = []
 
 
@@ -71,8 +80,8 @@ def fresh_db(tmp, legacy=False, rows=True):
     path = os.path.join(data, "fot.sqlite3")
     if legacy:
         conn = sqlite3.connect(path)
-        for col in ("executor", "heartbeat", "operation_id"):
-            conn.execute("ALTER TABLE runs DROP COLUMN %s" % col)
+        for table, col in LEGACY_DROP:
+            conn.execute("ALTER TABLE %s DROP COLUMN %s" % (table, col))
         conn.commit()
         conn.close()
     return path
@@ -119,7 +128,7 @@ def _c01(tmp):
     code, text, rep = migrate("--dry-run", db=db, report=os.path.join(tmp, "r1.json"))
     expect(code == 0, "код %d: %s" % (code, text[-200:]), out)
     expect(sha(db) == before, "dry-run изменил базу", out)
-    expect(rep.get("mode") == "dry-run" and [s["version"] for s in rep.get("steps", [])] == [1, 2],
+    expect(rep.get("mode") == "dry-run" and [s["version"] for s in rep.get("steps", [])] == [s.VERSION for s in STEPS],
            "шаги в отчёте: %s" % [s.get("version") for s in rep.get("steps", [])], out)
     acts = [a for s in rep.get("steps", []) for a in s["actions"]]
     expect(any("ADD COLUMN executor" in a for a in acts), "в плане нет добавления executor: %s" % acts, out)
@@ -148,8 +157,8 @@ def _c03(tmp):
     expect(rep.get("backup") and os.path.isfile(rep["backup"]), "копии нет", out)
     expect(rep.get("backup") and logical(rep["backup"]) == before, "копия не совпадает с базой до миграции по данным", out)
     expect(logical(db) != before, "миграция не изменила схему", out)
-    expect({"executor", "heartbeat", "operation_id"} <= cols(db, "runs"), "графы прогона не добавлены", out)
-    expect(version(db) == 2, "версия %s вместо 2" % version(db), out)
+    expect({n for t, n in LEGACY_DROP if t == "runs"} <= cols(db, "runs"), "графы прогона не добавлены", out)
+    expect(version(db) == TOP, "версия %s вместо %s" % (version(db), TOP), out)
     expect(rep.get("rows_before") == rep.get("rows_after"), "строки изменились: %s → %s"
            % (rep.get("rows_before"), rep.get("rows_after")), out)
     expect(rep.get("rows_after", {}).get("runs") == 1 and rep["rows_after"].get("messages") == 1,
@@ -179,7 +188,7 @@ def _c05(tmp):
     expect(code == 0, "код %d: %s" % (code, text[-200:]), out)
     expect(all(not s["actions"] for s in rep.get("steps", [])), "на новой базе нашлись действия: %s"
            % [s["actions"] for s in rep.get("steps", [])], out)
-    expect(version(db) == 2, "версия %s" % version(db), out)
+    expect(version(db) == TOP, "версия %s вместо %s" % (version(db), TOP), out)
     code, text, rep = migrate("--check", db=db, report=os.path.join(tmp, "r5c.json"))
     expect(code == 0 and rep.get("pending") == [] and rep.get("missing") == [],
            "check: код %d, %s" % (code, text[-200:]), out)

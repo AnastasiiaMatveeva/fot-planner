@@ -132,6 +132,63 @@ def _close_orphans():
         db.close()
 
 
+def _artifacts():
+    from db import ARTIFACT_DIR
+    from fot_planner.harness_local.artifacts import ArtifactStore
+    return ArtifactStore(ARTIFACT_DIR)
+
+
+def _manifest_draft(run, src, settings, sources, command, limit):
+    """Закрепить вход до первого действия решателя (VER-002).
+
+    Вход, справочник и версия кода уходят в хранилище артефактов; снимок
+    ссылается на их хеши. Путь к файлу в рабочей папке снимком не считается:
+    файл перезапишет следующий прогон того же плана.
+    """
+    from fot_planner.harness_local import manifest as mf
+    store = _artifacts()
+    draft = mf.build_manifest(
+        run_id=run.id, case_id=run.case_id, executor=run.executor or EXECUTOR,
+        input_sha256=store.put_file(src),
+        reference_sha256=store.put_file(reference.TEMPLATE) if os.path.isfile(reference.TEMPLATE) else None,
+        settings=settings or {}, sources=sources,
+        code=mf.code_version(mf.default_src_root()),
+        command=[os.path.basename(command[0])] + list(command[1:]), time_limit_sec=limit)
+    run.manifest_sha256 = mf.store_manifest(store, draft)
+    return draft
+
+
+def _manifest_final(run, draft, out, solver_status, audit_status, audit_lines, seconds):
+    """Итог после всех преобразований результата — хеш с конечного файла."""
+    from fot_planner.harness_local import manifest as mf
+    store = _artifacts()
+    done = mf.finalize_manifest(
+        draft, output_sha256=store.put_file(out) if out and os.path.isfile(out) else None,
+        solver_status=solver_status, audit_status=audit_status, audit_lines=audit_lines,
+        seconds=seconds)
+    run.manifest_sha256 = mf.store_manifest(store, done)
+    return done
+
+
+def _manifest_close(db, run_id, draft, draft_digest, out, audit_status, audit_lines, seconds):
+    """Закрыть снимок прогона, чем бы тот ни кончился.
+
+    Удачный расчёт закрывает снимок сам, после дозаписи результата. Отказ,
+    обрыв и «не успел» раньше оставляли только черновик — а снимок нужен
+    каждому выполнению (VER-002): у неудачи тоже есть вход, версия кода и
+    статус, и по ним её можно воспроизвести. Черновик узнаём по хешу: если
+    ссылка в прогоне уже другая, итог записан раньше.
+    """
+    if draft is None:
+        return None
+    run = db.get(Run, run_id)
+    if run is None or run.manifest_sha256 != draft_digest:
+        return None
+    done = _manifest_final(run, draft, out, run.status, audit_status, audit_lines, seconds)
+    db.commit()
+    return done
+
+
 def _heartbeat(run_id, stop):
     """Пока идёт расчёт, раз в HEARTBEAT_SEC отмечать, что прогон жив.
 
@@ -2628,6 +2685,25 @@ def _run_files(pair):
     return src, out
 
 
+@app.get("/api/case/{case_id}/run/{run_id}/manifest")
+def run_manifest(case_id: int, run_id: int):
+    """Снимок прогона и его сверка с хранилищем: на чём считали и цело ли оно."""
+    from fot_planner.harness_local import manifest as mf
+    db = session()
+    try:
+        run = db.get(Run, run_id)
+        if run is None or run.case_id != case_id:
+            raise HTTPException(404, "прогон не найден")
+        if not run.manifest_sha256:
+            raise HTTPException(404, "у прогона нет снимка: посчитан до появления снимков")
+        store = _artifacts()
+        manifest = mf.load_manifest(store, run.manifest_sha256)
+        return {"sha256": run.manifest_sha256, "manifest": manifest,
+                "problems": mf.verify_manifest(store, manifest)}
+    finally:
+        db.close()
+
+
 @app.get("/api/case/{case_id}/run/{run_id}/payroll")
 def run_payroll(case_id: int, run_id: int):
     """Состав зарплаты по месяцам: договоры, ставки, виды выплат, смены схемы."""
@@ -3224,6 +3300,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
     db = session()
     stop = threading.Event()
     threading.Thread(target=_heartbeat, args=(run_id, stop), daemon=True).start()
+    draft, draft_digest, out, audit_status, audit_lines, sec = None, None, None, "", [], None
     try:
         case = db.get(Case, case_id)
         run = db.get(Run, run_id)
@@ -3265,9 +3342,11 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
             # на демо-наборе стадия «отклонение от П2556» в него не
             # укладывалась, и оклад с надбавкой не доходили до предела.
             limit = os.environ.get("FOT_SOLVE_TIME_LIMIT", "240")
-            p = subprocess.run([EXE, "solve", "-i", src, "-o", out,
-                                "--time-limit", str(limit)],
-                               capture_output=True, text=True, timeout=3600, cwd=ROOT)
+            command = [EXE, "solve", "-i", src, "-o", out, "--time-limit", str(limit)]
+            draft = _manifest_draft(run, src, settings, sources, command, limit)
+            draft_digest = run.manifest_sha256
+            db.commit()
+            p = subprocess.run(command, capture_output=True, text=True, timeout=3600, cwd=ROOT)
             sec = round(time.time() - t0, 1)
             w["detail"] = "%s c" % sec
             db.commit()
@@ -3352,6 +3431,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         run.status = "OPTIMAL"
         run.result_path = out
         _write_sources_sheet(out, sources)
+        _manifest_final(run, draft, out, "OPTIMAL", audit_status, audit_lines, sec)
         summary = {}
         try:
             import result2json
@@ -3391,6 +3471,10 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
         db.commit()
     finally:
         stop.set()
+        try:
+            _manifest_close(db, run_id, draft, draft_digest, out, audit_status, audit_lines, sec)
+        except Exception:  # noqa: BLE001 — снимок не должен добить и без того упавший прогон
+            pass
         db.close()
 
 

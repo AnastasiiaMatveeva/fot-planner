@@ -33,6 +33,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.abspath(os.environ.get("FOT_DATA_DIR") or os.path.join(HERE, "data"))
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 RESULT_DIR = os.path.join(DATA_DIR, "results")
+# Неизменяемые артефакты по SHA-256: вход и результат прогона, снимки.
+ARTIFACT_DIR = os.path.join(DATA_DIR, "artifacts")
 DB_PATH = os.path.join(DATA_DIR, "fot.sqlite3")
 
 for d in (DATA_DIR, UPLOAD_DIR, RESULT_DIR):
@@ -333,6 +335,10 @@ class Run(Base):
     # Ключ операции от клиента: повтор той же команды возвращает тот же
     # прогон, а не второй расчёт; тот же ключ с другими данными — конфликт.
     operation_id: Mapped[str | None] = mapped_column(String(80), default=None)
+    # Снимок прогона: хеш канонического JSON в хранилище артефактов. Пути
+    # input_path/result_path остаются для интерфейса, но снимком считается
+    # только это: путь можно перезаписать, хеш — нет.
+    manifest_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
 
     case: Mapped[Case] = relationship(back_populates="runs")
 
@@ -507,7 +513,8 @@ _ADDED_COLUMNS = {
                   ("gave", "TEXT")],
     "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
     "runs": [("sources", "TEXT"), ("executor", "VARCHAR(120)"),
-             ("heartbeat", "DATETIME"), ("operation_id", "VARCHAR(80)")],
+             ("heartbeat", "DATETIME"), ("operation_id", "VARCHAR(80)"),
+             ("manifest_sha256", "VARCHAR(64)")],
     "labor_rows": [("headcount", "FLOAT"), ("months", "TEXT"),
                    ("details", "TEXT")],
     "verdicts": [("grade", "VARCHAR(20)")],
