@@ -34,6 +34,7 @@ ROOT = os.path.abspath(os.path.join(HERE, ".."))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
 
+import actuality         # noqa: E402
 import agents            # noqa: E402
 import build_input       # noqa: E402
 import chat              # noqa: E402
@@ -43,6 +44,7 @@ import llm               # noqa: E402
 import reference         # noqa: E402
 from db import (
     Decision, record_decision,         # noqa: E402
+    claim_operation, finish_operation,
     Activity, Case, Contract, Correction, Document, Employee, Inflow, LaborRow,
     Message, Proposal, Question, Run, SecretAllowance, Substitution, Verdict,
     RESULT_DIR, UPLOAD_DIR, init_db, now, session,
@@ -139,7 +141,7 @@ def _artifacts():
     return ArtifactStore(ARTIFACT_DIR)
 
 
-def _manifest_draft(run, src, settings, sources, command, limit):
+def _manifest_draft(run, src, settings, sources, command, limit, attempt_of=None):
     """Закрепить вход до первого действия решателя (VER-002).
 
     Вход, справочник и версия кода уходят в хранилище артефактов; снимок
@@ -154,7 +156,8 @@ def _manifest_draft(run, src, settings, sources, command, limit):
         reference_sha256=store.put_file(reference.TEMPLATE) if os.path.isfile(reference.TEMPLATE) else None,
         settings=settings or {}, sources=sources,
         code=mf.code_version(mf.default_src_root()),
-        command=[os.path.basename(command[0])] + list(command[1:]), time_limit_sec=limit)
+        command=[os.path.basename(command[0])] + list(command[1:]), time_limit_sec=limit,
+        attempt_of=attempt_of)
     run.manifest_sha256 = mf.store_manifest(store, draft)
     return draft
 
@@ -266,7 +269,13 @@ def case_state(db, case):
                   "created": _dt(r.created),
                   "summary": json.loads(r.summary) if r.summary else None,
                   "sources": json.loads(r.sources) if r.sources else None,
-                  "settings": json.loads(r.settings) if r.settings else None} for r in runs],
+                  "settings": json.loads(r.settings) if r.settings else None,
+                  # Актуальность (VER-003): прежний результат остаётся, но
+                  # после смены зависимости показывается как требующий пересмотра.
+                  "review": r.review or actuality.CURRENT,
+                  "review_log": json.loads(r.review_log) if r.review_log else [],
+                  "retry_of": r.retry_of,
+                  "retryable": r.status in RETRYABLE and bool(r.manifest_sha256)} for r in runs],
         "agents": agents.agent_list(),
         "solver": agents.SOLVER,
         "model": {"provider": provider_name, "name": provider_model,
@@ -294,6 +303,7 @@ def list_cases():
                         "updated_at": c.updated.isoformat() if c.updated else None,
                         "documents": db.query(Document).filter_by(case_id=c.id).count(),
                         "run_id": last.id if last else None,
+                        "review": (last.review or actuality.CURRENT) if last else None,
                         "computed_at": _dt(last.created) if last else None})
         return out
     finally:
@@ -525,6 +535,9 @@ def _set_muted(db, case, doc_id, muted, grounds="флажок в карточк�
     record_decision(db, kind="состав плана", subject_kind="план", subject_id=case.id,
                     subject_digest=D.digest(sorted(ids)), scope="план %d" % case.id,
                     action={"документ": doc_id, "исключён": bool(muted)}, grounds=grounds)
+    actuality.mark_review(db, actuality.runs_of_case(db, case.id),
+                          "документ «%s» %s" % (actuality.document_name(db, doc_id),
+                                                "исключён из плана" if muted else "возвращён в план"))
     db.commit()
 
 
@@ -580,7 +593,7 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
             doc = Document(case_id=case_id, name=name, path=path, size=len(data),
                            sha256=digest, scope=scope)
             if prev is not None:
-                _retire_document(db, prev)
+                _retire_document(db, prev, new_version=(prev.version or 1) + 1)
                 doc.version = (prev.version or 1) + 1
                 doc.supersedes_id = prev.id
             db.add(doc)
@@ -1107,8 +1120,18 @@ async def decide_proposals(doc_id: int, request: Request):
     take = {int(x) for x in (body.get("accept") or [])}
     drop = {int(x) for x in (body.get("reject") or [])}
     expected = str(body.get("document_sha256") or "") or None
+    op = str(body.get("operation_id") or "") or None
     db = session()
     try:
+        return _operation(db, op, "решение по строкам", "документ %d" % doc_id,
+                          {"accept": sorted(take), "reject": sorted(drop), "document_sha256": expected},
+                          lambda: _decide_do(db, doc_id, take, drop, expected))
+    finally:
+        db.close()
+
+
+def _decide_do(db, doc_id, take, drop, expected):
+    if True:
         doc = db.get(Document, doc_id)
         if doc is None:
             raise HTTPException(404, "документ не найден")
@@ -1230,6 +1253,11 @@ async def decide_proposals(doc_id: int, request: Request):
                             action={"принято": sorted(pr.id for pr in decided if pr.id in take),
                                     "отклонено": sorted(pr.id for pr in decided if pr.id in drop)},
                             grounds="карточка документа", precondition=expected)
+        if any(added.values()):
+            # Реестр изменился: прежние планы посчитаны без этих строк.
+            actuality.mark_review(db, actuality.runs_for_registry_change(db, doc),
+                                  "в реестр приняты строки из «%s» (%s)"
+                                  % (doc.name, ", ".join("%s %d" % (k, v) for k, v in added.items() if v)))
         db.commit()
 
         if any(added.values()) and doc.case_id:
@@ -1241,8 +1269,6 @@ async def decide_proposals(doc_id: int, request: Request):
             agents.say(db, doc.case_id, text, agent="intake")
             db.commit()
         return {"ok": True, "added": added, "left": left, "reference": ref_log}
-    finally:
-        db.close()
 
 
 #: Сколько показывать в предпросмотре. Карточка — это заглянуть в документ, а
@@ -2186,8 +2212,15 @@ def _case_settings(case):
         return {}
 
 
-def _retire_document(db, doc):
-    """Прежняя версия документа: строки из реестра убрать, файл и запись оставить."""
+def _retire_document(db, doc, new_version=None):
+    """Прежняя версия документа: строки из реестра убрать, файл и запись оставить.
+
+    Планы, посчитанные на этой версии, остаются, но требуют пересмотра
+    (VER-003); планы, в основание которых документ не входил, не трогаются.
+    """
+    actuality.mark_review(db, actuality.runs_using_document(db, doc.id),
+                          "документ «%s» заменён версией %s"
+                          % (doc.name, new_version or ((doc.version or 1) + 1)))
     for model in (Employee, Contract, LaborRow, Inflow, SecretAllowance, Substitution):
         db.query(model).filter_by(document_id=doc.id).delete()
     db.query(Proposal).filter_by(document_id=doc.id, state="предложено").delete()
@@ -2201,6 +2234,8 @@ def _forget_document(db, doc):
     Данные помнят документ-источник, поэтому сирот не остается: ушел документ —
     ушли его сотрудники, договоры и правила замещения.
     """
+    actuality.mark_review(db, actuality.runs_using_document(db, doc.id),
+                          "документ «%s» удалён" % doc.name)
     gone = {
         "сотрудников": db.query(Employee).filter_by(document_id=doc.id).delete(),
         "договоров": db.query(Contract).filter_by(document_id=doc.id).delete(),
@@ -2278,7 +2313,7 @@ def _running_run(db, case_id):
             .order_by(Run.id.desc()).first())
 
 
-def _start_run(db, case_id, settings, operation_id=None):
+def _start_run(db, case_id, settings, operation_id=None, retry_of=None):
     """Единственный вход для нового прогона. Возвращает (прогон, создан ли).
 
     Прогон заводился в четырёх местах: кнопка, претензия в чате, закрепление
@@ -2303,10 +2338,53 @@ def _start_run(db, case_id, settings, operation_id=None):
     if busy is not None:
         return busy, False
     run = Run(case_id=case_id, settings=payload, executor=EXECUTOR,
-              heartbeat=now(), operation_id=operation_id or None)
+              heartbeat=now(), operation_id=operation_id or None,
+              retry_of=retry_of)
     db.add(run)
     db.commit()
     return run, True
+
+
+#: Сколько секунд операция с ключом считается идущей без итога. Дольше —
+#: процесс упал до записи, и тот же ключ можно занять заново.
+OPERATION_STALE_SEC = 600
+
+
+def _operation(db, op_id, kind, subject, payload, fn):
+    """Команда с ключом операции (RUN-001).
+
+    Повтор той же команды возвращает сохранённый ответ, а не выполняет её
+    второй раз; тот же ключ с другими данными — конфликт; команда, упавшая
+    на середине, под тем же ключом вслепую не повторяется — нужен новый
+    ключ, то есть явное решение. Без ключа команда выполняется как раньше.
+    """
+    if not op_id:
+        return fn()
+    state, saved = claim_operation(db, op_id, kind, subject, payload,
+                                   stale_sec=OPERATION_STALE_SEC)
+    if state == "готово":
+        if isinstance(saved, dict) and saved.get("_http"):
+            raise HTTPException(int(saved["_http"]), saved.get("error") or "")
+        return saved
+    if state == "сбой":
+        raise HTTPException(409, "операция %s завершилась ошибкой (%s); повторите "
+                            "команду с новым ключом" % (op_id, (saved or {}).get("error", "")[:160]))
+    if state == "конфликт":
+        raise HTTPException(409, "операция %s уже выполнена с другими данными" % op_id)
+    if state == "идёт":
+        raise HTTPException(409, "операция %s ещё выполняется" % op_id)
+    try:
+        result = fn()
+    except HTTPException as exc:
+        # Отказ — тоже итог: повтор получит тот же отказ, а не второе применение.
+        finish_operation(db, op_id, {"_http": exc.status_code, "error": str(exc.detail)})
+        raise
+    except Exception as exc:  # noqa: BLE001 — итога нет, и это записывается
+        finish_operation(db, op_id, {"error": "%s: %s" % (type(exc).__name__, str(exc)[:300])},
+                         state="сбой")
+        raise
+    finish_operation(db, op_id, result)
+    return result
 
 
 @app.post("/api/case/{case_id}/message")
@@ -2322,184 +2400,193 @@ def post_message(case_id: int, background: BackgroundTasks, body: dict = Body(..
     text = (body.get("text") or "").strip()
     if not text:
         raise HTTPException(400, "пустое сообщение")
+    # Ключ операции от клиента (RUN-001): оборвавшийся запрос повторяется
+    # тем же ключом и получает тот же ответ, а не вторую реплику в ленте.
+    op = str(body.get("operation_id") or "") or None
     db = session()
     try:
-        case = db.get(Case, case_id)
-        if case is None:
-            raise HTTPException(404, "план не найден")
-        agents.say(db, case_id, text, who="экономист")
-
-        # Реплика идет в модель вместе с состоянием дела: экономист чаще
-        # спрашивает, чем отвечает, и квитанция «Принял» — не ответ.
-        with agents.working(db, case_id, "intake", "разбирает реплику") as w:
-            res = chat.reply(db, case, text)
-            w["detail"] = (res.get("reply") or res.get("error") or "")[:200]
-            db.commit()
-
-        if not res.get("ok"):
-            # Без модели остается прежнее поведение: правка данных разбором.
-            if case.passport:
-                passport = json.loads(case.passport)
-                answer, changed, run = intake.extract.apply_chat(passport, text)
-                if changed:
-                    case.passport = json.dumps(passport, ensure_ascii=False)
-                agents.say(db, case_id, answer, agent="intake")
-                db.commit()
-                return {"ok": True, "solve": bool(run)}
-            agents.say(db, case_id,
-                       "Не могу ответить: %s. Загрузите документы — их разбор "
-                       "работает и без модели." % res.get("error"), agent="intake")
-            db.commit()
-            return {"ok": True}
-
-        agents.say(db, case_id, res["reply"], agent="intake")
-        db.commit()
-
-        action = res.get("action")
-        # Закрепления, запреты и настройки — переменные решателя, заданные
-        # рукой экономиста. Пишем в план и пересчитываем, если план уже
-        # считался; без месяцев — спрашиваем и ничего не пишем.
-        if res.get("fixes") or res.get("settings") or chat.parse_settings(text):
-            lines, questions = chat.apply_fixes(db, case, res.get("fixes"), text)
-            lines += chat.apply_settings(db, case, res.get("settings"), text)
-            db.commit()
-            if lines:
-                agents.say(db, case_id, "\n".join(lines), agent="tuning")
-            if questions:
-                agents.say(db, case_id, "\n".join(questions), agent="tuning",
-                           payload={"kind": "ask_months"})
-                db.commit()
-                return {"ok": True, "action": "вопрос"}
-            if not lines:
-                db.commit()
-                return {"ok": True, "action": "ничего"}
-            last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
-                    .order_by(Run.id.desc()).first())
-            if last is None:
-                db.commit()
-                return {"ok": True, "action": "закреплено"}
-            busy = _running_run(db, case_id)
-            if busy is not None:
-                agents.say(db, case_id,
-                           "Условие записано. Пересчитаю после расчета № %d — "
-                           "он сейчас идет." % busy.id, agent="tuning")
-                db.commit()
-                return {"ok": True, "action": "закреплено"}
-            base = json.loads(last.settings) if last and last.settings else {}
-            run, _created = _start_run(db, case_id, base)
-            agents.say(db, case_id, "Пересчитываю план с этими условиями.", agent="tuning")
-            db.commit()
-            background.add_task(_solve, case_id, run.id, base)
-            return {"ok": True, "action": "расчет", "run_id": run.id}
-
-        if action == "ответить на вопрос агента":
-            pending = (db.query(Question).filter_by(case_id=case_id, answer=None)
-                       .order_by(Question.id).first())
-            if pending is not None:
-                pending.answer = res.get("answer") or text
-                pending.answered = now()
-                db.commit()
-
-        if action == "заполнить поле":
-            # Величину, продиктованную в чате, пишет сервис по закрытому
-            # списку полей: модель называет поле словами, а имя столбца от
-            # модели в базу не идет.
-            with agents.working(db, case_id, "intake", "вносит правку") as w:
-                lines = chat.apply_edits(db, case, res.get("edits"))
-                w["detail"] = "; ".join(lines)[:200] or "нечего вносить"
-                db.commit()
-            agents.say(db, case_id,
-                       "\n".join(lines) or "Не разобрал, что именно записать.",
-                       agent="intake")
-            db.commit()
-            return {"ok": True, "action": "правка", "edits": len(lines)}
-
-        # Действие модель предлагает, а выполняет сервис — и только если оно
-        # выполнимо. Иначе «не поняла» запускает расчет на пустом деле, а PDF
-        # уходит в разборщик книг Excel.
-        if action == "переразобрать документ" and res.get("document"):
-            doc = _find_document(db, case_id, res["document"])
-            if doc is None:
-                agents.say(db, case_id,
-                           "Не нашел документ «%s» в этом деле." % res["document"],
-                           agent="intake")
-                db.commit()
-                return {"ok": True, "action": "ничего"}
-            kind = res.get("as_kind")
-            owner = intake.OWNER.get(kind) if kind else None
-            refused = _cannot_reprocess(doc, owner)
-            if refused:
-                agents.say(db, case_id, refused, agent="intake")
-                db.commit()
-                return {"ok": True, "action": "ничего"}
-            background.add_task(_reprocess, case_id, doc.id, owner, kind)
-            return {"ok": True, "action": "переразбор", "document": doc.name}
-
-        if action in ("исключить документ", "вернуть документ") and res.get("document"):
-            # «Не смотри на прошлогоднюю штатку» — агент снимает флажок сам;
-            # «верни» — ставит обратно. Тот же флажок, что в панели документов.
-            doc = _find_document(db, case_id, res["document"])
-            if doc is None:
-                agents.say(db, case_id, "Не нашел документ «%s»." % res["document"],
-                           agent="intake")
-                db.commit()
-                return {"ok": True, "action": "ничего"}
-            _set_muted(db, case, doc.id, action == "исключить документ",
-                       grounds="реплика: %s" % (text or "")[:200])
-            return {"ok": True, "action": "флажок", "document": doc.name}
-
-        if action == "претензия к плану":
-            # Претензия сдвигает веса целей относительно последнего удачного
-            # прогона и запускает пересчет. Что именно сдвинуто — в ленте и в
-            # настройках прогона, чтобы план помнил свои претензии.
-            last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
-                    .order_by(Run.id.desc()).first())
-            base = json.loads(last.settings) if last and last.settings else {}
-            new_settings, lines = chat.claim_settings(base, res.get("claims"), text)
-            if not res.get("claims"):
-                agents.say(db, case_id, "Претензию понял, но в цель решателя "
-                           "перевести не смог — назовите, что именно в плане не так: "
-                           "переводы, связки с договорами, освоение по месяцам или "
-                           "суммы по месяцам.", agent="solver")
-                db.commit()
-                return {"ok": True, "action": "ничего"}
-            agents.say(db, case_id, "\n".join(lines), agent="solver")
-            run, created = _start_run(db, case_id, new_settings)
-            if not created:
-                agents.say(db, case_id, "Условие записано. Пересчитаю после расчета № %d — "
-                           "он сейчас идет." % run.id, agent="tuning")
-                db.commit()
-                return {"ok": True, "action": "закреплено", "run_id": run.id}
-            background.add_task(_solve, case_id, run.id, new_settings)
-            return {"ok": True, "action": "расчет", "run_id": run.id}
-
-        if action == "запустить расчет":
-            busy = _running_run(db, case_id)
-            if busy is not None:
-                agents.say(db, case_id,
-                           "Расчет № %d уже идет — дождитесь его, второй "
-                           "расчет того же плана только замедлит первый."
-                           % busy.id, agent="intake")
-                db.commit()
-                return {"ok": True, "action": "ничего"}
-            if not case.passport:
-                agents.say(db, case_id,
-                           "Считать пока не на чем: в деле нет ни сотрудников, "
-                           "ни договоров. Загрузите документ со штатным расписанием "
-                           "и фондами договоров.", agent="intake")
-                db.commit()
-                return {"ok": True, "action": "ничего"}
-            run, created = _start_run(db, case_id, {})
-            if not created:
-                agents.say(db, case_id, "Расчет № %d уже идет." % run.id, agent="tuning")
-                db.commit()
-                return {"ok": True, "action": "ничего", "run_id": run.id}
-            background.add_task(_solve, case_id, run.id, None)
-            return {"ok": True, "action": "расчет", "run_id": run.id}
-
-        return {"ok": True, "action": action}
+        return _operation(db, op, "реплика", "план %d" % case_id, {"text": text},
+                          lambda: _message_do(db, case_id, background, text))
     finally:
         db.close()
+
+
+def _message_do(db, case_id, background, text):
+    """Тело реплики: лента, ответ модели, действия сервиса по её ответу."""
+    case = db.get(Case, case_id)
+    if case is None:
+        raise HTTPException(404, "план не найден")
+    agents.say(db, case_id, text, who="экономист")
+
+    # Реплика идет в модель вместе с состоянием дела: экономист чаще
+    # спрашивает, чем отвечает, и квитанция «Принял» — не ответ.
+    with agents.working(db, case_id, "intake", "разбирает реплику") as w:
+        res = chat.reply(db, case, text)
+        w["detail"] = (res.get("reply") or res.get("error") or "")[:200]
+        db.commit()
+
+    if not res.get("ok"):
+        # Без модели остается прежнее поведение: правка данных разбором.
+        if case.passport:
+            passport = json.loads(case.passport)
+            answer, changed, run = intake.extract.apply_chat(passport, text)
+            if changed:
+                case.passport = json.dumps(passport, ensure_ascii=False)
+            agents.say(db, case_id, answer, agent="intake")
+            db.commit()
+            return {"ok": True, "solve": bool(run)}
+        agents.say(db, case_id,
+                   "Не могу ответить: %s. Загрузите документы — их разбор "
+                   "работает и без модели." % res.get("error"), agent="intake")
+        db.commit()
+        return {"ok": True}
+
+    agents.say(db, case_id, res["reply"], agent="intake")
+    db.commit()
+
+    action = res.get("action")
+    # Закрепления, запреты и настройки — переменные решателя, заданные
+    # рукой экономиста. Пишем в план и пересчитываем, если план уже
+    # считался; без месяцев — спрашиваем и ничего не пишем.
+    if res.get("fixes") or res.get("settings") or chat.parse_settings(text):
+        lines, questions = chat.apply_fixes(db, case, res.get("fixes"), text)
+        lines += chat.apply_settings(db, case, res.get("settings"), text)
+        db.commit()
+        if lines:
+            agents.say(db, case_id, "\n".join(lines), agent="tuning")
+        if questions:
+            agents.say(db, case_id, "\n".join(questions), agent="tuning",
+                       payload={"kind": "ask_months"})
+            db.commit()
+            return {"ok": True, "action": "вопрос"}
+        if not lines:
+            db.commit()
+            return {"ok": True, "action": "ничего"}
+        last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
+                .order_by(Run.id.desc()).first())
+        if last is None:
+            db.commit()
+            return {"ok": True, "action": "закреплено"}
+        busy = _running_run(db, case_id)
+        if busy is not None:
+            agents.say(db, case_id,
+                       "Условие записано. Пересчитаю после расчета № %d — "
+                       "он сейчас идет." % busy.id, agent="tuning")
+            db.commit()
+            return {"ok": True, "action": "закреплено"}
+        base = json.loads(last.settings) if last and last.settings else {}
+        run, _created = _start_run(db, case_id, base)
+        agents.say(db, case_id, "Пересчитываю план с этими условиями.", agent="tuning")
+        db.commit()
+        background.add_task(_solve, case_id, run.id, base)
+        return {"ok": True, "action": "расчет", "run_id": run.id}
+
+    if action == "ответить на вопрос агента":
+        pending = (db.query(Question).filter_by(case_id=case_id, answer=None)
+                   .order_by(Question.id).first())
+        if pending is not None:
+            pending.answer = res.get("answer") or text
+            pending.answered = now()
+            db.commit()
+
+    if action == "заполнить поле":
+        # Величину, продиктованную в чате, пишет сервис по закрытому
+        # списку полей: модель называет поле словами, а имя столбца от
+        # модели в базу не идет.
+        with agents.working(db, case_id, "intake", "вносит правку") as w:
+            lines = chat.apply_edits(db, case, res.get("edits"))
+            w["detail"] = "; ".join(lines)[:200] or "нечего вносить"
+            db.commit()
+        agents.say(db, case_id,
+                   "\n".join(lines) or "Не разобрал, что именно записать.",
+                   agent="intake")
+        db.commit()
+        return {"ok": True, "action": "правка", "edits": len(lines)}
+
+    # Действие модель предлагает, а выполняет сервис — и только если оно
+    # выполнимо. Иначе «не поняла» запускает расчет на пустом деле, а PDF
+    # уходит в разборщик книг Excel.
+    if action == "переразобрать документ" and res.get("document"):
+        doc = _find_document(db, case_id, res["document"])
+        if doc is None:
+            agents.say(db, case_id,
+                       "Не нашел документ «%s» в этом деле." % res["document"],
+                       agent="intake")
+            db.commit()
+            return {"ok": True, "action": "ничего"}
+        kind = res.get("as_kind")
+        owner = intake.OWNER.get(kind) if kind else None
+        refused = _cannot_reprocess(doc, owner)
+        if refused:
+            agents.say(db, case_id, refused, agent="intake")
+            db.commit()
+            return {"ok": True, "action": "ничего"}
+        background.add_task(_reprocess, case_id, doc.id, owner, kind)
+        return {"ok": True, "action": "переразбор", "document": doc.name}
+
+    if action in ("исключить документ", "вернуть документ") and res.get("document"):
+        # «Не смотри на прошлогоднюю штатку» — агент снимает флажок сам;
+        # «верни» — ставит обратно. Тот же флажок, что в панели документов.
+        doc = _find_document(db, case_id, res["document"])
+        if doc is None:
+            agents.say(db, case_id, "Не нашел документ «%s»." % res["document"],
+                       agent="intake")
+            db.commit()
+            return {"ok": True, "action": "ничего"}
+        _set_muted(db, case, doc.id, action == "исключить документ",
+                   grounds="реплика: %s" % (text or "")[:200])
+        return {"ok": True, "action": "флажок", "document": doc.name}
+
+    if action == "претензия к плану":
+        # Претензия сдвигает веса целей относительно последнего удачного
+        # прогона и запускает пересчет. Что именно сдвинуто — в ленте и в
+        # настройках прогона, чтобы план помнил свои претензии.
+        last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
+                .order_by(Run.id.desc()).first())
+        base = json.loads(last.settings) if last and last.settings else {}
+        new_settings, lines = chat.claim_settings(base, res.get("claims"), text)
+        if not res.get("claims"):
+            agents.say(db, case_id, "Претензию понял, но в цель решателя "
+                       "перевести не смог — назовите, что именно в плане не так: "
+                       "переводы, связки с договорами, освоение по месяцам или "
+                       "суммы по месяцам.", agent="solver")
+            db.commit()
+            return {"ok": True, "action": "ничего"}
+        agents.say(db, case_id, "\n".join(lines), agent="solver")
+        run, created = _start_run(db, case_id, new_settings)
+        if not created:
+            agents.say(db, case_id, "Условие записано. Пересчитаю после расчета № %d — "
+                       "он сейчас идет." % run.id, agent="tuning")
+            db.commit()
+            return {"ok": True, "action": "закреплено", "run_id": run.id}
+        background.add_task(_solve, case_id, run.id, new_settings)
+        return {"ok": True, "action": "расчет", "run_id": run.id}
+
+    if action == "запустить расчет":
+        busy = _running_run(db, case_id)
+        if busy is not None:
+            agents.say(db, case_id,
+                       "Расчет № %d уже идет — дождитесь его, второй "
+                       "расчет того же плана только замедлит первый."
+                       % busy.id, agent="intake")
+            db.commit()
+            return {"ok": True, "action": "ничего"}
+        if not case.passport:
+            agents.say(db, case_id,
+                       "Считать пока не на чем: в деле нет ни сотрудников, "
+                       "ни договоров. Загрузите документ со штатным расписанием "
+                       "и фондами договоров.", agent="intake")
+            db.commit()
+            return {"ok": True, "action": "ничего"}
+        run, created = _start_run(db, case_id, {})
+        if not created:
+            agents.say(db, case_id, "Расчет № %d уже идет." % run.id, agent="tuning")
+            db.commit()
+            return {"ok": True, "action": "ничего", "run_id": run.id}
+        background.add_task(_solve, case_id, run.id, None)
+        return {"ok": True, "action": "расчет", "run_id": run.id}
+
+    return {"ok": True, "action": action}
 
 
 #: Какие форматы умеет разбирать каждый обработчик. Разбор документов по
@@ -2795,11 +2882,26 @@ def get_reference():
     return {"ok": True, "rows": reference.read_rows()}
 
 
+def _reference_change(applied):
+    """Одной строкой: какие величины справочника переписаны."""
+    items = sorted({"%s: %s" % (a.get("pos"), a.get("field")) for a in applied})
+    more = " и ещё %d" % (len(items) - 4) if len(items) > 4 else ""
+    return "справочник изменён (%s%s)" % ("; ".join(items[:4]), more)
+
+
 @app.post("/api/reference")
 async def post_reference(request: Request):
     body = await request.json()
     applied = reference.apply(body.get("edits") or [])
     case_id = body.get("case_id")
+    if applied:
+        db = session()
+        try:
+            actuality.mark_review(db, actuality.runs_pinned_reference(db),
+                                  _reference_change(applied))
+            db.commit()
+        finally:
+            db.close()
     if case_id:
         db = session()
         try:
@@ -2845,6 +2947,9 @@ async def document_reference(doc_id: int, request: Request):
             db.commit()
             raise HTTPException(409, "документ изменился после открытия формы — откройте карточку заново")
         applied = reference.apply(edits)
+        if applied:
+            actuality.mark_review(db, actuality.runs_pinned_reference(db),
+                                  _reference_change(applied))
         if edits:
             # Норма меняется для всей организации: справочник один.
             record_decision(db, kind="норма", subject_kind="документ", subject_id=d.id,
@@ -3364,7 +3469,31 @@ def _write_sources_sheet(path, sources):
         logging.getLogger("fot.app").warning("лист источников не записан: %s", exc)
 
 
-def _solve(case_id: int, run_id: int, settings: dict | None):
+def _pinned_input(db, run_id):
+    """Закреплённый вход прежней попытки: байты из хранилища по хешу снимка.
+
+    Повтор чистого вычисления (RUN-002) считает ровно то, что считала
+    неудавшаяся попытка, — не то, что лежит в реестре сейчас. Возвращает
+    (байты, снимок источников); если снимка или артефакта нет либо байты
+    не сходятся с хешем — None: слепой повтор запрещён.
+    """
+    from fot_planner.harness_local import manifest as mf
+    old = db.get(Run, run_id)
+    if old is None or not old.manifest_sha256:
+        return None
+    store = _artifacts()
+    try:
+        manifest = mf.load_manifest(store, old.manifest_sha256)
+    except Exception:  # noqa: BLE001 — снимка нет или он повреждён
+        return None
+    digest = (manifest.get("input") or {}).get("sha256")
+    if not digest or not store.has(digest) or not store.verify(digest):
+        return None
+    sources = manifest.get("sources") or (json.loads(old.sources) if old.sources else {})
+    return store.read(digest), sources
+
+
+def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | None = None):
     db = session()
     stop = threading.Event()
     threading.Thread(target=_heartbeat, args=(run_id, stop), daemon=True).start()
@@ -3379,23 +3508,37 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
             src = os.path.join(RESULT_DIR, "case%d_run%d_input.xlsx" %
                                (case_id, run_id))
             warn = []
-            data = _registry_data(db, case)
-            if settings:
-                # Настройки прогона поверх настроек из шаблона: сюда попадают
-                # веса целей, сдвинутые претензиями экономиста.
-                data["settings"] = {**(data.get("settings") or {}),
-                                    **{k: v for k, v in settings.items()
-                                       if k != "претензии"}}
-            _apply_plan_settings(data, case)
-            build_input.build(reference.TEMPLATE, src, data, warn)
+            pinned = _pinned_input(db, pinned_from) if pinned_from else None
+            if pinned_from and pinned is None:
+                raise RuntimeError("вход прогона № %d не восстановить из снимка — "
+                                   "слепой повтор запрещён" % pinned_from)
+            if pinned is not None:
+                # Повтор: вход берётся из снимка прежней попытки, реестр не
+                # читается — иначе это был бы новый расчёт, а не повтор.
+                with open(src, "wb") as f:
+                    f.write(pinned[0])
+                sources = pinned[1]
+                w["detail"] = "вход взят из снимка прогона № %d" % pinned_from
+            else:
+                data = _registry_data(db, case)
+                if settings:
+                    # Настройки прогона поверх настроек из шаблона: сюда попадают
+                    # веса целей, сдвинутые претензиями экономиста.
+                    data["settings"] = {**(data.get("settings") or {}),
+                                        **{k: v for k, v in settings.items()
+                                           if k != "претензии"}}
+                _apply_plan_settings(data, case)
+                build_input.build(reference.TEMPLATE, src, data, warn)
+                sources = _run_sources(db)
+                # В строке работы — коротко; сами допущения уходят в ленту
+                # сообщениями и лежат в артефакте, а не растягивают колонку.
+                w["detail"] = "вход собран" + (", допущений %d" % len(warn) if warn else "")
             run.input_path = src
-            sources = _run_sources(db)
             run.sources = json.dumps(sources, ensure_ascii=False)
-            # В строке работы — коротко; сами допущения уходят в ленту
-            # сообщениями и лежат в артефакте, а не растягивают колонку.
-            w["detail"] = "вход собран" + (", допущений %d" % len(warn) if warn else "")
-            w["artifact"] = {"документов в основании": len(sources["документы"]),
-                             "версии агентов": sources["агенты"],
+            # Снимок прежней попытки мог быть записан без части разделов —
+            # артефакт шага показывает, что есть, а не падает.
+            w["artifact"] = {"документов в основании": len(sources.get("документы") or []),
+                             "версии агентов": sources.get("агенты"),
                              "допущения": warn}
             db.commit()
         for line in warn:
@@ -3411,13 +3554,28 @@ def _solve(case_id: int, run_id: int, settings: dict | None):
             # укладывалась, и оклад с надбавкой не доходили до предела.
             limit = os.environ.get("FOT_SOLVE_TIME_LIMIT", "240")
             command = [EXE, "solve", "-i", src, "-o", out, "--time-limit", str(limit)]
-            draft = _manifest_draft(run, src, settings, sources, command, limit)
+            draft = _manifest_draft(run, src, settings, sources, command, limit,
+                                    attempt_of=pinned_from)
             draft_digest = run.manifest_sha256
             db.commit()
             p = subprocess.run(command, capture_output=True, text=True, timeout=3600, cwd=ROOT)
             sec = round(time.time() - t0, 1)
             w["detail"] = "%s c" % sec
             db.commit()
+
+        # Пока решатель считал, прогон мог закрыть другой процесс — как
+        # брошенный (heartbeat замолчал) или рукой. Старый исполнитель
+        # результат не записывает (RUN-002): в базе уже другое состояние,
+        # и молча заменить его своим — значит, два исполнителя пишут один
+        # прогон.
+        db.expire_all()
+        run = db.get(Run, run_id)
+        if run is None or run.status != "идет" or (run.executor or EXECUTOR) != EXECUTOR:
+            agents.say(db, case_id, "Результат расчёта № %d отброшен: прогон уже закрыт "
+                       "как «%s», считал прежний исполнитель. Запустите расчёт заново."
+                       % (run_id, run.status if run else "удалён"), agent="solver")
+            db.commit()
+            return
 
         run.seconds = sec
         solver_status = ""
@@ -3569,6 +3727,48 @@ async def solve(case_id: int, background: BackgroundTasks, request: Request):
         agents.say(db, case_id, "Запускаю расчет.", who="экономист")
         background.add_task(_solve, case_id, run.id, settings)
         return {"ok": True, "run_id": run.id}
+    finally:
+        db.close()
+
+
+#: Что можно повторить как чистое вычисление: обрыв, «не успел» и падение.
+#: «Нет решения» и «не прошёл проверку» — ответы решателя на тот же вход,
+#: повтор даст то же самое; их место — разбор причин, а не повтор.
+RETRYABLE = ("прерван", "не успел", "ошибка")
+
+
+@app.post("/api/case/{case_id}/run/{run_id}/retry")
+async def retry_run(case_id: int, run_id: int, background: BackgroundTasks, request: Request):
+    """Повторить прерванный расчёт по закреплённому входу (RUN-002).
+
+    Новая попытка связана с прежней (retry_of) и считает те же байты входа
+    из хранилища артефактов, а не текущий реестр: если данные с тех пор
+    изменились, это уже новый расчёт, и его запускают кнопкой. Без снимка
+    или с повреждённым артефактом повтор отклоняется — слепой повтор
+    запрещён.
+    """
+    body = await request.json() if await request.body() else {}
+    db = session()
+    try:
+        run = db.get(Run, run_id)
+        if run is None or run.case_id != case_id:
+            raise HTTPException(404, "прогон не найден")
+        if run.status not in RETRYABLE:
+            raise HTTPException(409, "повторить можно только прерванный, не успевший или "
+                                "упавший расчёт; у № %d статус «%s»" % (run_id, run.status))
+        if _pinned_input(db, run_id) is None:
+            raise HTTPException(409, "вход расчёта № %d не закреплён или артефакт повреждён — "
+                                "слепой повтор запрещён, запустите расчёт заново" % run_id)
+        settings = json.loads(run.settings) if run.settings else {}
+        new, created = _start_run(db, case_id, settings,
+                                  operation_id=str(body.get("operation_id") or "") or None,
+                                  retry_of=run_id)
+        if not created:
+            return {"ok": True, "run_id": new.id, "идет": new.status == "идет"}
+        agents.say(db, case_id, "Повторяю расчёт № %d по закреплённому входу — попытка № %d."
+                   % (run_id, new.id), who="экономист")
+        background.add_task(_solve, case_id, new.id, settings, run_id)
+        return {"ok": True, "run_id": new.id, "retry_of": run_id}
     finally:
         db.close()
 

@@ -23,7 +23,10 @@ import sys
 from fot_planner.harness_local.artifacts import ArtifactStore, sha256_bytes
 
 CANON = "fot-json-v1"
-MANIFEST_SCHEMA = 1
+#: 2 — добавлен раздел «attempt»: повтор чистого вычисления ссылается на
+#: прогон, чей закреплённый вход он взял (RUN-002). Снимки схемы 1 читаются
+#: и сверяются так же: раздел у них просто отсутствует.
+MANIFEST_SCHEMA = 2
 
 
 def canonical_json(obj) -> bytes:
@@ -67,8 +70,13 @@ def code_version(src_root: str) -> dict:
 
 def build_manifest(*, run_id: int, case_id: int, executor: str, input_sha256: str,
                    reference_sha256: str | None, settings: dict, sources: dict,
-                   code: dict, command: list[str], time_limit_sec) -> dict:
-    """Черновик снимка до первого действия решателя (VER-002): вход закреплён."""
+                   code: dict, command: list[str], time_limit_sec,
+                   attempt_of: int | None = None) -> dict:
+    """Черновик снимка до первого действия решателя (VER-002): вход закреплён.
+
+    ``attempt_of`` — номер прогона, чей закреплённый вход взят для повтора
+    (RUN-002): попытки связаны, а вход у них один и тот же по хешу.
+    """
     return {
         "schema": MANIFEST_SCHEMA, "canonical": CANON,
         "run_id": run_id, "case_id": case_id, "executor": executor,
@@ -78,6 +86,7 @@ def build_manifest(*, run_id: int, case_id: int, executor: str, input_sha256: st
         "settings": settings or {},
         "sources": sources,
         "solver": {"command": list(command), "time_limit_sec": time_limit_sec, **code},
+        "attempt": {"retry_of": attempt_of, "input": "из снимка прогона"} if attempt_of else None,
         "output": None, "audit": None, "finished_at": None,
     }
 

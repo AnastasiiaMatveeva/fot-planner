@@ -339,6 +339,16 @@ class Run(Base):
     # input_path/result_path остаются для интерфейса, но снимком считается
     # только это: путь можно перезаписать, хеш — нет.
     manifest_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Актуальность результата (VER-003): «current», пока не изменилась
+    # материальная зависимость — документ-источник, справочник, условия
+    # плана, строки реестра; после — «review_required» с журналом причин.
+    # Сам результат не переписывается и не стирается: план остаётся, но
+    # применять его дальше без пересмотра нельзя.
+    review: Mapped[str | None] = mapped_column(String(30), default="current")
+    review_log: Mapped[str | None] = mapped_column(Text, default=None)   # JSON: [{когда, что}]
+    # Повтор чистого вычисления (RUN-002): новая попытка ссылается на прогон,
+    # чей закреплённый вход она взяла из хранилища артефактов.
+    retry_of: Mapped[int | None] = mapped_column(Integer, default=None)
 
     case: Mapped[Case] = relationship(back_populates="runs")
 
@@ -531,6 +541,79 @@ def record_decision(db, **fields):
     return row
 
 
+class Operation(Base):
+    """Команда с ключом операции (RUN-001): что выполнялось и чем кончилось.
+
+    Клиент повторяет запрос при обрыве связи, не зная, дошёл ли первый.
+    Без ключа повтор — вторая реплика в ленте и второе применение строк.
+    С ключом: тот же ключ и те же данные возвращают сохранённый ответ, тот
+    же ключ с другими данными — конфликт, а операция, упавшая на середине,
+    вслепую не повторяется — нужен новый ключ, то есть решение человека.
+    """
+
+    __tablename__ = "operations"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(40))            # реплика | решение по строкам
+    subject: Mapped[str | None] = mapped_column(String(120), default=None)
+    payload_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
+    state: Mapped[str] = mapped_column(String(20), default="идёт")  # идёт | готово | сбой
+    result: Mapped[str | None] = mapped_column(Text, default=None)   # JSON
+    created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
+    finished: Mapped[dt.datetime | None] = mapped_column(DateTime, default=None)
+
+
+def payload_digest(payload):
+    import hashlib
+    import json as _json
+    return hashlib.sha256(_json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def claim_operation(db, op_id, kind, subject, payload, stale_sec=600):
+    """Занять ключ операции. Возвращает (состояние, сохранённый результат).
+
+    Состояния: «новая» — выполнять; «готово»/«сбой» — ответ уже есть;
+    «идёт» — та же операция ещё выполняется; «конфликт» — ключ занят
+    другими данными. Операция, зависшая дольше stale_sec (процесс упал до
+    записи итога), занимается заново: слепым повтором это не считается,
+    потому что итога не было.
+    """
+    import json as _json
+    from sqlalchemy.exc import IntegrityError
+    digest = payload_digest(payload)
+    row = db.get(Operation, op_id)
+    if row is not None:
+        if row.payload_sha256 != digest or row.kind != kind:
+            return "конфликт", None
+        if row.state in ("готово", "сбой"):
+            return row.state, _json.loads(row.result) if row.result else None
+        if (now() - (row.created or now())).total_seconds() < stale_sec:
+            return "идёт", None
+        row.created = now()
+        db.commit()
+        return "новая", None
+    db.add(Operation(id=op_id, kind=kind, subject=subject, payload_sha256=digest))
+    try:
+        db.commit()
+    except IntegrityError:
+        # Второй такой же запрос успел первым: пусть отвечает он.
+        db.rollback()
+        return "идёт", None
+    return "новая", None
+
+
+def finish_operation(db, op_id, result, state="готово"):
+    import json as _json
+    row = db.get(Operation, op_id)
+    if row is None:
+        return
+    row.state = state
+    row.result = _json.dumps(result, ensure_ascii=False)
+    row.finished = now()
+    db.commit()
+
+
 #: Колонки, добавленные к уже существующим таблицам. create_all создает
 #: недостающие таблицы, но не колонки, а базу с делами экономиста мы не
 #: пересоздаем. SQLite умеет ADD COLUMN, этого достаточно.
@@ -548,7 +631,8 @@ _ADDED_COLUMNS = {
     "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
     "runs": [("sources", "TEXT"), ("executor", "VARCHAR(120)"),
              ("heartbeat", "DATETIME"), ("operation_id", "VARCHAR(80)"),
-             ("manifest_sha256", "VARCHAR(64)")],
+             ("manifest_sha256", "VARCHAR(64)"), ("review", "VARCHAR(30)"),
+             ("review_log", "TEXT"), ("retry_of", "INTEGER")],
     "labor_rows": [("headcount", "FLOAT"), ("months", "TEXT"),
                    ("details", "TEXT")],
     "verdicts": [("grade", "VARCHAR(20)")],

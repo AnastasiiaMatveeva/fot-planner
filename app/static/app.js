@@ -12,6 +12,14 @@
 var $ = function (id) { return document.getElementById(id); };
 var caseId = null, state = null, polling = null, lastSig = "";
 
+/* Ключ операции (RUN-001): оборвавшийся запрос повторяется тем же ключом и
+   получает тот же ответ, а не вторую реплику в ленте или второе применение
+   строк. Ключ рождается при нажатии, а не при отправке. */
+function opId() {
+  return (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+    : String(Date.now()) + "-" + Math.random().toString(16).slice(2);
+}
+
 function api(path, opts) {
   return fetch(path, opts).then(function (r) {
     if (!r.ok) throw new Error("HTTP " + r.status);
@@ -644,6 +652,12 @@ function renderStage() {
     : '<span class="pill' + (c.stage === "посчитано" ? " ok" : (c.stage === "нет решения" || c.stage === "не успел" ? " bad" : "")) + '">' +
       esc(c.stage === "готово к расчету" && (state.runs || []).some(function (r) { return r.status === "OPTIMAL"; }) ? "готов к пересчёту" : c.stage) + "</span>";
   var why = !c.has_data ? "для расчета нужны документы по договорам" : "";
+  var lastOk = (state.runs || []).filter(function (r) { return r.status === "OPTIMAL"; })[0];
+  if (lastOk && lastOk.review === "review_required") {
+    pill += '<span class="pill bad" title="' +
+      esc((lastOk.review_log || []).map(function (x) { return x["что"]; }).join("; ")) +
+      '">план требует пересмотра</span>';
+  }
   $("pmeta").innerHTML = pill +
     "<span>обновлено " + esc(c.updated) + "</span>" +
     (why ? "<span>· " + esc(why) + "</span>" : "");
@@ -750,7 +764,8 @@ function solve() {
     if (yes) yes.onclick = function () {
       back.remove();
       api("/api/case/" + caseId + "/solve", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operation_id: opId() })
       }).then(tick);
     };
   }).catch(function () { $("solve").disabled = false; });
@@ -2199,16 +2214,24 @@ function repGoalsHtml() {
       var by = {};
       (((r.summary || {})["цели"]) || []).forEach(function (g) { by[g["цель"]] = g; });
       var ok = r.status === "OPTIMAL";
+      // Прежний результат после смены данных остаётся, но помечен: применять
+      // его дальше без пересмотра нельзя (VER-003). Причины — в ленте.
+      var stale = ok && r.review === "review_required";
+      var why = stale ? (r.review_log || []).map(function (x) { return x["что"]; }).join("; ") : "";
       return { cls: r.id === vrun ? "sel" : "", cells: [
         nc(String(r.id)),
-        { v: esc(ok ? "посчитан" : r.status), cls: ok ? "ok" : (r.status === "идет" ? "" : "er") },
+        { v: '<span title="' + esc(why) + '">' + esc(ok ? (stale ? "посчитан · требует пересмотра" : "посчитан") : r.status) +
+             (r.retry_of ? " · повтор № " + r.retry_of : "") + "</span>",
+          cls: ok ? (stale ? "er" : "ok") : (r.status === "идет" ? "" : "er") },
         nc(r.seconds != null ? String(Math.round(r.seconds)) : "—"),
         r.created || "",
       ].concat(gcols.map(function (c) {
         var g = by[c.key];
         if (!g) return gc("—");
         return nc(g["единица"] === "₽" ? rmi(g["значение"]) : fmtGoal(g["значение"]));
-      }), [ok ? { v: '<a class="xl" href="/api/case/' + caseId + "/result/" + r.id + '">xlsx</a>' } : ""]) };
+      }), [ok ? { v: '<a class="xl" href="/api/case/' + caseId + "/result/" + r.id + '">xlsx</a>' }
+               : (r.retryable ? { v: '<a class="xl" href="#" data-retry="' + r.id +
+                                     '" title="Повторить по закреплённому входу">повторить</a>' } : "")]) };
     });
     h += secH(13, "Расчёт") + subH("13.1", "Версии") + repT(
       [{ t: "Версия" }, "Статус", { t: "Время, с" }, "Дата"].concat(
@@ -4603,7 +4626,8 @@ function openDocument(id) {
         api("/api/document/" + d.id + "/proposals", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accept: accept, reject: reject, document_sha256: d.sha256 || null }),
+          body: JSON.stringify({ accept: accept, reject: reject, document_sha256: d.sha256 || null,
+                                 operation_id: opId() }),
         }).then(function () {
           close();
           loadRegistry();
@@ -5399,6 +5423,18 @@ document.addEventListener("click", function (e) {
   if (e.target.closest("#pickclear")) stopSelecting();
 });
 
+/* Повтор прерванного расчёта по закреплённому входу прежней попытки
+   (RUN-002): считаются те же байты, а не сегодняшний реестр. */
+document.addEventListener("click", function (e) {
+  var a = e.target.closest("a[data-retry]");
+  if (!a || !caseId) return;
+  e.preventDefault();
+  api("/api/case/" + caseId + "/run/" + a.getAttribute("data-retry") + "/retry", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ operation_id: opId() })
+  }).then(tick, tick);
+});
+
 $("regview").addEventListener("change", function (e) {
   var per = e.target.closest("[data-per]");
   if (per) {
@@ -5770,7 +5806,7 @@ $("composer").addEventListener("submit", function (e) {
   var done = function () { sending = null; return tick(); };
   api("/api/case/" + caseId + "/message", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: t })
+    body: JSON.stringify({ text: t, operation_id: opId() })
   }).then(done, function () { done(); renderFeed(); });
 });
 

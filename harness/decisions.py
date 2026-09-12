@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Стенд локальных решений: кто решил, над какой версией, что записано.
+"""Стенд локальных решений: кто решил, над какой версией, что записано —
+и какие результаты после решения требуют пересмотра (VER-003).
 
 Временная база, подставной ответ модели, копия справочника во временной
 папке — ни живые данные, ни файл справочника в репозитории не трогаются.
@@ -95,6 +96,28 @@ class App:
     def decisions(self):
         self.db.expire_all()
         return self.db.query(self.d.Decision).order_by(self.d.Decision.id).all()
+
+    def other_case(self):
+        c = self.d.Case(title="Другой план", year=2027, stage="посчитано")
+        self.db.add(c)
+        self.db.commit()
+        return c
+
+    def result(self, case, docs=(), reference=True, status="OPTIMAL"):
+        """Прогон с снимком источников: какие документы и справочник легли в основание."""
+        src = {"документы": [{"id": d.id, "имя": d.name, "версия": d.version or 1} for d in docs]}
+        if reference:
+            src["справочник"] = {"файл": "demo_input.xlsx", "должностей": 10}
+        r = self.d.Run(case_id=case.id, status=status, settings="{}", seconds=1.0,
+                       summary=json.dumps({"plan_rows": 3}), sources=json.dumps(src, ensure_ascii=False))
+        self.db.add(r)
+        self.db.commit()
+        return r
+
+    def review(self, run):
+        self.db.expire_all()
+        r = self.db.get(self.d.Run, run.id)
+        return r.review or "current", json.loads(r.review_log) if r.review_log else []
 
     def run(self, coro):
         return asyncio.get_event_loop().run_until_complete(coro)
@@ -219,6 +242,90 @@ def _c07(app):
     rows = app.main.list_decisions(case_id=app.case.id)
     expect(len(rows) == 2 and rows[0]["id"] > rows[1]["id"], "список: %s" % [(r.get("id"), r.get("kind")) for r in rows], out)
     expect(all(r["actor"] == "Матвеева А.И." and r["kind"] == "состав плана" for r in rows), "поля списка: %s" % rows[:1], out)
+    return out
+
+
+@case("р08", "VER-003: замена версии документа отмечает планы, посчитанные на ней; независимый план и неудачный прогон не трогаются")
+def _c08(app):
+    out = []
+    doc = app.document("Штатное расписание.xlsx", sha="1" * 64)
+    other_doc = app.document("Договоры.xlsx", sha="2" * 64)
+    case2 = app.other_case()
+    run_a = app.result(app.case, [doc])
+    run_b = app.result(case2, [other_doc])
+    run_fail = app.result(app.case, [doc], status="нет решения")
+    app.main._retire_document(app.db, doc, new_version=2)
+    st, log = app.review(run_a)
+    expect(st == "review_required" and len(log) == 1 and "заменён версией 2" in log[0]["что"],
+           "план на старой версии не отмечен: %s %s" % (st, log), out)
+    expect(app.review(run_b) == ("current", []), "независимый план отмечен: %s" % (app.review(run_b),), out)
+    expect(app.review(run_fail)[0] != "review_required", "неудачный прогон отмечен к пересмотру", out)
+    app.db.expire_all()
+    expect(app.db.get(app.d.Run, run_a.id).status == "OPTIMAL" and app.db.get(app.d.Run, run_a.id).summary,
+           "отметка стёрла результат", out)
+    msgs = [m for m in app.db.query(app.d.Message).filter_by(case_id=app.case.id).all()
+            if m.payload and "review_required" in m.payload]
+    expect(len(msgs) == 1 and json.loads(msgs[0].payload)["runs"] == [run_a.id], "в ленте нет реплики о пересмотре: %d" % len(msgs), out)
+    expect(not [m for m in app.db.query(app.d.Message).filter_by(case_id=case2.id).all()], "реплика о пересмотре ушла в чужой план", out)
+    return out
+
+
+@case("р09", "VER-003: норма отмечает планы со справочником в основании; флажок и условие из чата — только свой план")
+def _c09(app):
+    out = []
+    case2 = app.other_case()
+    run_a = app.result(app.case, [])
+    run_b = app.result(case2, [])
+    run_c = app.result(case2, [], reference=False)
+    doc = app.document("Приказ 2556.pdf", sha="d" * 64)
+    doc.kind = "приказ"
+    doc.gave = json.dumps({"расхождения": [{"pos": "Инженер", "field": "П2556", "old": 110000, "new": 112000}]}, ensure_ascii=False)
+    app.db.commit()
+    app.run(app.main.document_reference(doc.id, Req({"edits": [{"pos": "Инженер", "field": "П2556", "value": 112000}],
+                                                     "document_sha256": "d" * 64})))
+    for r, want in ((run_a, 1), (run_b, 1), (run_c, 0)):
+        st, log = app.review(r)
+        expect(len(log) == want and (st == "review_required") == bool(want),
+               "после нормы прогон %d: %s %s" % (r.id, st, log), out)
+    expect("справочник изменён" in app.review(run_a)[1][0]["что"] and "Инженер: П2556" in app.review(run_a)[1][0]["что"],
+           "причина: %s" % app.review(run_a)[1], out)
+    app.run(app.main.mute_document(app.case.id, doc.id, Req({"muted": True})))
+    expect(len(app.review(run_a)[1]) == 2 and "исключён из плана" in app.review(run_a)[1][1]["что"],
+           "флажок не отметил свой план: %s" % app.review(run_a)[1], out)
+    expect(len(app.review(run_b)[1]) == 1, "флажок отметил чужой план", out)
+    app.say("допуск трудоёмкости 5 %", {"ok": True, "action": "закрепить", "fixes": [],
+                                        "settings": [{"name": "допуск трудоёмкости", "value": "0.05"}], "reply": "Записал."})
+    expect(len(app.review(run_a)[1]) == 3 and "условие плана изменено" in app.review(run_a)[1][2]["что"],
+           "условие из чата не отметило свой план: %s" % app.review(run_a)[1], out)
+    expect(len(app.review(run_b)[1]) == 1 and app.review(run_c) == ("current", []), "условие из чата задело чужой план", out)
+    return out
+
+
+@case("р10", "VER-003: принятые строки и удаление документа отмечают зависимые планы; отметка видна в данных плана и списке планов")
+def _c10(app):
+    out = []
+    case2 = app.other_case()
+    doc = app.document("Штатное расписание.xlsx", sha="3" * 64)
+    run_a = app.result(app.case, [doc])
+    run_b = app.result(case2, [])
+    pr = app.proposal(doc, "E7")
+    app.run(app.main.decide_proposals(doc.id, Req({"accept": [pr.id], "document_sha256": "3" * 64})))
+    for r in (run_a, run_b):
+        st, log = app.review(r)
+        expect(st == "review_required" and len(log) == 1 and "приняты строки" in log[0]["что"],
+               "после принятия строк в общий реестр прогон %d: %s %s" % (r.id, st, log), out)
+    app.main._forget_document(app.db, doc)
+    expect(len(app.review(run_a)[1]) == 2 and "удалён" in app.review(run_a)[1][1]["что"],
+           "удаление не отметило план на документе: %s" % app.review(run_a)[1], out)
+    expect(len(app.review(run_b)[1]) == 1, "удаление отметило план, не использовавший документ", out)
+    app.db.expire_all()
+    state = app.main.case_state(app.db, app.db.get(app.d.Case, app.case.id))
+    row = [r for r in state["runs"] if r["id"] == run_a.id][0]
+    expect(row["status"] == "OPTIMAL" and row["review"] == "review_required" and len(row["review_log"]) == 2,
+           "данные плана: %s" % {k: row[k] for k in ("status", "review", "review_log")}, out)
+    cases = {c["id"]: c for c in app.main.list_cases()}
+    expect(cases[app.case.id]["review"] == "review_required" and cases[app.case.id]["run_id"] == run_a.id,
+           "список планов: %s" % cases.get(app.case.id), out)
     return out
 
 

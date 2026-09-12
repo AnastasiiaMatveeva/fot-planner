@@ -1107,8 +1107,14 @@ def _save_plan_settings(db, case, d, text):
     """Условие плана из чата — решение экономиста, а не побочный эффект
     запроса: записывается с оператором, хешем настроек и репликой как
     основанием (VER-004)."""
+    import actuality
     from db import record_decision
     from fot_planner.harness_local import decisions as D
+    # Одна реплика проходит и через закрепления, и через настройки; если
+    # этот проход ничего не изменил, ни решения, ни отметки пересмотра нет.
+    before = plan_settings(case)   # свежий разбор с теми же умолчаниями, что у d
+    if json.dumps(before, ensure_ascii=False, sort_keys=True) == json.dumps(d, ensure_ascii=False, sort_keys=True):
+        return
     case.plan_settings = json.dumps(d, ensure_ascii=False)
     record_decision(db, kind="настройка плана", subject_kind="план", subject_id=case.id,
                     subject_digest=D.digest_settings(d), scope="план %d" % case.id,
@@ -1116,6 +1122,10 @@ def _save_plan_settings(db, case, d, text):
                             "запретов": len(d.get("запреты") or []),
                             "настройки": d.get("настройки") or {}},
                     grounds="реплика: %s" % (text or "")[:200])
+    # Условия плана — вход расчёта: прежние планы этого плана посчитаны без
+    # них и требуют пересмотра; планы других лет не трогаются (VER-003).
+    actuality.mark_review(db, actuality.runs_of_case(db, case.id),
+                          "условие плана изменено: %s" % (text or "")[:120])
 
 def apply_fixes(db, case, fixes, text=""):
     """Закрепить, запретить или снять. Возвращает (строки эха, вопросы).
