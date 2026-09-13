@@ -674,6 +674,42 @@ def correction_hints(db, kind, limit=8, *, document=None):
     return correction_context(db, document, limit=limit)["hints"]
 
 
+def _extraction_snapshot(doc, res, hints, selection):
+    """Закрепить контекст извлечения в хранилище артефактов (VER-002, MEM-003).
+
+    Байты документа, тексты подсказки, ID применённых и исключённых
+    исправлений, провайдер, модель, параметры вызова и итог ответа — по
+    SHA-256, без ключей провайдера. Возвращает хеш снимка; None, если
+    запроса к модели не было (провайдер не настроен) — закреплять нечего.
+    """
+    if res.get("unavailable"):
+        return None
+    import agents as _agents
+    from db import ARTIFACT_DIR
+    from fot_planner.harness_local import extraction as X
+    from fot_planner.harness_local.artifacts import ArtifactStore
+    store = ArtifactStore(ARTIFACT_DIR)
+    try:
+        artifact = store.put_file(doc.path) if doc.path and os.path.isfile(doc.path) else None
+    except (OSError, ValueError):
+        artifact = None
+    provider, model, _why = llm.provider()
+    snapshot = X.build_snapshot(
+        document={"id": doc.id, "name": doc.name, "sha256": doc.sha256,
+                  "artifact_sha256": artifact, "version": doc.version or 1,
+                  "kind": doc.kind, "scope": doc.scope, "case_id": doc.case_id},
+        provider=provider, model=model,
+        prompt={"system": llm.FREEFORM_SYSTEM, "shape": llm.FREEFORM_SHAPE,
+                "schema": llm.FREEFORM_SCHEMA,
+                "hinted_system": llm._hinted(llm.FREEFORM_SYSTEM, hints)},
+        hints={"ids": selection.get("correction_ids"), "texts": hints,
+               "conflicts": selection.get("conflicts"), "source": selection.get("source")},
+        params={"max_chunks": 8, "chunk_chars": llm.CHUNK,
+                "max_tokens": llm.FREEFORM_MAX_TOKENS},
+        result=res, agent_version=_agents.version_of("intake"))
+    return X.store_snapshot(store, snapshot)
+
+
 def propose_entities(db, case, doc):
     """Прочитать документ без шаблона и предложить найденное экономисту.
 
@@ -695,6 +731,9 @@ def propose_entities(db, case, doc):
                 % ', '.join(map(str, correction_selection['conflicts'])),
                 agent='intake', document_id=doc.id)
         res = llm.freeform(doc.path, doc.name, hints=hints)
+        # Что именно видела модель — в хранилище артефактов; предложения и
+        # приговоры ссылаются на этот снимок (VER-002, MEM-003).
+        context_sha = _extraction_snapshot(doc, res, hints, correction_selection)
         db.query(Proposal).filter_by(document_id=doc.id, state="предложено").delete()
 
         if not res.get("ok"):
@@ -722,6 +761,7 @@ def propose_entities(db, case, doc):
                 g, why = grade(entity, item, where, ctx)
                 grades[g] += 1
                 db.add(Proposal(document_id=doc.id, entity=entity,
+                                context_sha256=context_sha,
                                 payload=json.dumps(item, ensure_ascii=False),
                                 evidence=str(where)[:400] if where else None,
                                 grade=g, reason=why or None))
@@ -731,6 +771,8 @@ def propose_entities(db, case, doc):
                        if total or skipped else "сверх разобранного ничего")
         w["artifact"] = {"файл": doc.name, "прочитано частями": res.get("parts"),
                          "учтено правок экономиста": len(hints),
+                         "снимок контекста": (context_sha[:12] + "…") if context_sha
+                                             else "нет: запроса к модели не было",
                          "ID применённых правок": correction_selection['correction_ids'],
                          "конфликтующие правки": correction_selection['conflicts'],
                          "предложено строк": total,

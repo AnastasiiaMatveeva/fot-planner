@@ -469,6 +469,13 @@ class Verdict(Base):
     # Оценка, которую строка получила до приговора: по ней стенд считает
     # калибровку — сколько «надежных» экономист отклонил.
     grade: Mapped[str | None] = mapped_column(String(20), default=None)
+    # Точная привязка (MEM-003): редакция документа по байтам, само
+    # предложение и снимок контекста извлечения. Приговор до этих граф
+    # привязан только к имени файла и строгим эталоном не считается.
+    document_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    document_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
+    proposal_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    context_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
 
 
@@ -503,6 +510,9 @@ class Proposal(Base):
     reason: Mapped[str | None] = mapped_column(Text, default=None)
     # предложено | принято | отклонено
     state: Mapped[str] = mapped_column(String(20), default="предложено")
+    # Снимок контекста извлечения (VER-002): что видела модель, когда
+    # предложила строку, — хеш в хранилище артефактов.
+    context_sha256: Mapped[str | None] = mapped_column(String(64), default=None)
     created: Mapped[dt.datetime] = mapped_column(DateTime, default=now)
 
 
@@ -627,14 +637,17 @@ _ADDED_COLUMNS = {
                   # Что документ дал реестру, когда это не строки со ссылкой
                   # на него: величины справочника должностей.
                   ("gave", "TEXT")],
-    "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT")],
+    "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT"),
+                  ("context_sha256", "VARCHAR(64)")],
     "runs": [("sources", "TEXT"), ("executor", "VARCHAR(120)"),
              ("heartbeat", "DATETIME"), ("operation_id", "VARCHAR(80)"),
              ("manifest_sha256", "VARCHAR(64)"), ("review", "VARCHAR(30)"),
              ("review_log", "TEXT"), ("retry_of", "INTEGER")],
     "labor_rows": [("headcount", "FLOAT"), ("months", "TEXT"),
                    ("details", "TEXT")],
-    "verdicts": [("grade", "VARCHAR(20)")],
+    "verdicts": [("grade", "VARCHAR(20)"), ("document_id", "INTEGER"),
+                 ("document_sha256", "VARCHAR(64)"), ("proposal_id", "INTEGER"),
+                 ("context_sha256", "VARCHAR(64)")],
     "employees": [
         ("person_code", "VARCHAR(60)"),
         ("department", "VARCHAR(200)"),

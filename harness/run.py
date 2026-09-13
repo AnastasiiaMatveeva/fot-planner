@@ -179,45 +179,79 @@ def run_case(case, doc, cache):
 
 
 def check_verdicts(db, by_name, only, cache):
-    """Приговоры экономиста как случаи: принятое находится, отклоненное — нет.
+    """Приговоры экономиста как случаи — по точной редакции документа (MEM-003).
 
     Принятая строка узнается по ключевым полям: значения в ней были верны, и
     если разбор перестал ее находить — это откат. Отклоненная сверяется по
     всем полям: она была неверной именно с такими значениями, и если та же
     ошибка повторилась слово в слово — разбор не стал лучше.
+
+    Эталон — байты документа и те же подсказки, что видела модель (снимок
+    контекста извлечения), а не имя файла: другая редакция под тем же именем
+    приговор не наследует. Нет документа той редакции — проверка не проходит
+    как «источник недоступен», а не пропускается молча. Приговоры без хеша
+    документа (до L2.3) и предложения без снимка — неполные: печатаются, но
+    строгим эталоном не считаются и в счёт не идут.
     """
-    import json
+    from db import ARTIFACT_DIR
+    from fot_planner.harness_local import extraction as X
+    from fot_planner.harness_local.artifacts import ArtifactStore, sha256_of
 
     rows = db.query(Verdict).order_by(Verdict.document_name, Verdict.id).all()
     if not rows:
         return 0, 0
-    total = failed = 0
-    by_doc: dict = {}
+    by_sha: dict = {}
+    for d in db.query(Document).order_by(Document.id).all():
+        if d.sha256 and d.path and os.path.exists(d.path):
+            by_sha.setdefault(d.sha256, d)
+    store = ArtifactStore(ARTIFACT_DIR)
+    total = failed = incomplete = 0
+    groups: dict = {}
     for v in rows:
-        by_doc.setdefault(v.document_name, []).append(v)
-    for name, verdicts in by_doc.items():
+        groups.setdefault((v.document_name, v.document_sha256 or ""), []).append(v)
+    for (name, sha), verdicts in groups.items():
         if only and only.lower() not in name.lower():
             continue
-        doc = by_name.get(name)
-        print("── приговоры по «%s»: %d" % (name[:50], len(verdicts)))
-        if doc is None or not os.path.exists(doc.path):
-            print("   %s: документа нет в реестре\n" % SKIP)
+        print("── приговоры по «%s»%s: %d" % (name[:50], (" @" + sha[:8]) if sha else "",
+                                             len(verdicts)))
+        if not sha:
+            incomplete += len(verdicts)
+            print("   %s: без хеша документа — привязка неполная, строгим эталоном "
+                  "не считается\n" % SKIP)
             continue
-        if name not in cache:
-            cache[name] = llm.freeform(doc.path, doc.name)
-        res = cache[name]
-        if not res.get("ok"):
-            print("   %s: разбор не удался: %s\n" % (FAIL, res.get("error")))
-            failed += 1
+        doc = by_sha.get(sha)
+        status, note = X.source_status(sha, doc.path if doc else None, sha256_of)
+        if status != "exact":
             total += 1
+            failed += 1
+            print("   %s: %s\n" % (FAIL, note))
             continue
         for v in verdicts:
             key, fields = ENTITY_KEYS.get(v.entity, (None, ()))
             if key is None:
                 continue
+            if not v.context_sha256:
+                incomplete += 1
+                print("   %-10s предложение без снимка контекста: подсказки не "
+                      "воспроизвести, приговор неполный" % SKIP)
+                continue
+            hints = X.snapshot_hints(store, v.context_sha256)
+            total += 1
+            if hints is None:
+                failed += 1
+                print("   %-10s снимок контекста %s… недоступен: подсказки не воспроизвести"
+                      % (FAIL, v.context_sha256[:12]))
+                continue
+            ck = (sha, v.context_sha256)
+            if ck not in cache:
+                cache[ck] = llm.freeform(doc.path, doc.name, hints=hints)
+            res = cache[ck]
+            if not res.get("ok"):
+                failed += 1
+                print("   %-10s разбор не удался: %s" % (FAIL, res.get("error")))
+                continue
             want = json.loads(v.fields)
             got = res.get(key) or []
-            total += 1
             if v.verdict == "принято":
                 probe = {k: want[k] for k in fields if want.get(k) not in (None, "")}
                 ok = _has_row(got, probe)
@@ -231,6 +265,8 @@ def check_verdicts(db, by_name, only, cache):
                 failed += 1
             print("   %-10s %s" % (OK if ok else FAIL, text))
         print()
+    if incomplete:
+        print("   неполных приговоров (не в счёт): %d\n" % incomplete)
     _calibration(rows, only)
     return total, failed
 

@@ -1130,6 +1130,17 @@ async def decide_proposals(doc_id: int, request: Request):
         db.close()
 
 
+def _verdict_row(doc, pr, verdict, version):
+    """Приговор привязан к точной редакции документа, предложению и снимку
+    контекста извлечения, а не к имени файла (MEM-003): другая редакция под
+    тем же именем его не наследует, стенд проверяет те же байты и те же
+    подсказки."""
+    return Verdict(document_name=doc.name, entity=pr.entity, fields=pr.payload,
+                   verdict=verdict, agent_version=version, grade=pr.grade,
+                   document_id=doc.id, document_sha256=doc.sha256,
+                   proposal_id=pr.id, context_sha256=pr.context_sha256)
+
+
 def _decide_do(db, doc_id, take, drop, expected):
     if True:
         doc = db.get(Document, doc_id)
@@ -1161,9 +1172,7 @@ def _decide_do(db, doc_id, take, drop, expected):
             if pr.id in drop:
                 pr.state = "отклонено"
                 # Приговор — случай для стенда: эта строка была неверной.
-                db.add(Verdict(document_name=doc.name, entity=pr.entity,
-                               fields=pr.payload, verdict="отклонено",
-                               agent_version=version, grade=pr.grade))
+                db.add(_verdict_row(doc, pr, "отклонено", version))
                 # И память агента: в следующий раз он увидит, что так неверно.
                 intake.remember_correction(db, doc, entity=pr.entity, wrong=pr.payload,
                                            note="отклонено экономистом", agent_version=version,
@@ -1172,9 +1181,7 @@ def _decide_do(db, doc_id, take, drop, expected):
             if pr.id not in take:
                 continue
             f = json.loads(pr.payload)
-            db.add(Verdict(document_name=doc.name, entity=pr.entity,
-                           fields=pr.payload, verdict="принято",
-                           agent_version=version, grade=pr.grade))
+            db.add(_verdict_row(doc, pr, "принято", version))
             if pr.entity == "сотрудник":
                 db.add(Employee(
                     code=str(f.get("code") or ""),

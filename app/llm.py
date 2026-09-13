@@ -376,6 +376,10 @@ def _call_openai_compatible(text, filename, model, url, api_key=None,
 #: Сколько текста уходит в один запрос и насколько части перекрываются.
 #: Перекрытие нужно, чтобы строка таблицы не разрезалась пополам на границе.
 CHUNK = 40000
+#: Бюджет ответа разбора без шаблона по провайдеру: у Anthropic 8000, у
+#: OpenAI-совместимых 16000 — семь сущностей и шесть десятков полей, ответ
+#: длиннее. Снимок контекста извлечения записывает эти же числа (VER-002).
+FREEFORM_MAX_TOKENS = {"anthropic": 8000, "openai-compatible": 16000}
 OVERLAP = 2000
 
 
@@ -970,14 +974,14 @@ def _ask_freeform(name, model, text, filename, hints=None):
         json_schema=FREEFORM_SCHEMA, schema_name="freeform_entities",
         # Семь сущностей и шесть десятков полей: на плотной части документа
         # ответ длиннее прежних восьми тысяч токенов, и его обрывало.
-        max_tokens=16000)
+        max_tokens=FREEFORM_MAX_TOKENS["openai-compatible"])
 
 
 def _freeform_anthropic(text, filename, model, hints=None):
     import anthropic
 
     msg = anthropic.Anthropic().messages.create(
-        model=model, max_tokens=8000,
+        model=model, max_tokens=FREEFORM_MAX_TOKENS["anthropic"],
         system=_hinted(FREEFORM_SYSTEM, hints) + "\n\n" + FREEFORM_SHAPE,
         messages=[{"role": "user",
                    "content": "Документ «%s»:\n\n%s" % (filename, text)}])
