@@ -13,8 +13,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
-import shutil
+import tempfile
 
 
 def sha256_of(path: str) -> str:
@@ -42,29 +43,42 @@ class ArtifactStore:
         return os.path.isfile(self.path(digest))
 
     def put_bytes(self, data: bytes) -> str:
-        digest = sha256_bytes(data)
-        target = self.path(digest)
-        if os.path.isfile(target):
-            # Один раз записанный артефакт не переписывается: те же байты
-            # уже лежат, а «обновить» их — значит потерять снимок.
-            return digest
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        tmp = target + ".part"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.replace(tmp, target)
-        return digest
+        return self._put_stream(io.BytesIO(data))
 
     def put_file(self, path: str) -> str:
-        digest = sha256_of(path)
-        target = self.path(digest)
-        if os.path.isfile(target):
+        # Хешируем именно скопированные байты за один проход: между прежними
+        # sha256_of и copyfile исходник мог уже стать другим файлом.
+        with open(path, "rb") as source:
+            return self._put_stream(source)
+
+    def _put_stream(self, source) -> str:
+        os.makedirs(self.root, exist_ok=True)
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.root, prefix=".artifact-",
+                                             suffix=".part", delete=False) as file:
+                tmp = file.name
+                h = hashlib.sha256()
+                for chunk in iter(lambda: source.read(1 << 20), b""):
+                    file.write(chunk)
+                    h.update(chunk)
+                file.flush()
+                os.fsync(file.fileno())
+            digest = h.hexdigest()
+            target = self.path(digest)
+            if os.path.isfile(target):
+                if not self.verify(digest):
+                    raise ValueError("повреждён существующий артефакт: " + digest)
+                return digest
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            # Конкуренты имеют разные временные файлы на том же диске.
+            # Если оба публикуют один digest, байты одинаковы; один не может
+            # удалить временный файл другого вызова.
+            os.replace(tmp, target)
             return digest
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        tmp = target + ".part"
-        shutil.copyfile(path, tmp)
-        os.replace(tmp, target)
-        return digest
+        finally:
+            if tmp is not None and os.path.exists(tmp):
+                os.unlink(tmp)
 
     def read(self, digest: str) -> bytes:
         with open(self.path(digest), "rb") as f:

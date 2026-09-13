@@ -24,13 +24,25 @@ PY = VENV if os.path.exists(VENV) else sys.executable
 #: Часть приёмки → чем запускается → какие правки её касаются.
 #: Часть без списка файлов касается всего и в выборке по изменениям не участвует.
 PARTS = (
+    ("защита изменений", ["scripts/change_guard.py"], ("",)),
+    ("регрессии защиты", ["scripts/test_change_guard.py"],
+     ("scripts/", "harness/changes.json", ".github/", ".claude/")),
+    ("конкурентность L1", ["scripts/test_l1_concurrency.py"],
+     ("app/main.py", "src/fot_planner/harness_local/artifacts.py", "scripts/test_l1_concurrency.py")),
+    ("каталог L2", ["scripts/test_catalogue.py"],
+     ("capabilities/", "schemas/local-harness/", "src/fot_planner/harness_local/",
+      "app/agents.py", "app/intake.py", "scripts/test_catalogue.py", "scripts/check_requirements_map.py")),
+    ("область исправлений L2", ["scripts/test_correction_scope.py"],
+     ("app/intake.py", "app/llm.py", "app/main.py", "app/db.py",
+      "src/fot_planner/harness_local/corrections.py", "scripts/test_correction_scope.py")),
     ("вердикт приёмки", ["scripts/test_check_results.py"],
      ("scripts/check.py", "scripts/check_results.py", "scripts/test_check_results.py",
       "scripts/parts.py", "scripts/stop_gate.py", "harness/known_red.txt")),
     ("карта требований", ["scripts/check_requirements_map.py"],
      ("docs/requirements-map.json", "docs/ТЗ_РАЗВИТИЕ_АГЕНТОВ.md",
       "docs/ПРАВИЛА_РЕШАТЕЛЯ.md", "app/agents.py", "harness/crisis.py",
-      "harness/audit.py", "harness/chat.py", "scripts/check_requirements_map.py")),
+      "harness/audit.py", "harness/chat.py", "scripts/check_requirements_map.py",
+      "capabilities/", "schemas/local-harness/", "src/fot_planner/harness_local/catalogue.py")),
     ("хуки правок", ["scripts/test_lint_changed.py"],
      (".claude/settings.json", "scripts/lint_changed.py",
       "scripts/test_lint_changed.py")),
@@ -83,23 +95,11 @@ class GitUnavailable(RuntimeError):
 
 def changed_files():
     """Файлы, изменённые с последнего коммита, включая новые."""
+    import repo_state as S
     try:
-        p = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"],
-                           cwd=ROOT, text=True, encoding="utf-8", errors="replace",
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except OSError as e:  # git не установлен или недоступен
-        raise GitUnavailable(str(e)) from e
-    if p.returncode != 0:
-        raise GitUnavailable((p.stderr or "").strip() or "git вернул ошибку")
-    out = []
-    for line in (p.stdout or "").splitlines():
-        name = line[3:].strip().strip('"')
-        # Переименование: «старое -> новое», значение имеет новое имя.
-        if " -> " in name:
-            name = name.split(" -> ")[-1]
-        if name:
-            out.append(name.replace("\\", "/"))
-    return out
+        return sorted(S.changed(ROOT))
+    except S.RepositoryError as exc:
+        raise GitUnavailable(str(exc)) from exc
 
 
 def touched(files):

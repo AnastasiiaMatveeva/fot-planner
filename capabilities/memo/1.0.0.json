@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "kind": "role",
+  "id": "memo",
+  "version": "1.0.0",
+  "owner": "владелец продукта",
+  "name": "Пояснительные материалы",
+  "order": 6,
+  "purpose": "готовит текст записки по числам расчета",
+  "maturity": "declared",
+  "domains": [
+    "fot.local"
+  ],
+  "legacy": true,
+  "limitations": "Название и ответственность перенесены из legacy-каталога. Квалификация не выполнялась; ещё не все процедуры переведены на resolver.",
+  "skills": []
+}

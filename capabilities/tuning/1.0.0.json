@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "kind": "role",
+  "id": "tuning",
+  "version": "1.0.0",
+  "owner": "владелец продукта",
+  "name": "Настройка расчета",
+  "order": 2,
+  "purpose": "переводит требование экономиста в веса целевой функции",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "legacy": true,
+  "limitations": "Название и ответственность перенесены из legacy-каталога. Квалификация не выполнялась; ещё не все процедуры переведены на resolver.",
+  "skills": []
+}

@@ -41,6 +41,13 @@ def assess(args, returncode, output, known, *, strict=False):
         return finish("error", "исполнитель не запущен", runtime_error=True)
     if "Traceback (most recent call last):" in output:
         return finish("error", "необработанное исключение стенда", runtime_error=True)
+    if script == "scripts/change_guard.py" and returncode == 3:
+        if output.splitlines()[:1] == ["Защита изменений: review_required"]:
+            result["evaluation_status"] = "passed"
+            result["acceptance_status"] = "review_required"
+            result["reason"] = "контракт изменений выполнен; старую защиту должен проверить разработчик"
+            return result
+        return finish("error", "код review без соответствующего протокола", runtime_error=True)
     if script in CASE_SCRIPTS:
         summaries = SUMMARY.findall(output)
         if len(summaries) != 1:
@@ -74,7 +81,7 @@ def assess(args, returncode, output, known, *, strict=False):
 def overall(rows):
     """Даже одна непроверенная выбранная часть не даёт общий passed."""
     statuses = {row["acceptance_status"] for row in rows}
-    for status in ("error", "failed", "not_run", "baseline_compatible"):
+    for status in ("error", "failed", "not_run", "review_required", "baseline_compatible"):
         if status in statuses:
             return status
     return "passed" if rows else "not_run"

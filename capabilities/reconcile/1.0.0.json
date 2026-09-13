@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "kind": "role",
+  "id": "reconcile",
+  "version": "1.0.0",
+  "owner": "владелец продукта",
+  "name": "Сверка плана и факта",
+  "order": 5,
+  "purpose": "принимает фактические начисления и пересчитывает остаток года",
+  "maturity": "declared",
+  "domains": [
+    "fot.local"
+  ],
+  "legacy": true,
+  "limitations": "Название и ответственность перенесены из legacy-каталога. Квалификация не выполнялась; ещё не все процедуры переведены на resolver.",
+  "skills": []
+}

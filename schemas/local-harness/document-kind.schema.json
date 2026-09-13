@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "anyOf": [
+        {
+          "enum": [
+            "документ по договору",
+            "штатное расписание"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Kind"
+    }
+  },
+  "required": [
+    "kind"
+  ],
+  "title": "DocumentKind",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

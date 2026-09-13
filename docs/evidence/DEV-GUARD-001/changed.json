@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "run_id": "b377dc8b-bd06-4c19-972a-ed874e2a88ab",
+  "created_at": "2026-09-12T08:50:17.040969+00:00",
+  "mode": "strict",
+  "selection": {
+    "quick": false,
+    "changed": true,
+    "full": false,
+    "only": "",
+    "limit": 240
+  },
+  "environment": {
+    "python": "3.11.9",
+    "platform": "Windows-10-10.0.19045-SP0"
+  },
+  "scope": "selected existing suites; not full capability qualification",
+  "acceptance_status": "review_required",
+  "exit_code": 1,
+  "suites": [
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "review_required",
+      "cases": [],
+      "protocol": "process-exit",
+      "reason": "контракт изменений выполнен; старую защиту должен проверить разработчик",
+      "title": "защита изменений",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "scripts/change_guard.py"
+      ],
+      "started_at": "2026-09-12T08:50:02.347167+00:00",
+      "duration_seconds": 0.594,
+      "returncode": 3,
+      "entrypoint_sha256": "ff9a215a35aff668301e0399131e2cf92672a89cd219a3cb223d6153902549a8",
+      "stdout_sha256": "3fe1fa3439050e5158e25348570f70f27a52f49941f93a5d6c2675c8072ee810"
+    },
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [],
+      "protocol": "process-exit",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "регрессии защиты",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "scripts/test_change_guard.py"
+      ],
+      "started_at": "2026-09-12T08:50:02.955148+00:00",
+      "duration_seconds": 13.812,
+      "returncode": 0,
+      "entrypoint_sha256": "e21c8cf1cd4a753fdefea10fed6a91afbabd432b5886c6111fc90740580423ce",
+      "stdout_sha256": "ff545ffcb3b94065350eb3470a843e14c18b75b5758901035bd83fe437c97a5c"
+    },
+    {
+      "runtime_status": "completed",
+      "evaluation_status": "passed",
+      "acceptance_status": "passed",
+      "cases": [],
+      "protocol": "process-exit",
+      "reason": "заявленный протокол стенда выполнен",
+      "title": "вердикт приёмки",
+      "command": [
+        "E:\\ProjectHub\\PycharmProjects\\fot-planner\\.venv\\Scripts\\python.exe",
+        "scripts/test_check_results.py"
+      ],
+      "started_at": "2026-09-12T08:50:16.763304+00:00",
+      "duration_seconds": 0.282,
+      "returncode": 0,
+      "entrypoint_sha256": "6ec0e1ae867e788ee527ec3cabb435dfc1b864b7b73fbe790b62381cb7602c9c",
+      "stdout_sha256": "362deaba9d8fe67bb246a7d2ada844f4d4b289cf72e1357b2b2a5014a820a0d1"
+    }
+  ]
+}

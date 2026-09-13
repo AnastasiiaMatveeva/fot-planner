@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "kind": "role",
+  "id": "norms",
+  "version": "1.0.0",
+  "owner": "владелец продукта",
+  "name": "Нормативная база",
+  "order": 7,
+  "purpose": "сверяет справочник с новой редакцией приказа",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "legacy": true,
+  "limitations": "Название и ответственность перенесены из legacy-каталога. Квалификация не выполнялась; ещё не все процедуры переведены на resolver.",
+  "skills": []
+}

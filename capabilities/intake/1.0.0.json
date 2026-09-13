@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "kind": "role",
+  "id": "intake",
+  "version": "1.0.0",
+  "owner": "владелец продукта",
+  "name": "Извлечение данных",
+  "order": 1,
+  "purpose": "читает документы по договорам и переносит показатели в дело",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "legacy": true,
+  "limitations": "Название и ответственность перенесены из legacy-каталога. Квалификация не выполнялась; ещё не все процедуры переведены на resolver.",
+  "skills": [
+    {
+      "id": "template-kind-skill",
+      "version": "1.0.0"
+    }
+  ]
+}

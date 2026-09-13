@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "version": "1.0.0",
+  "owner": "разработчик fot-planner",
+  "purpose": "Распознаёт шаблонную книгу по именам листов без модели",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "input_schema": "document-input",
+  "output_schema": "document-kind",
+  "id": "template-kind-skill",
+  "kind": "skill",
+  "instruction": "src/fot_planner/harness_local/document_tools.py::template_kind",
+  "tools": [
+    {
+      "id": "template-kind-tool",
+      "version": "1.0.0"
+    }
+  ]
+}

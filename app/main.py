@@ -1155,6 +1155,7 @@ def _decide_do(db, doc_id, take, drop, expected):
                  "поступление": 0, "надбавка 120": 0, "правило замещения": 0,
                  "должность": 0}
         ref_log = []
+        correction_bindings = []
         version = agents.version_of("intake")
         for pr in rows:
             if pr.id in drop:
@@ -1164,9 +1165,9 @@ def _decide_do(db, doc_id, take, drop, expected):
                                fields=pr.payload, verdict="отклонено",
                                agent_version=version, grade=pr.grade))
                 # И память агента: в следующий раз он увидит, что так неверно.
-                db.add(Correction(document_name=doc.name, document_kind=doc.kind,
-                                  entity=pr.entity, wrong=pr.payload,
-                                  note="отклонено экономистом", agent_version=version))
+                intake.remember_correction(db, doc, entity=pr.entity, wrong=pr.payload,
+                                           note="отклонено экономистом", agent_version=version,
+                                           decision_bindings=correction_bindings)
                 continue
             if pr.id not in take:
                 continue
@@ -1251,7 +1252,8 @@ def _decide_do(db, doc_id, take, drop, expected):
                             subject_digest=D.digest(doc.sha256, [(pr.id, pr.entity, pr.payload) for pr in decided]),
                             scope=scope,
                             action={"принято": sorted(pr.id for pr in decided if pr.id in take),
-                                    "отклонено": sorted(pr.id for pr in decided if pr.id in drop)},
+                                    "отклонено": sorted(pr.id for pr in decided if pr.id in drop),
+                                    "correction_bindings": correction_bindings},
                             grounds="карточка документа", precondition=expected)
         if any(added.values()):
             # Реестр изменился: прежние планы посчитаны без этих строк.
@@ -1797,11 +1799,14 @@ def document_message(doc_id: int, background: BackgroundTasks, body: dict = Body
         if action == "заполнить поле" and res.get("edits"):
             lines = chat.apply_edits(db, None, res["edits"])
             for entity, key, field, was, val in getattr(chat.apply_edits, "last_changes", []):
-                db.add(Correction(
-                    document_name=doc.name, document_kind=doc.kind, entity=entity,
+                finder = chat._find_contract if entity == 'договор' else chat._find_employee
+                corrected = finder(db, None, key)
+                same_source = corrected is not None and corrected.document_id == doc.id
+                intake.remember_correction(db, doc, entity=entity,
+                    confirmed=same_source,
                     wrong=json.dumps({key: was, "поле": field}, ensure_ascii=False),
                     right=json.dumps({key: val, "поле": field}, ensure_ascii=False),
-                    note=text[:300], agent_version=version))
+                    note=text[:300], agent_version=version)
             db.add(Message(case_id=cid, document_id=doc.id, who="агент",
                            agent="intake", text="\n".join(lines) or "Не разобрал, что записать."))
             db.commit()
@@ -1818,9 +1823,9 @@ def document_message(doc_id: int, background: BackgroundTasks, body: dict = Body
                                agent="intake", text=refused))
                 db.commit()
             elif case is not None:
-                db.add(Correction(document_name=doc.name, document_kind=doc.kind,
-                                  entity="вид документа", wrong=doc.kind, right=kind,
-                                  note=text[:300], agent_version=version))
+                intake.remember_correction(db, doc, entity="вид документа",
+                                           wrong=doc.kind, right=kind,
+                                           note=text[:300], agent_version=version)
                 db.commit()
                 background.add_task(_reprocess, case.id, doc.id, owner, kind)
         else:
@@ -1828,8 +1833,8 @@ def document_message(doc_id: int, background: BackgroundTasks, body: dict = Body
             # уже отсекает вариант при следующем разборе.
             low = text.lower()
             if any(w in low for w in ("неверн", "ошибк", "не так", "неправильн")):
-                db.add(Correction(document_name=doc.name, document_kind=doc.kind,
-                                  note=text[:300], agent_version=version))
+                intake.remember_correction(db, doc, confirmed=False,
+                                           note=text[:300], agent_version=version)
                 db.commit()
         return {"ok": True, "action": action}
     finally:
@@ -2324,25 +2329,41 @@ def _start_run(db, case_id, settings, operation_id=None, retry_of=None):
     данными отклоняется как конфликт, потому что молча заменить данные
     операции хуже, чем отказать.
     """
+    from sqlalchemy import text
     payload = json.dumps(settings or {}, ensure_ascii=False, sort_keys=True)
-    if operation_id:
-        same = db.query(Run).filter_by(operation_id=operation_id).first()
-        if same is not None:
-            same_payload = json.dumps(json.loads(same.settings or "{}"),
-                                      ensure_ascii=False, sort_keys=True)
-            if same.case_id != case_id or same_payload != payload:
-                raise HTTPException(409, "операция %s уже выполнена с другими данными"
-                                    % operation_id)
-            return same, False
-    busy = _running_run(db, case_id)
-    if busy is not None:
-        return busy, False
-    run = Run(case_id=case_id, settings=payload, executor=EXECUTOR,
-              heartbeat=now(), operation_id=operation_id or None,
-              retry_of=retry_of)
-    db.add(run)
-    db.commit()
-    return run, True
+    try:
+        # SQLite сериализует писателей между процессами. Получаем право записи
+        # ДО чтения operation_id/занятости; отдельный Python-lock не защитил бы
+        # второй сервер. UPDATE не меняет предметных данных и не требует миграции.
+        # Граница транзакции здесь уже была (commit при создании run); теперь
+        # её закрывают и ветви повторного обращения, чтобы не держать блокировку.
+        reserved = db.execute(text("UPDATE cases SET id = id WHERE id = :case_id"),
+                              {"case_id": case_id})
+        if reserved.rowcount != 1:
+            raise HTTPException(404, "план не найден")
+        if operation_id:
+            same = db.query(Run).populate_existing().filter_by(operation_id=operation_id).first()
+            if same is not None:
+                same_payload = json.dumps(json.loads(same.settings or "{}"),
+                                          ensure_ascii=False, sort_keys=True)
+                if same.case_id != case_id or same_payload != payload or same.retry_of != retry_of:
+                    raise HTTPException(409, "операция %s уже выполнена с другими данными"
+                                        % operation_id)
+                db.commit()
+                return same, False
+        busy = _running_run(db, case_id)
+        if busy is not None:
+            db.commit()
+            return busy, False
+        run = Run(case_id=case_id, settings=payload, executor=EXECUTOR,
+                  heartbeat=now(), operation_id=operation_id or None,
+                  retry_of=retry_of)
+        db.add(run)
+        db.commit()
+        return run, True
+    except Exception:
+        db.rollback()
+        raise
 
 
 #: Сколько секунд операция с ключом считается идущей без итога. Дольше —
@@ -2475,7 +2496,12 @@ def _message_do(db, case_id, background, text):
             db.commit()
             return {"ok": True, "action": "закреплено"}
         base = json.loads(last.settings) if last and last.settings else {}
-        run, _created = _start_run(db, case_id, base)
+        run, created = _start_run(db, case_id, base)
+        if not created:
+            agents.say(db, case_id, "Условие записано. Расчёт № %d уже идёт." % run.id,
+                       agent="tuning")
+            db.commit()
+            return {"ok": True, "action": "закреплено", "run_id": run.id}
         agents.say(db, case_id, "Пересчитываю план с этими условиями.", agent="tuning")
         db.commit()
         background.add_task(_solve, case_id, run.id, base)

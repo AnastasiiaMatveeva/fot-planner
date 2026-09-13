@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "changes": [
+    {
+      "id": "DEV-L2-MEMORY-001",
+      "status": "implemented",
+      "summary": "Исправления ограничены точным источником и не отменяют общие правила",
+      "expected": "Только подтверждённая непротиворечивая Correction с LocalDecision применяется к своим байтам/документу/области; legacy, другие версии и конфликты исключаются",
+      "requirement": {
+        "path": "docs/ТЕСТИРОВАНИЕ.md",
+        "id": "DEV-L2-MEMORY-001"
+      },
+      "files": [
+        "app/main.py",
+        "app/intake.py",
+        "app/llm.py",
+        "app/db.py",
+        "src/fot_planner/harness_local/corrections.py",
+        "scripts/parts.py"
+      ],
+      "tests": [
+        {
+          "path": "scripts/test_correction_scope.py",
+          "symbol": "CorrectionScopeTests.test_same_name_other_document_or_scope_gets_no_hint"
+        },
+        {
+          "path": "scripts/test_correction_scope.py",
+          "symbol": "CorrectionScopeTests.test_later_conflicting_correction_does_not_win_even_with_limit"
+        },
+        {
+          "path": "scripts/test_correction_scope.py",
+          "symbol": "CorrectionScopeTests.test_reject_route_binds_memory_in_same_decision"
+        },
+        {
+          "path": "scripts/test_correction_scope.py",
+          "symbol": "CorrectionScopeTests.test_prompt_does_not_override_general_rules"
+        }
+      ],
+      "reproduction": "Первый запуск 9 тестов дал 1 failure (подсказка ставила исправления выше правил) и 8 errors (scope API отсутствовал). После реализации 16 тестов проходят, включая смену года того же плана. Отдельный старый harness/decisions.py 10/10 без изменения его ожиданий."
+    },
+    {
+      "id": "DEV-L2-CATALOGUE-001",
+      "status": "implemented",
+      "summary": "Локальный типизированный каталог ролей и первая исполняемая процедура без LLM",
+      "expected": "Валидные точные ссылки выбирают известную форму без модели; неизвестный обработчик, неверный контракт, область или права не исполняются; каталог и схемы не обходят защиту изменений",
+      "requirement": {
+        "path": "docs/ТЕСТИРОВАНИЕ.md",
+        "id": "DEV-L2-CATALOGUE-001"
+      },
+      "files": [
+        "app/agents.py",
+        "app/intake.py",
+        "src/fot_planner/harness_local/catalogue.py",
+        "src/fot_planner/harness_local/document_tools.py",
+        "scripts/check_requirements_map.py",
+        "scripts/parts.py",
+        "scripts/change_guard.py",
+        "scripts/repo_state.py",
+        "capabilities/intake/1.0.0.json",
+        "capabilities/tuning/1.0.0.json",
+        "capabilities/infeasible/1.0.0.json",
+        "capabilities/scenario/1.0.0.json",
+        "capabilities/reconcile/1.0.0.json",
+        "capabilities/memo/1.0.0.json",
+        "capabilities/checker/1.0.0.json",
+        "capabilities/norms/1.0.0.json",
+        "capabilities/template-kind/1.0.0.json",
+        "capabilities/template-kind-skill/1.0.0.json",
+        "capabilities/template-kind-tool/1.0.0.json",
+        "schemas/local-harness/catalogue.schema.json",
+        "schemas/local-harness/document-input.schema.json",
+        "schemas/local-harness/document-kind.schema.json"
+      ],
+      "tests": [
+        {
+          "path": "scripts/test_catalogue.py",
+          "symbol": "CatalogueTests.test_unknown_handler_rejected"
+        },
+        {
+          "path": "scripts/test_catalogue.py",
+          "symbol": "CatalogueIntegrationTests.test_app_classification_uses_resolver_without_llm"
+        },
+        {
+          "path": "scripts/test_change_guard.py",
+          "symbol": "GuardTests.test_catalogue_and_schema_changes_require_record_and_invalidate_cache"
+        },
+        {
+          "path": "scripts/test_change_guard.py",
+          "symbol": "GuardTests.test_existing_catalogue_requires_review"
+        }
+      ],
+      "reproduction": "Первый запуск каталога: ModuleNotFoundError, механизм отсутствовал. После реализации 24 теста проходят. Два новых теста защиты отдельно показали три падения: catalogue/schema не меняли fingerprint, изменение старого manifest не требовало review; защита расширена без ослабления старых ожиданий."
+    },
+    {
+      "id": "DEV-GUARD-001-IMPLEMENTATION",
+      "status": "implemented",
+      "summary": "Регрессионная защита изменений и кеш Stop по содержимому, а не только по времени",
+      "expected": "Новая правка отменяет кеш; изменения продукта без карточки и регрессионного теста блокируются; изменения старой защиты требуют ревью разработчика",
+      "requirement": {"path": "docs/ТЕСТИРОВАНИЕ.md", "id": "DEV-GUARD-001"},
+      "files": ["scripts/change_guard.py", "scripts/repo_state.py", "scripts/stop_gate.py", "scripts/parts.py", "scripts/check_results.py", ".github/workflows/priyomka.yml"],
+      "tests": [
+        {"path": "scripts/test_change_guard.py", "symbol": "StopCacheTests.test_new_edit_within_ten_minutes_runs"},
+        {"path": "scripts/test_change_guard.py", "symbol": "GuardTests.test_runtime_change_without_record"},
+        {"path": "scripts/test_change_guard.py", "symbol": "GuardTests.test_weakened_test_even_without_deleting_lines"}
+      ],
+      "reproduction": "Первый запуск нового стенда: ModuleNotFoundError (защита отсутствовала). Отдельные случаи проверяют возврат старого кеша после правки, вставку return перед assert, отсутствующий тест и конфликт. После реализации регрессии должны проходить; review_required не означает одобрение изменений."
+    },
+    {
+      "id": "DEV-L1-RACE-001",
+      "status": "implemented",
+      "summary": "Два одновременных запуска обходят проверку занятости",
+      "expected": "Одинаковый operation_id даёт один run; у плана не более одного активного run",
+      "requirement": {"path": "docs/ТЕСТИРОВАНИЕ.md", "id": "DEV-L1-RACE-001"},
+      "files": ["app/main.py"],
+      "tests": [
+        {"path": "scripts/test_l1_concurrency.py", "symbol": "RunConcurrencyTests.test_same_operation_creates_one_run"},
+        {"path": "scripts/test_l1_concurrency.py", "symbol": "RunConcurrencyTests.test_fix_from_chat_does_not_queue_existing_run_again"},
+        {"path": "scripts/test_l1_concurrency.py", "symbol": "RunConcurrencyTests.test_two_processes_share_one_reservation"}
+      ],
+      "reproduction": "На исходном коде два run для одного ключа, отсутствие 409 для разного payload, повторная фоновая задача из чата. Постоянный стенд падал на этих ожиданиях; после резервирующего UPDATE в SQLite и проверки created проходит. Проверяется также разными процессами, а не только потоками."
+    },
+    {
+      "id": "DEV-L1-ARTIFACT-001",
+      "status": "implemented",
+      "summary": "Одновременные put_bytes используют один временный файл",
+      "expected": "Две записи одинаковых байтов возвращают одинаковый SHA-256, без исключения и повреждения файла",
+      "requirement": {"path": "docs/ТЕСТИРОВАНИЕ.md", "id": "DEV-L1-ARTIFACT-001"},
+      "files": ["src/fot_planner/harness_local/artifacts.py"],
+      "tests": [
+        {"path": "scripts/test_l1_concurrency.py", "symbol": "ArtifactConcurrencyTests.test_concurrent_same_bytes"},
+        {"path": "scripts/test_l1_concurrency.py", "symbol": "ArtifactConcurrencyTests.test_concurrent_same_file"},
+        {"path": "scripts/test_l1_concurrency.py", "symbol": "ArtifactConcurrencyTests.test_file_digest_matches_copied_bytes"}
+      ],
+      "reproduction": "На исходном коде упорядоченная публикация двух записей воспроизводит FileNotFoundError, существующий повреждённый артефакт не отклоняется, двойное чтение источника даёт неверный digest. После уникальных временных файлов, однопроходного копирования/хеширования и проверки существующего файла ожидания проходят."
+    }
+  ]
+}

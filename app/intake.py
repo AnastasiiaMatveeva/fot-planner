@@ -86,36 +86,24 @@ def classify_by_words(path):
     return "документ по договору", "intake", contract / (norm + contract)
 
 
-#: Листы шаблона сервиса: книга с таким листом — форма, которую сервис читает
-#: сам, что бы модель ни сказала о её виде.
-_TEMPLATE_SHEETS_STAFF = ("сотрудники", "120_надбавка")
-_TEMPLATE_SHEETS_CONTRACT = ("договоры", "фот_по_месяцам", "трудоемкость_по_договорам",
-                             "трудоёмкость_по_договорам")
-
-
 def template_kind(path):
-    """Вид документа по листам шаблона: «штатное расписание», «документ по
-    договору» или None, если это не книга по шаблону.
+    """Распознавание известной формы через закреплённый локальный каталог.
 
-    Модель определяет вид по тексту и на книге из пяти строк с шифрами
-    колеблется — «Договоры 2026.xlsx» она однажды назвала «иное», и договоры
-    ушли бы в предложения вместо реестра. Лист, названный как в шаблоне
-    сервиса, — признак надёжнее любой догадки.
+    Права задаёт сервис для конкретного уже выбранного документа. Это не
+    новый HTTP-вход с произвольным путём. Неизвестная форма возвращает None
+    и продолжает прежнюю классификацию, ошибки каталога не скрываются.
     """
-    if docread.kind_of(path) not in (".xlsx", ".xlsm"):
-        return None
-    try:
-        import openpyxl
-        wb = openpyxl.load_workbook(path, read_only=True)
-        names = {str(n).strip().lower() for n in wb.sheetnames}
-        wb.close()
-    except Exception:  # noqa: BLE001 — не книга или битый файл: пусть решает модель
-        return None
-    if names & set(_TEMPLATE_SHEETS_CONTRACT):
-        return "документ по договору"
-    if names & set(_TEMPLATE_SHEETS_STAFF):
-        return "штатное расписание"
-    return None
+    from pathlib import Path
+    from fot_planner.harness_local.catalogue import Authority, Task, default_catalogue
+    from fot_planner.harness_local.document_tools import template_kind as handler
+
+    authority = Authority(permissions=frozenset({'document.read'}),
+                          resources=frozenset({'python', 'openpyxl'}),
+                          files=(Path(path),))
+    result = default_catalogue().invoke(
+        Task(kind='document.template_kind', domain='fot.local'),
+        {'path': str(path)}, authority, {'document.template_kind': handler})
+    return result['kind']
 
 
 def classify(path, filename=""):
@@ -608,30 +596,82 @@ def _known(db, entity, f):
                              for s in db.query(Substitution).all())
 
 
-def correction_hints(db, kind, limit=8):
-    """Правки экономиста по документам этого вида — строками для подсказки.
+def _correction_source(db, doc):
+    from db import Case
+    from fot_planner.harness_local import corrections as C
+    case = db.get(Case, doc.case_id) if doc.scope == 'план' and doc.case_id else None
+    return C.source_of(doc, period=case.year if case else None)
 
-    Последние важнее: если экономист поправлял одно и то же дважды, второй
-    раз он был точнее. Правка без верного значения тоже полезна — «это
-    неверно» уже отсекает вариант.
+
+def remember_correction(db, doc, *, confirmed=True, decision_bindings=None, **fields):
+    """Правка и её область в одной транзакции; автор — локальный оператор.
+
+    Ни модель, ни вызывающий клиент не задают actor/широкую область.
+    Старая таблица Correction сохраняется; binding хранится в LocalDecision.
     """
-    q = db.query(Correction)
-    if kind:
-        q = q.filter(Correction.document_kind == kind)
-    rows = q.order_by(Correction.id.desc()).limit(limit).all()
-    out = []
-    for c in rows:
-        what = c.entity or "строка"
-        if c.right and c.wrong:
-            out.append("%s: было %s — верно %s%s" % (
-                what, c.wrong[:160], c.right[:160],
-                (" (%s)" % c.note[:120]) if c.note else ""))
-        elif c.wrong:
-            out.append("%s: %s — неверно%s" % (
-                what, c.wrong[:160], (", %s" % c.note[:120]) if c.note else ""))
-        elif c.note:
-            out.append("%s: %s" % (what, c.note[:200]))
-    return out
+    from db import record_decision
+    from fot_planner.harness_local import corrections as C
+    from fot_planner.harness_local.decisions import digest
+
+    row = Correction(document_name=doc.name, document_kind=doc.kind, **fields)
+    db.add(row)
+    db.flush()
+    binding = C.binding_for(_correction_source(db, doc), confirmed)
+    subject_digest = digest(binding, C.content_of(row))
+    if decision_bindings is not None:
+        # Пакет принятия строк — одно пользовательское решение. Области его
+        # отдельных исправлений входят в это же событие, не дублируют решение.
+        decision_bindings.append({'id': row.id, 'binding': binding,
+                                  'subject_digest': subject_digest})
+        return row
+    record_decision(db, kind="данные", subject_kind="правка", subject_id=row.id,
+                    subject_digest=subject_digest,
+                    scope="документ %d" % doc.id, action={"binding": binding},
+                    grounds="исправление конкретного документа",
+                    outcome="записано: " + binding["status"])
+    return row
+
+
+def correction_context(db, document, limit=8):
+    from db import Decision
+    from sqlalchemy import and_, or_
+    from fot_planner.harness_local import corrections as C
+
+    records = []
+    rows = (db.query(Decision).filter(Decision.kind == 'данные', or_(
+        and_(Decision.subject_kind == 'правка', Decision.scope == 'документ %d' % document.id),
+        and_(Decision.subject_kind == 'документ', Decision.subject_id == str(document.id)))).all())
+    for decision in rows:
+        try:
+            action = json.loads(decision.action or "{}")
+            bindings = ([{'id': int(decision.subject_id), 'binding': action.get('binding'),
+                          'subject_digest': decision.subject_digest}]
+                        if decision.subject_kind == 'правка' else action.get('correction_bindings', []))
+            if not isinstance(bindings, list):
+                continue
+        except (ValueError, AttributeError):
+            continue
+        for item in bindings:
+            if not isinstance(item, dict) or type(item.get('id')) is not int:
+                continue
+            correction = db.get(Correction, item['id'])
+            if correction is not None:
+                records.append({"id": correction.id, "binding": item.get('binding'),
+                                "content": C.content_of(correction), "actor": decision.actor,
+                                "actor_source": decision.actor_source,
+                                "subject_digest": item.get('subject_digest')})
+    return C.select(records, _correction_source(db, document), limit=limit)
+
+
+def correction_hints(db, kind, limit=8, *, document=None):
+    """Без exact документа нет доказанной области — подсказок нет.
+
+    Параметр kind оставлен для совместимости; сам по себе вид формы не даёт
+    права переносить правку на другой документ. Legacy-записи не удаляются.
+    """
+    if document is None or document.kind != kind:
+        return []
+    return correction_context(db, document, limit=limit)["hints"]
 
 
 def propose_entities(db, case, doc):
@@ -647,7 +687,13 @@ def propose_entities(db, case, doc):
     Возвращает True, если что-то предложено.
     """
     with working(db, case.id, "intake", "перечитывает «%s» без шаблона" % doc.name) as w:
-        hints = correction_hints(db, doc.kind)
+        correction_selection = correction_context(db, doc)
+        hints = correction_selection['hints']
+        if correction_selection['conflicts']:
+            say(db, case.id, 'Есть противоречащие исправления по этому документу '
+                '(№ %s). Не применяю их автоматически; уточните верное значение.'
+                % ', '.join(map(str, correction_selection['conflicts'])),
+                agent='intake', document_id=doc.id)
         res = llm.freeform(doc.path, doc.name, hints=hints)
         db.query(Proposal).filter_by(document_id=doc.id, state="предложено").delete()
 
@@ -685,6 +731,8 @@ def propose_entities(db, case, doc):
                        if total or skipped else "сверх разобранного ничего")
         w["artifact"] = {"файл": doc.name, "прочитано частями": res.get("parts"),
                          "учтено правок экономиста": len(hints),
+                         "ID применённых правок": correction_selection['correction_ids'],
+                         "конфликтующие правки": correction_selection['conflicts'],
                          "предложено строк": total,
                          "из них надежных": grades["надежно"],
                          "проверить": grades["проверить"],

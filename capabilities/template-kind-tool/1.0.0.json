@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "version": "1.0.0",
+  "owner": "разработчик fot-planner",
+  "purpose": "Распознаёт шаблонную книгу по именам листов без модели",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "input_schema": "document-input",
+  "output_schema": "document-kind",
+  "id": "template-kind-tool",
+  "kind": "tool",
+  "handler": "document.template_kind",
+  "effects": "read-file",
+  "permissions": [
+    "document.read"
+  ],
+  "resources": [
+    "python",
+    "openpyxl"
+  ],
+  "limitations": "Синхронное локальное чтение; hard timeout/cancellation и общий resource budget ещё не реализованы. Не извлекает строки и не подтверждает данные."
+}

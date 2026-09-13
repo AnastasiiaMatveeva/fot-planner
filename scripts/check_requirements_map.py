@@ -66,13 +66,10 @@ def stand_of(case_id):
 
 
 def catalogue():
-    """Ключи и признак real из app/agents.py без импорта приложения."""
-    tree = ast.parse(read(os.path.join(ROOT, "app", "agents.py")))
-    for node in tree.body:
-        if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "AGENTS":
-            data = ast.literal_eval(node.value)
-            return {k: v.get("real") for k, v in data.items()}
-    raise RuntimeError("в app/agents.py нет словаря AGENTS")
+    """То же представление versioned-каталога, без импорта app/БД."""
+    sys.path.insert(0, os.path.join(ROOT, "src"))
+    from fot_planner.harness_local.catalogue import Catalogue
+    return {k: v["real"] for k, v in Catalogue.load(ROOT).agent_view().items()}
 
 
 def tz_ids():

@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -28,11 +30,16 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
           FOT_SKIP_ORPHANS: '1'
+          # Сравниваем всю поставку, не только незакоммиченные файлы runner.
+          # Пустой/недоступный before на первом push блокируется явно.
+          FOT_CHANGE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: python scripts/check.py --quick --strict --report outputs/ci-check.json
       - name: Сохранить отчёт приёмки
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: quick-check-report
-          path: outputs/ci-check.json
+          path: |
+            outputs/ci-check.json
+            outputs/change-guard.json
           if-no-files-found: error

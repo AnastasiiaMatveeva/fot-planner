@@ -14,7 +14,8 @@
 изменений выходил пустым, и задача закрывалась вообще без единого прогона.
 
 Чтобы не гонять стенд после каждой реплики, проверка запускается только
-когда изменены файлы, от которых он зависит, и не чаще раза в десять минут.
+когда изменены файлы, от которых он зависит. Кеш на десять минут применим
+только к тому же содержимому дерева и тому же набору команд.
 Состояние — в `outputs/stop_gate.json`.
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import parts as P  # noqa: E402
 import check_results as R  # noqa: E402
+import repo_state as S  # noqa: E402
 
 STATE = os.path.join(P.ROOT, "outputs", "stop_gate.json")
 PAUSE = 600  # секунд между прогонами
@@ -60,14 +62,16 @@ def run(args, known):
 
 def load():
     try:
-        return json.load(io.open(STATE, encoding="utf-8"))
+        with io.open(STATE, encoding="utf-8") as file:
+            data = json.load(file)
+        return data if isinstance(data, dict) else {}
     except Exception:  # noqa: BLE001 — первого запуска ещё не было
         return {}
 
 
 def save(data):
-    os.makedirs(os.path.dirname(STATE), exist_ok=True)
-    io.open(STATE, "w", encoding="utf-8").write(json.dumps(data, ensure_ascii=False))
+    from check import write_report
+    write_report(STATE, data)
 
 
 def main():
@@ -87,8 +91,18 @@ def main():
     chosen = [(t, a) for t, a in chosen if t not in SKIP]
     if not chosen:
         return 0
+    try:
+        fingerprint = S.fingerprint(P.ROOT, chosen)
+    except S.RepositoryError as exc:
+        _say("Не удалось закрепить проверяемое состояние: %s\n" % exc)
+        return 2
     state = load()
-    if time.time() - float(state.get("at") or 0) < PAUSE and state.get("ok"):
+    try:
+        recent = 0 <= time.time() - float(state.get("at") or 0) < PAUSE
+    except (TypeError, ValueError):
+        recent = False
+    if (not blind and state.get("fingerprint") == fingerprint
+            and recent and state.get("ok") is True):
         return 0
 
     known, fresh, lines = P.known_red(), [], []
@@ -98,7 +112,16 @@ def main():
         if status not in {"passed", "baseline_compatible"}:
             fresh.append("%s: %s" % (title, result["reason"]))
         lines.append("  %-18s %s: %s" % (title, status, result["reason"]))
-    save({"at": time.time(), "ok": not fresh})
+    try:
+        if S.fingerprint(P.ROOT, chosen) != fingerprint:
+            fresh.append("файлы изменились во время приёмки: нужен новый прогон")
+    except S.RepositoryError as exc:
+        fresh.append("состояние после проверки неизвестно: %s" % exc)
+    try:
+        save({"at": time.time(), "ok": not fresh, "fingerprint": fingerprint})
+    except OSError as exc:
+        _say("Не удалось сохранить состояние приёмки: %s\n" % exc)
+        return 2
     if not fresh:
         return 0
     _say("Приёмка нашла новые поломки, задача не закончена:\n%s\n%s\n%s"

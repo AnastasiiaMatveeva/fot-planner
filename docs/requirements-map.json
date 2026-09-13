@@ -200,7 +200,7 @@
     },
     {
       "key": "scenario",
-      "catalogue_real": true,
+      "catalogue_real": false,
       "maturity": "declared",
       "responsibility": "Сравнение планов «что будет, если»",
       "handlers": [],
@@ -213,7 +213,7 @@
         "cases": [],
         "status": "not_run"
       },
-      "limitations": "Обработчика нет: ключ встречается только в каталоге app/agents.py. real=True не соответствует факту (CAP-002). Сравнение версий плана по числам существует как раздел отчёта, но это не сценарный агент"
+      "limitations": "Обработчика сценарного агента нет; роль declared и real=False. Сравнение версий по числам в отчёте не является исполнением сценарной процедуры."
     },
     {
       "key": "norms",
@@ -268,7 +268,7 @@
     },
     {
       "key": "memo",
-      "catalogue_real": true,
+      "catalogue_real": false,
       "maturity": "declared",
       "responsibility": "Пояснительная записка по числам расчёта",
       "handlers": [],
@@ -281,7 +281,7 @@
         "cases": [],
         "status": "not_run"
       },
-      "limitations": "Обработчика нет: ключ встречается только в каталоге. real=True не соответствует факту (CAP-002)"
+      "limitations": "Обработчика нет; роль declared и real=False. Карточка сохраняет прежние имя и ключ, но не считается исполняемой способностью."
     },
     {
       "key": "reconcile",
@@ -366,34 +366,42 @@
     },
     {
       "id": "CAP-001",
-      "implementation": "not_started",
-      "tests": "not_run",
+      "implementation": "partial",
+      "tests": "partial",
       "code": [
-        "app/agents.py"
+        "src/fot_planner/harness_local/catalogue.py",
+        "app/agents.py",
+        "app/intake.py",
+        "scripts/test_catalogue.py"
       ],
-      "evidence": "Каталог — словарь AGENTS с полями n/name/does/real; схем входа/выхода, владельца и версии нет",
-      "gap": "Типизированные описания и схема каталога (capabilities/, schemas/local-harness/) не созданы"
+      "evidence": "L2.1: 24 теста scripts/test_catalogue.py прошли (синтетические документы и временная БД); подключена document.template_kind, 8 ролей перенесены в versioned files. Подробности и общий прогон — checkpoint L2.1 в IMPLEMENTATION-STATUS.md.",
+      "gap": "Типизирована одна исполняемая цепочка capability/skill/tool; остальные процедуры legacy. Нет полных model/domain profiles, timeout/cancellation, полного digest зависимостей."
     },
     {
       "id": "CAP-002",
-      "implementation": "not_started",
-      "tests": "not_run",
+      "implementation": "partial",
+      "tests": "partial",
       "code": [
-        "app/agents.py"
+        "src/fot_planner/harness_local/catalogue.py",
+        "app/agents.py",
+        "app/intake.py",
+        "scripts/test_catalogue.py"
       ],
-      "evidence": "Инвентаризация L0.3: у scenario и memo real=True без единого обработчика и маршрута; reconcile честно real=False",
-      "gap": "Зрелость declared/implemented/qualified/suspended в каталоге не различается; real=True у scenario/memo вводит в заблуждение"
+      "evidence": "L2.1: 24 теста scripts/test_catalogue.py прошли (синтетические документы и временная БД); подключена document.template_kind, 8 ролей перенесены в versioned files. Подробности и общий прогон — checkpoint L2.1 в IMPLEMENTATION-STATUS.md.",
+      "gap": "Зрелость ролей отделена от доступности executor; scenario/memo/reconcile declared. Квалификация, динамическая доступность провайдеров и расширенное отображение статусов в UI ещё не реализованы."
     },
     {
       "id": "CAP-003",
       "implementation": "partial",
-      "tests": "not_run",
+      "tests": "partial",
       "code": [
-        "app/intake.py::template_kind",
-        "app/chat.py::parse_settings"
+        "src/fot_planner/harness_local/catalogue.py",
+        "app/agents.py",
+        "app/intake.py",
+        "scripts/test_catalogue.py"
       ],
-      "evidence": "Шаблонная форма читается без модели; настройки из фразы разбираются кодом; переименование плана маршрут не меняет (маршруты — по типу документа)",
-      "gap": "Нет resolver по типизированному заданию; отсутствие обязательной способности не возвращает причину и требуемое действие"
+      "evidence": "L2.1: 24 теста scripts/test_catalogue.py прошли (синтетические документы и временная БД); подключена document.template_kind, 8 ролей перенесены в versioned files. Подробности и общий прогон — checkpoint L2.1 в IMPLEMENTATION-STATUS.md.",
+      "gap": "Выбор по типу/области/правам/ресурсам применяется к распознаванию шаблонной книги. Остальные маршруты пока legacy; необходимы перенос обработчиков и общие resource budgets."
     },
     {
       "id": "CAP-004",
@@ -465,28 +473,35 @@
         "migrations/004_decisions.py"
       ],
       "evidence": "L1.4: принятие строк, запись нормы, исключение документа и условие плана из чата записываются как решения с оператором, видом, хешем предмета, областью, действием и основанием (р02, р04–р06); решение над устаревшей версией документа отклоняется с 409 и тоже записывается — реестр не тронут (р03); GET /api/decisions отдаёт решения плана и документа (р07); L1.5: решение по строкам под ключом операции применяется один раз (л10); попытка повтора считает закреплённый вход прежней попытки, а не текущие данные (л08)",
-      "gap": "Предусловие (хеш версии документа) действует, только если форма его прислала; закреплённые версии для уже начатого прогона и отзыв опасной версии не реализованы; Verdict и Correction на решение не ссылаются"
+      "gap": "Предусловие (хеш версии документа) действует, только если форма его прислала; отзыв опасной версии не реализован. L2.2 связывает новые Correction с LocalDecision; у Verdict и старых Correction связь остаётся неполной"
     },
     {
       "id": "MEM-001",
-      "implementation": "not_started",
-      "tests": "not_run",
+      "implementation": "partial",
+      "tests": "partial",
       "code": [
-        "app/db.py::Correction"
+        "src/fot_planner/harness_local/corrections.py",
+        "app/intake.py",
+        "app/main.py",
+        "app/llm.py",
+        "scripts/test_correction_scope.py"
       ],
-      "evidence": "Correction хранится по виду документа; области (организация/план/форма/период) и статуса нет",
-      "gap": "Область действия исправления не задаётся и не проверяется"
+      "evidence": "L2.2: 16 тестов scripts/test_correction_scope.py прошли; LocalDecision связывает Correction с точным источником, годом плана и реальным оператором; чужие/неизвестные/конфликтующие hints исключаются. Старые решения р01–р10 проходят без изменения ожиданий.",
+      "gap": "Поддержана только точная область документа/байтов/плана. Широкая область по форме/организации/периоду и отдельный UI её подтверждения отсутствуют. Legacy без binding не удаляется, но не переиспользуется автоматически."
     },
     {
       "id": "MEM-002",
-      "implementation": "not_started",
-      "tests": "not_run",
+      "implementation": "partial",
+      "tests": "partial",
       "code": [
+        "src/fot_planner/harness_local/corrections.py",
+        "app/intake.py",
+        "app/main.py",
         "app/llm.py",
-        "app/intake.py::correction_hints"
+        "scripts/test_correction_scope.py"
       ],
-      "evidence": "Подсказка «исправления важнее общих правил» действует безусловно",
-      "gap": "Удалить безусловное правило и ввести приоритет по типу и области решения"
+      "evidence": "L2.2: 16 тестов scripts/test_correction_scope.py прошли; LocalDecision связывает Correction с точным источником, годом плана и реальным оператором; чужие/неизвестные/конфликтующие hints исключаются. Старые решения р01–р10 проходят без изменения ожиданий.",
+      "gap": "Безусловный приоритет исправлений удалён; конфликты ключей/значений исключаются до лимита hints. Полный снимок фактического LLM-контекста, процедура разрешения конфликта с supersede и обобщённое изменение метода по GOV ещё не реализованы."
     },
     {
       "id": "MEM-003",
