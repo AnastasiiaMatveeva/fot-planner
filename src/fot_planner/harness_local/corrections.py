@@ -61,13 +61,9 @@ def _target(content):
     return digest(content['entity'], wrong)
 
 
-def select(records, source, limit=8):
-    """records: пары содержимого Correction и доказательства LocalDecision.
-
-    Конфликты ищутся до limit. Все расходящиеся значения остаются в истории,
-    но ни одно не побеждает только потому, что пришло позже.
-    """
-    eligible = []
+def _eligible(records, source):
+    """Только подтверждённые правки, непротиворечиво привязанные к этому источнику."""
+    out = []
     for record in records:
         binding, content = record['binding'], record['content']
         if (not isinstance(binding, dict) or binding.get('schema_version') != 1
@@ -78,13 +74,57 @@ def select(records, source, limit=8):
                 or record.get('subject_digest') != digest(binding, content)
                 or not content.get('entity') or not content.get('wrong')):
             continue
-        eligible.append(record)
+        out.append(record)
+    return out
+
+
+def _groups(eligible):
     groups = {}
     for record in eligible:
         groups.setdefault(_target(record['content']), []).append(record)
+    return groups
+
+
+def conflict_groups(records, source, superseded=()):
+    """Группы правок одного объекта/поля с разными значениями — списки ID.
+
+    Правки, заменённые явным решением оператора, в спор не входят: конфликт
+    считается разрешённым, пока не появится новое расходящееся значение.
+    """
+    superseded = set(superseded or ())
+    eligible = [r for r in _eligible(records, source) if r['id'] not in superseded]
+    out = []
+    for group in _groups(eligible).values():
+        answers = {digest(_normal(r['content']['right'])) for r in group}
+        if len(answers) > 1:
+            out.append(sorted(r['id'] for r in group))
+    return sorted(out)
+
+
+def resolution(keep_id, groups):
+    """Что означает решение «оставить keep_id»: остальные ID его группы заменены.
+
+    Правка вне конфликта разрешения не требует — это ошибка вызова, а не
+    пустое решение: молчаливое «применено» скрыло бы, что решать было нечего.
+    """
+    for group in groups:
+        if keep_id in group:
+            return {'оставлено': keep_id, 'заменены': [i for i in group if i != keep_id]}
+    raise ValueError('правка %s не участвует в конфликте' % keep_id)
+
+
+def select(records, source, limit=8, superseded=()):
+    """records: пары содержимого Correction и доказательства LocalDecision.
+
+    Конфликты ищутся до limit. Все расходящиеся значения остаются в истории,
+    но ни одно не побеждает только потому, что пришло позже; побеждает лишь
+    явное решение оператора — заменённые правки исключаются, не удаляются.
+    """
+    superseded = set(superseded or ())
+    eligible = [r for r in _eligible(records, source) if r['id'] not in superseded]
     conflicts = []
     allowed = []
-    for group in groups.values():
+    for group in _groups(eligible).values():
         answers = {digest(_normal(r['content']['right'])) for r in group}
         if len(answers) > 1:
             conflicts.extend(r['id'] for r in group)
@@ -103,5 +143,6 @@ def select(records, source, limit=8):
             text += ' (%s)' % c['note'][:120]
         hints.append(text)
         ids.append(row['id'])
+    known = {r['id'] for r in records}
     return {'hints': hints, 'correction_ids': ids, 'conflicts': sorted(set(conflicts)),
-            'source': source}
+            'superseded': sorted(i for i in superseded if i in known), 'source': source}

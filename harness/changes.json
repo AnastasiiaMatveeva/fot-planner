@@ -2,6 +2,41 @@
   "schema_version": 1,
   "changes": [
     {
+      "id": "DEV-L2-CONFLICT-001",
+      "status": "implemented",
+      "summary": "Конфликт исправлений разрешает оператор явным решением; заменённые правки остаются в истории",
+      "expected": "Противоречащие правки одного объекта/поля исключаются из подсказок; решение «оставить № N» записывается с оператором, хешем предмета и предусловием редакции документа, остальные правки группы заменены и не удаляются; новое расходящееся значение открывает конфликт заново; устаревшая форма и правка вне спора отклоняются",
+      "requirement": {
+        "path": "docs/ТЕСТИРОВАНИЕ.md",
+        "id": "DEV-L2-CONFLICT-001"
+      },
+      "files": [
+        "app/intake.py",
+        "app/main.py",
+        "src/fot_planner/harness_local/corrections.py",
+        "scripts/parts.py"
+      ],
+      "tests": [
+        {
+          "path": "scripts/test_correction_conflicts.py",
+          "symbol": "CorrectionConflictTests.test_conflict_excludes_both_and_lists_group"
+        },
+        {
+          "path": "scripts/test_correction_conflicts.py",
+          "symbol": "CorrectionConflictTests.test_resolution_keeps_chosen_not_latest_and_records_operator"
+        },
+        {
+          "path": "scripts/test_correction_conflicts.py",
+          "symbol": "CorrectionConflictTests.test_new_diverging_value_reopens_conflict_and_keeps_superseded"
+        },
+        {
+          "path": "scripts/test_correction_conflicts.py",
+          "symbol": "CorrectionConflictTests.test_stale_form_is_refused_and_recorded"
+        }
+      ],
+      "reproduction": "На коде 0bf9b6b новый стенд: 7 ошибок из 7 — нет correction_conflicts, document_corrections и resolve_corrections. После реализации 7 из 7; соседние стенды области исправлений 16/16, контекста извлечения 11/11 и решений 10/10 проходят без изменения ожиданий."
+    },
+    {
       "id": "DEV-L2-VERDICT-001",
       "status": "implemented",
       "summary": "Снимок контекста извлечения и приговор по точной редакции документа, предложению и снимку",

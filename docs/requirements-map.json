@@ -494,16 +494,20 @@
     {
       "id": "MEM-002",
       "implementation": "partial",
-      "tests": "partial",
+      "tests": "passed",
       "code": [
         "src/fot_planner/harness_local/corrections.py",
         "app/intake.py",
         "app/main.py",
         "app/llm.py",
-        "scripts/test_correction_scope.py"
+        "scripts/test_correction_scope.py",
+        "app/intake.py::resolve_correction_conflict",
+        "app/main.py::resolve_corrections",
+        "app/main.py::document_corrections",
+        "scripts/test_correction_conflicts.py"
       ],
-      "evidence": "L2.2: 16 тестов scripts/test_correction_scope.py прошли; LocalDecision связывает Correction с точным источником, годом плана и реальным оператором; чужие/неизвестные/конфликтующие hints исключаются. Старые решения р01–р10 проходят без изменения ожиданий.",
-      "gap": "Безусловный приоритет исправлений удалён; конфликты ключей/значений исключаются до лимита hints. Полный снимок фактического LLM-контекста, процедура разрешения конфликта с supersede и обобщённое изменение метода по GOV ещё не реализованы."
+      "evidence": "L2.2: 16 тестов scripts/test_correction_scope.py прошли; LocalDecision связывает Correction с точным источником, годом плана и реальным оператором; чужие/неизвестные/конфликтующие hints исключаются. Старые решения р01–р10 проходят без изменения ожиданий.. L2.4a: конфликт разрешается явным решением оператора (маршрут resolve, LocalDecision с предусловием редакции документа), заменённые правки остаются в истории, новое расходящееся значение открывает конфликт заново, устаревшая форма и правка вне спора отклоняются — 7 тестов scripts/test_correction_conflicts.py",
+      "gap": "Снимок фактического контекста модели есть только у разбора без шаблона (L2.3); кнопки разрешения конфликта в карточке нет (UI-001); обобщённое изменение метода по GOV не реализовано"
     },
     {
       "id": "MEM-003",

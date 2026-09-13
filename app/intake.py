@@ -632,7 +632,7 @@ def remember_correction(db, doc, *, confirmed=True, decision_bindings=None, **fi
     return row
 
 
-def correction_context(db, document, limit=8):
+def _correction_records(db, document):
     from db import Decision
     from sqlalchemy import and_, or_
     from fot_planner.harness_local import corrections as C
@@ -660,7 +660,58 @@ def correction_context(db, document, limit=8):
                                 "content": C.content_of(correction), "actor": decision.actor,
                                 "actor_source": decision.actor_source,
                                 "subject_digest": item.get('subject_digest')})
-    return C.select(records, _correction_source(db, document), limit=limit)
+    return records
+
+
+def _superseded_ids(db, document):
+    """Правки, заменённые явным решением оператора по этому документу."""
+    from db import Decision
+    out = set()
+    rows = db.query(Decision).filter(Decision.kind == 'данные',
+                                     Decision.subject_kind == 'конфликт правок',
+                                     Decision.scope == 'документ %d' % document.id,
+                                     Decision.outcome == 'применено').all()
+    for decision in rows:
+        try:
+            action = json.loads(decision.action or "{}")
+        except ValueError:
+            continue
+        out.update(i for i in action.get('заменены', []) if type(i) is int)
+    return out
+
+
+def correction_context(db, document, limit=8):
+    from fot_planner.harness_local import corrections as C
+    return C.select(_correction_records(db, document), _correction_source(db, document),
+                    limit=limit, superseded=_superseded_ids(db, document))
+
+
+def correction_conflicts(db, document):
+    """Группы противоречащих правок (списки ID), кроме уже разрешённых."""
+    from fot_planner.harness_local import corrections as C
+    return C.conflict_groups(_correction_records(db, document), _correction_source(db, document),
+                             superseded=_superseded_ids(db, document))
+
+
+def resolve_correction_conflict(db, document, keep_id, precondition=None):
+    """Явное решение оператора: какая из противоречащих правок действует.
+
+    Остальные правки группы помечаются заменёнными в решении, а не
+    удаляются: история сохраняется, поздняя правка не побеждает сама
+    (MEM-002). Новое расходящееся значение позже откроет конфликт заново.
+    ValueError — правка не участвует в конфликте.
+    """
+    from db import record_decision
+    from fot_planner.harness_local import corrections as C
+    from fot_planner.harness_local.decisions import digest
+    action = C.resolution(int(keep_id), correction_conflicts(db, document))
+    source = _correction_source(db, document)
+    record_decision(db, kind="данные", subject_kind="конфликт правок", subject_id=int(keep_id),
+                    subject_digest=digest(source, action), scope="документ %d" % document.id,
+                    action={**action, "источник": source},
+                    grounds="разрешение конфликта исправлений оператором",
+                    precondition=precondition)
+    return action
 
 
 def correction_hints(db, kind, limit=8, *, document=None):

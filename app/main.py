@@ -1900,6 +1900,81 @@ def _norm_cell(v):
     return " ".join(s.split()).lower()
 
 
+@app.get("/api/document/{doc_id}/corrections")
+def document_corrections(doc_id: int):
+    """Исправления по документу и их состояние: что пойдёт в подсказку, что
+    спорит, что заменено решением оператора (MEM-002)."""
+    db = session()
+    try:
+        doc = db.get(Document, doc_id)
+        if doc is None:
+            raise HTTPException(404, "документ не найден")
+        ctx = intake.correction_context(db, doc)
+        groups = intake.correction_conflicts(db, doc)
+        in_conflict = {i for g in groups for i in g}
+        named = {"confirmed": "подтверждена, вне выборки", "proposed": "предложена",
+                 "legacy_unknown": "область неизвестна"}
+        rows = []
+        for rec in intake._correction_records(db, doc):
+            binding = rec.get("binding") or {}
+            status = ("заменена" if rec["id"] in ctx["superseded"] else
+                      "конфликт" if rec["id"] in in_conflict else
+                      "применяется" if rec["id"] in ctx["correction_ids"] else
+                      named.get(binding.get("status"), "не применяется"))
+            c = rec["content"]
+            rows.append({"id": rec["id"], "entity": c.get("entity"), "wrong": c.get("wrong"),
+                         "right": c.get("right"), "note": c.get("note"),
+                         "actor": rec.get("actor"), "status": status})
+        return {"corrections": rows, "conflicts": groups, "superseded": ctx["superseded"],
+                "hints": ctx["hints"], "document_sha256": doc.sha256}
+    finally:
+        db.close()
+
+
+@app.post("/api/document/{doc_id}/corrections/resolve")
+async def resolve_corrections(doc_id: int, request: Request):
+    """Оператор выбирает, какая из противоречащих правок действует.
+
+    Решение записывается с оператором и хешем предмета; остальные правки
+    группы считаются заменёнными, но остаются в истории. Форма, показывавшая
+    другую редакцию документа, отклоняется, и отказ тоже записан (VER-004).
+    """
+    body = await request.json()
+    expected = str(body.get("document_sha256") or "") or None
+    try:
+        keep = int(body.get("keep"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "нужен номер правки keep")
+    db = session()
+    try:
+        doc = db.get(Document, doc_id)
+        if doc is None:
+            raise HTTPException(404, "документ не найден")
+        from fot_planner.harness_local import decisions as D
+        if D.stale(expected, doc.sha256):
+            record_decision(db, kind="данные", subject_kind="конфликт правок", subject_id=keep,
+                            subject_digest=D.digest(doc.sha256, keep), scope="документ %d" % doc.id,
+                            action={"оставлено": keep},
+                            grounds="разрешение конфликта исправлений оператором",
+                            precondition=expected,
+                            outcome="отклонено: документ изменился после открытия формы")
+            db.commit()
+            raise HTTPException(409, "документ изменился после открытия формы — откройте карточку заново")
+        try:
+            action = intake.resolve_correction_conflict(db, doc, keep, precondition=expected)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        db.commit()
+        if doc.case_id:
+            agents.say(db, doc.case_id,
+                       "Конфликт исправлений по «%s» разрешён: действует правка № %d, "
+                       "заменены № %s." % (doc.name, keep, ", ".join(map(str, action["заменены"]))),
+                       agent="intake", document_id=doc.id)
+        return {"ok": True, **action}
+    finally:
+        db.close()
+
+
 @app.get("/api/document/{doc_id}/marks")
 def document_marks(doc_id: int):
     """Значения, которые из этого документа ушли в расчёт.
