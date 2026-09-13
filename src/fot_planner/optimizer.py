@@ -810,6 +810,7 @@ def solve(
     ctx: PlanningContext,
     time_limit_sec: int = 120,
     payroll_limit_mode: str = AVERAGE_LIMIT_MODE,
+    required_checks=None,
 ) -> PlanningResult:
     t0 = time.perf_counter()
     year = ctx.year
@@ -2332,9 +2333,10 @@ def solve(
     # со статусом OPTIMAL и дробной ставкой возможен, если условие записано
     # неверно; статус решателя об этом молчит, поэтому проверка отдельная.
     if status_name in ("OPTIMAL", "FEASIBLE"):
-        report = audit_result(ctx, result)
+        report = audit_result(ctx, result, required=required_checks)
         result.audit_status = report.status
         result.audit_violations = report.violations
+        result.audit_checks = report.checks
     return result
 
 

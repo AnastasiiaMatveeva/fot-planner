@@ -3601,6 +3601,45 @@ def _pinned_input(db, run_id):
     return store.read(digest), sources
 
 
+def _audit_requirements():
+    """Обязательные проверки результата — из профиля каталога (CAP-004).
+
+    Их номера уходят решателю флагом --require: обязательная, но не
+    реализованная в аудите проверка даёт not_run и FAIL, а не «неприменимо».
+    Каталог закреплён на процесс; без него сервис не стартует.
+    """
+    from fot_planner.harness_local.catalogue import default_catalogue
+    return [c["requirement"] for c in default_catalogue().required_checks("fot.local")]
+
+
+def _solver_command(src, out, limit):
+    command = [EXE, "solve", "-i", src, "-o", out, "--time-limit", str(limit)]
+    required = _audit_requirements()
+    if required:
+        command += ["--require", ",".join(required)]
+    return command
+
+
+def _read_solver_output(stdout):
+    """Разобрать вывод решателя: статус модели, итог аудита, нарушения и
+    состояние каждой проверки — passed / failed / not_applicable с основанием /
+    not_run для обязательной, но не реализованной (CAP-004)."""
+    from fot_planner.result_audit import parse_check_line
+    out = {"solver_status": "", "audit_status": "", "audit_lines": [], "checks": []}
+    for line in stdout.splitlines():
+        if line.startswith("Статус:"):
+            out["solver_status"] = line.split(":", 1)[1].strip()
+        elif line.startswith("Аудит:"):
+            out["audit_status"] = line.split(":", 1)[1].strip()
+        elif out["audit_status"] and line.startswith("  ["):
+            out["audit_lines"].append(line.strip())
+        else:
+            check = parse_check_line(line)
+            if check:
+                out["checks"].append(check)
+    return out
+
+
 def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | None = None):
     db = session()
     stop = threading.Event()
@@ -3661,7 +3700,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
             # на демо-наборе стадия «отклонение от П2556» в него не
             # укладывалась, и оклад с надбавкой не доходили до предела.
             limit = os.environ.get("FOT_SOLVE_TIME_LIMIT", "240")
-            command = [EXE, "solve", "-i", src, "-o", out, "--time-limit", str(limit)]
+            command = _solver_command(src, out, limit)
             draft = _manifest_draft(run, src, settings, sources, command, limit,
                                     attempt_of=pinned_from)
             draft_digest = run.manifest_sha256
@@ -3686,15 +3725,9 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
             return
 
         run.seconds = sec
-        solver_status = ""
-        audit_status, audit_lines = "", []
-        for line in (p.stdout or "").splitlines():
-            if line.startswith("Статус:"):
-                solver_status = line.split(":", 1)[1].strip()
-            elif line.startswith("Аудит:"):
-                audit_status = line.split(":", 1)[1].strip()
-            elif audit_status and line.startswith("  ["):
-                audit_lines.append(line.strip())
+        parsed = _read_solver_output(p.stdout or "")
+        solver_status, audit_status = parsed["solver_status"], parsed["audit_status"]
+        audit_lines, audit_checks = parsed["audit_lines"], parsed["checks"]
         if p.returncode != 0 and not solver_status and not (p.stdout or "").strip():
             # Решатель не сказал ничего: его сняли (перезапуск сервера, снятие
             # процесса). Это не «решения нет» — разбор причин неразрешимости
@@ -3725,7 +3758,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
             # числа, которых кадровик не оформит.
             run.status = "не прошёл проверку"
             case.stage = "не прошёл проверку"
-            run.summary = json.dumps({"аудит": audit_lines}, ensure_ascii=False)
+            run.summary = json.dumps({"аудит": audit_lines, "проверки": audit_checks}, ensure_ascii=False)
             db.commit()
             agents.say(db, case_id, "\n".join(
                 ["План посчитан, но не прошёл проверку результата:"]
@@ -3781,6 +3814,10 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
         # Цели решателя: что вышло по каждой и какой вес держал. Экономист
         # сравнивает два прогона по этим числам, а не по всему плану.
         summary["цели"] = _read_goals(out)
+        # Состояние каждой проверки результата: что применялось, что нет и
+        # почему; обязательная без реализации сюда не дойдёт — план упал бы
+        # раньше как не прошедший проверку (CAP-004).
+        summary["проверки"] = audit_checks
         if settings and settings.get("претензии"):
             summary["претензии"] = settings["претензии"]
         run.summary = json.dumps(summary, ensure_ascii=False)

@@ -27,6 +27,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Excel с листом «План выплат» для пересчёта с фиксациями; по умолчанию = --output",
     )
     solve_p.add_argument("--time-limit", type=int, default=120, help="Лимит решателя, сек")
+    # Обязательные проверки результата задаёт вызывающий (каталог сервиса):
+    # не реализованная в аудите обязательная проверка даёт not_run и FAIL.
+    solve_p.add_argument("--require", default="",
+                         help="обязательные проверки результата через запятую: RATE-001,FOT-001")
 
     args = parser.parse_args(argv)
 
@@ -43,6 +47,7 @@ def main(argv: list[str] | None = None) -> int:
             output_path=args.output,
             plan_override_path=args.plan,
             time_limit_sec=args.time_limit,
+            required_checks=[s.strip() for s in (args.require or "").split(",") if s.strip()],
         )
         print(f"Статус: {result.solver_status}")
         # Статус решателя говорит о его модели, аудит — о правилах
@@ -51,6 +56,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Аудит: {result.audit_status}")
         for v in result.audit_violations[:20]:
             print(f"  [{v.rule_id}] {v.message}")
+        # Состояние каждой проверки — с основанием неприменимости и not_run
+        # для обязательной, но не реализованной (CAP-004).
+        from fot_planner.result_audit import format_checks
+        for line in format_checks(result.audit_checks):
+            print(line)
         print(f"Назначений: {len(result.allocations)}, дефицитов: {len(result.deficits)}")
         print(f"Целевая функция: {result.objective_value:.2f}, время: {result.solve_time_sec} с")
         print(f"Результат: {Path(args.output).resolve()}")

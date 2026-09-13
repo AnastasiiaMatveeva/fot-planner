@@ -405,13 +405,20 @@
     },
     {
       "id": "CAP-004",
-      "implementation": "not_started",
-      "tests": "not_run",
+      "implementation": "partial",
+      "tests": "passed",
       "code": [
-        "src/fot_planner/result_audit.py"
+        "src/fot_planner/result_audit.py",
+        "src/fot_planner/harness_local/catalogue.py::required_checks",
+        "capabilities/profile.fot-local/1.0.0.json",
+        "capabilities/check.rate-001/1.0.0.json",
+        "app/main.py::_audit_requirements",
+        "app/main.py::_read_solver_output",
+        "src/fot_planner/cli.py",
+        "scripts/test_audit_applicability.py"
       ],
-      "evidence": "Карточки аудита имеют requirement ID (RATE-001 и др.), но правил применимости нет: все проверки запускаются всегда",
-      "gap": "Применимость и обязательность по профилю не описаны"
+      "evidence": "L2.4b: у каждой из шести карточек аудита — описание check с requirement ID, правилом применимости и доверенным обработчиком; обязательный состав задаёт профиль, сервис передаёт его решателю флагом --require; аудит сообщает состояние каждой проверки (passed / failed / not_applicable с основанием / not_run), обязательная без реализации даёт not_run и FAIL; наличие проверки в каталоге вне профиля её не запускает. 12 тестов scripts/test_audit_applicability.py; CLI на uc12 с --require P4-001: not_run, код 3",
+      "gap": "Обязательный объём QA-001 сверх шести карточек не описан (нужны карточки свода и решение владельца, L3); применимость по типу договора не дифференцирована — правила пока по составу входа; квалификация проверок — L4"
     },
     {
       "id": "VER-001",
@@ -545,9 +552,10 @@
       "tests": "partial",
       "code": [
         "src/fot_planner/models.py::PlanningResult",
-        "scripts/check.py"
+        "scripts/check.py",
+        "src/fot_planner/result_audit.py::AuditReport.checks"
       ],
-      "evidence": "solver_status и audit_status раздельны (случай а09); отчёт приёмки хранит команду, коды, время, хеши",
+      "evidence": "solver_status и audit_status раздельны (случай а09); отчёт приёмки хранит команду, коды, время, хеши; L2.4b: у каждой проверки результата отдельное состояние passed / failed / not_applicable / not_run, not_run обязательной проверки даёт FAIL, а не passed",
       "gap": "Локальная приёмка результата, актуальность и зрелость способности как статусы не хранятся; EvaluationRecord нет"
     },
     {

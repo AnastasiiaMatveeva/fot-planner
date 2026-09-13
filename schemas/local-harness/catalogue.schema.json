@@ -34,7 +34,9 @@
         "role",
         "capability",
         "skill",
-        "tool"
+        "tool",
+        "check",
+        "profile"
       ],
       "title": "Kind",
       "type": "string"
@@ -234,6 +236,32 @@
       ],
       "default": null,
       "title": "Instruction"
+    },
+    "requirement": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Z][A-Z0-9]{1,7}-\\d{3}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Requirement"
+    },
+    "applicability": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Applicability"
     }
   },
   "required": [

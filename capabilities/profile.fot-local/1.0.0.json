@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "kind": "profile",
+  "id": "profile.fot-local",
+  "version": "1.0.0",
+  "owner": "экономический отдел",
+  "purpose": "Обязательные проверки готового плана ФОТ для локальной области",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "checks": [
+    {
+      "id": "check.rate-001",
+      "version": "1.0.0"
+    },
+    {
+      "id": "check.salary-001",
+      "version": "1.0.0"
+    },
+    {
+      "id": "check.payment-001",
+      "version": "1.0.0"
+    },
+    {
+      "id": "check.labor-001",
+      "version": "1.0.0"
+    },
+    {
+      "id": "check.person-001",
+      "version": "1.0.0"
+    },
+    {
+      "id": "check.fot-001",
+      "version": "1.0.0"
+    }
+  ],
+  "limitations": "Состав — только реализованные проверки; обязательный объём QA-001 (П4, БЭП, связи 120/122/124/152, ручные назначения, замещение) требует карточек и решения владельца — L3."
+}

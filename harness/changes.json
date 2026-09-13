@@ -2,6 +2,57 @@
   "schema_version": 1,
   "changes": [
     {
+      "id": "DEV-L2-CHECKS-001",
+      "status": "implemented",
+      "summary": "Правило применимости и requirement ID у обязательных проверок результата; обязательный состав через профиль каталога",
+      "expected": "Аудит сообщает состояние каждой проверки: passed, failed, not_applicable с проверяемым основанием, not_run для обязательной без реализации; обязательный состав задаёт профиль каталога и уходит решателю флагом --require; наличие проверки в каталоге само по себе её не запускает; отсутствие реализации не даёт not_applicable, а делает план непроверенным",
+      "requirement": {
+        "path": "docs/ТЕСТИРОВАНИЕ.md",
+        "id": "DEV-L2-CHECKS-001"
+      },
+      "files": [
+        "src/fot_planner/result_audit.py",
+        "src/fot_planner/models.py",
+        "src/fot_planner/optimizer.py",
+        "src/fot_planner/planner.py",
+        "src/fot_planner/cli.py",
+        "src/fot_planner/harness_local/catalogue.py",
+        "app/main.py",
+        "scripts/parts.py",
+        "capabilities/check.rate-001/1.0.0.json",
+        "capabilities/check.salary-001/1.0.0.json",
+        "capabilities/check.payment-001/1.0.0.json",
+        "capabilities/check.labor-001/1.0.0.json",
+        "capabilities/check.person-001/1.0.0.json",
+        "capabilities/check.fot-001/1.0.0.json",
+        "capabilities/profile.fot-local/1.0.0.json",
+        "schemas/local-harness/catalogue.schema.json"
+      ],
+      "tests": [
+        {
+          "path": "scripts/test_audit_applicability.py",
+          "symbol": "AuditApplicabilityTests.test_empty_plan_reports_not_applicable_with_reasons_not_passed"
+        },
+        {
+          "path": "scripts/test_audit_applicability.py",
+          "symbol": "AuditApplicabilityTests.test_required_unimplemented_check_is_not_run_and_fails"
+        },
+        {
+          "path": "scripts/test_audit_applicability.py",
+          "symbol": "CatalogueChecksTests.test_declared_check_in_profile_is_required_and_not_run_not_applicable"
+        },
+        {
+          "path": "scripts/test_audit_applicability.py",
+          "symbol": "CatalogueChecksTests.test_check_in_catalogue_alone_is_not_required"
+        },
+        {
+          "path": "scripts/test_audit_applicability.py",
+          "symbol": "ServiceWiringTests.test_solver_command_carries_catalogue_requirements"
+        }
+      ],
+      "reproduction": "На коде b48518d новый стенд: 7 ошибок и 1 провал из 12 — у AuditReport нет состояний проверок, audit не принимает required, у каталога нет required_checks и вида check/profile, у сервиса нет _audit_requirements/_read_solver_output. После реализации 12 из 12; стенды аудита 15/15, каталога 24/24, снимка 7/7, решений 10/10 проходят без изменения ожиданий. CLI на uc12_part_time_new_contract_input.xlsm с --require RATE-001,FOT-001,P4-001: шесть проверок passed, P4-001 not_run, Аудит FAIL, код 3."
+    },
+    {
       "id": "DEV-L2-CONFLICT-001",
       "status": "implemented",
       "summary": "Конфликт исправлений разрешает оператор явным решением; заменённые правки остаются в истории",

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "kind": "check",
+  "id": "check.fot-001",
+  "version": "1.0.0",
+  "owner": "экономический отдел",
+  "purpose": "Выплаты по договору не выше ФОТ, касса не ниже нуля",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "requirement": "FOT-001",
+  "applicability": "Применяется, когда во входе есть договоры.",
+  "handler": "audit.fot-001",
+  "limitations": "Точная формула — в docs/ПРАВИЛА_РЕШАТЕЛЯ.md под тем же номером; квалификация не выполнялась."
+}

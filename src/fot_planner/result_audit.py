@@ -47,14 +47,41 @@ MONTHS = ("январь", "февраль", "март", "апрель", "май"
 
 #: Проверки в порядке номеров. Каждая — функция (вход, результат) → нарушения.
 CHECKS: list[tuple[str, str, object]] = []
+#: Правило применимости: (вход, результат) → (применима ли, основание).
+#: Неприменимость обязана иметь проверяемое основание (CAP-004): «во входе нет
+#: договоров» — основание; «не реализовано» — не основание, а not_run.
+APPLIES: dict[str, object] = {}
 
 
-def check(rule_id: str, name: str):
+def check(rule_id: str, name: str, applies=None):
     """Записать проверку в список. Порядок вывода — порядок объявления."""
     def wrap(fn):
         CHECKS.append((rule_id, name, fn))
+        if applies is not None:
+            APPLIES[rule_id] = applies
         return fn
     return wrap
+
+
+def _needs(attr: str, what: str):
+    """Проверка применима, когда во входе есть такие записи."""
+    def rule(ctx, result):
+        return bool(getattr(ctx, attr, None)), "во входе нет %s" % what
+    return rule
+
+
+def _needs_all(*rules):
+    def rule(ctx, result):
+        for r in rules:
+            ok, why = r(ctx, result)
+            if not ok:
+                return False, why
+        return True, ""
+    return rule
+
+
+def _needs_open_rates(ctx, result):
+    return bool(result.open_rate_attributions), "в плане нет открытых ставок"
 
 
 @dataclass
@@ -64,6 +91,10 @@ class AuditReport:
     status: str = "OK"  # OK | FAIL
     violations: list[AuditViolation] = field(default_factory=list)
     checked: list[str] = field(default_factory=list)  # номера отработавших правил
+    # Состояние каждой проверки: passed | failed | not_applicable (с основанием)
+    # | not_run (обязательна, но не реализована). Пустой список — не «всё
+    # хорошо», а «ничего не проверялось».
+    checks: list[dict] = field(default_factory=list)
 
     @property
     def errors(self) -> list[AuditViolation]:
@@ -73,6 +104,7 @@ class AuditReport:
         return {
             "status": self.status,
             "checked": list(self.checked),
+            "checks": [dict(c) for c in self.checks],
             "violations": [
                 {"rule_id": v.rule_id, "severity": v.severity, "message": v.message,
                  "employee": v.employee_id, "contract": v.contract_id,
@@ -109,7 +141,8 @@ def _person_key(employee) -> str:
     return " ".join(str(getattr(employee, "full_name", "") or "").lower().split()) or employee.id
 
 
-@check("SALARY-001", "Полная месячная зарплата")
+@check("SALARY-001", "Полная месячная зарплата",
+       applies=_needs_all(_needs("contracts", "договоров"), _needs("employees", "сотрудников")))
 def _full_salary(ctx, result: PlanningResult) -> list[AuditViolation]:
     """План не может молча потерять активную строку сотрудника."""
     if not getattr(ctx, "contracts", None):
@@ -138,7 +171,7 @@ def _full_salary(ctx, result: PlanningResult) -> list[AuditViolation]:
     return out
 
 
-@check("PAYMENT-001", "Разрешённый вид выплаты и срок")
+@check("PAYMENT-001", "Разрешённый вид выплаты и срок", applies=_needs("contracts", "договоров"))
 def _payment_window(ctx, result: PlanningResult) -> list[AuditViolation]:
     contracts = {c.id: c for c in getattr(ctx, "contracts", [])}
     if not contracts:
@@ -167,7 +200,7 @@ def _payment_window(ctx, result: PlanningResult) -> list[AuditViolation]:
     return out
 
 
-@check("LABOR-001", "Трудоёмкость в пределах допуска")
+@check("LABOR-001", "Трудоёмкость в пределах допуска", applies=_needs("labor_plans", "строк трудоёмкости"))
 def _labor_tolerance(ctx, result: PlanningResult) -> list[AuditViolation]:
     plans = getattr(ctx, "labor_plans", None) or []
     if not plans:
@@ -203,7 +236,7 @@ def _labor_tolerance(ctx, result: PlanningResult) -> list[AuditViolation]:
     return out
 
 
-@check("PERSON-001", "Ограничения человека")
+@check("PERSON-001", "Ограничения человека", applies=_needs("employees", "сотрудников"))
 def _person_limits(ctx, result: PlanningResult) -> list[AuditViolation]:
     employees = {e.id: e for e in getattr(ctx, "employees", [])}
     if not employees:
@@ -226,7 +259,7 @@ def _person_limits(ctx, result: PlanningResult) -> list[AuditViolation]:
     return out
 
 
-@check("FOT-001", "ФОТ договора и касса")
+@check("FOT-001", "ФОТ договора и касса", applies=_needs("contracts", "договоров"))
 def _contract_money(ctx, result: PlanningResult) -> list[AuditViolation]:
     contracts = {c.id: c for c in getattr(ctx, "contracts", [])}
     if not contracts:
@@ -251,7 +284,7 @@ def _contract_money(ctx, result: PlanningResult) -> list[AuditViolation]:
     return out
 
 
-@check("RATE-001", "Шаг открытой ставки")
+@check("RATE-001", "Шаг открытой ставки", applies=_needs_open_rates)
 def _rate_step(ctx, result: PlanningResult) -> list[AuditViolation]:
     """Открытая ставка кратна 0,25 и не отрицательна.
 
@@ -298,11 +331,60 @@ def _fmt(value: float) -> str:
     return sign + " ".join(groups) + ("," + frac if frac else "")
 
 
-def audit(ctx, result: PlanningResult) -> AuditReport:
-    """Проверить готовый план. Вход нужен только чтобы называть людей словами."""
+def audit(ctx, result: PlanningResult, required=None) -> AuditReport:
+    """Проверить готовый план. Вход нужен только чтобы называть людей словами.
+
+    ``required`` — номера проверок, обязательных для этого результата (их
+    задаёт каталог, CAP-004). Обязательная проверка без реализации получает
+    not_run и нарушение: план не считается проверенным. Неприменимая
+    проверка получает основание — «во входе нет договоров», — а не молчание.
+    """
     report = AuditReport()
-    for rule_id, _name, fn in CHECKS:
+    for rule_id, name, fn in CHECKS:
+        applies = APPLIES.get(rule_id)
+        ok, why = applies(ctx, result) if applies is not None else (True, "")
+        if not ok:
+            report.checks.append({"rule_id": rule_id, "name": name,
+                                  "status": "not_applicable", "reason": why})
+            continue
+        found = fn(ctx, result)
         report.checked.append(rule_id)
-        report.violations.extend(fn(ctx, result))
+        report.violations.extend(found)
+        report.checks.append({"rule_id": rule_id, "name": name, "reason": "",
+                              "status": "failed" if any(v.severity == "error" for v in found)
+                              else "passed"})
+    known = {rule_id for rule_id, _name, _fn in CHECKS}
+    for rule_id in required or ():
+        if rule_id in known:
+            continue
+        report.checks.append({"rule_id": rule_id, "name": "", "status": "not_run",
+                              "reason": "обязательная проверка не реализована в аудите"})
+        report.violations.append(AuditViolation(
+            rule_id=rule_id, severity="error",
+            message="обязательная проверка %s не выполнена: реализации в аудите нет — "
+                    "план не считается проверенным" % rule_id,
+            expected="проверка выполнена"))
     report.status = "FAIL" if report.errors else "OK"
     return report
+
+
+CHECK_LINE = "Проверка:"
+
+
+def format_checks(checks) -> list[str]:
+    """Строки вывода решателя: «Проверка: RATE-001 passed — основание»."""
+    return ["%s %s %s%s" % (CHECK_LINE, c["rule_id"], c["status"],
+                            (" — " + c["reason"]) if c.get("reason") else "")
+            for c in checks]
+
+
+def parse_check_line(line: str):
+    """Обратно из строки вывода; None — это не строка проверки."""
+    text = line.strip()
+    if not text.startswith(CHECK_LINE):
+        return None
+    head, _, reason = text[len(CHECK_LINE):].strip().partition(" — ")
+    parts = head.split()
+    if len(parts) < 2:
+        return None
+    return {"rule_id": parts[0], "status": parts[1], "reason": reason.strip()}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "kind": "check",
+  "id": "check.rate-001",
+  "version": "1.0.0",
+  "owner": "экономический отдел",
+  "purpose": "Шаг открытой ставки: кратна 0,25 и не отрицательна",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "requirement": "RATE-001",
+  "applicability": "Применяется, когда в плане есть открытые ставки; без них проверять нечего.",
+  "handler": "audit.rate-001",
+  "limitations": "Точная формула — в docs/ПРАВИЛА_РЕШАТЕЛЯ.md под тем же номером; квалификация не выполнялась."
+}

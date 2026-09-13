@@ -18,6 +18,10 @@ Text = Annotated[str, StringConstraints(min_length=1)]
 Key = Annotated[str, StringConstraints(pattern=r'^[a-z][a-z0-9._-]*$')]
 Version = Annotated[str, StringConstraints(pattern=r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')]
 TRUSTED_HANDLERS = frozenset({'document.template_kind'})
+#: Проверки результата, реализованные в result_audit: handler = 'audit.' + requirement
+#: строчными (ключи handler — по общему образцу Key).
+TRUSTED_CHECKS = frozenset({'audit.rate-001', 'audit.salary-001', 'audit.payment-001',
+                            'audit.labor-001', 'audit.person-001', 'audit.fot-001'})
 
 
 class CatalogueError(ValueError):
@@ -35,7 +39,7 @@ class Ref(Contract):
 
 class Descriptor(Contract):
     schema_version: Literal[1]
-    kind: Literal['role', 'capability', 'skill', 'tool']
+    kind: Literal['role', 'capability', 'skill', 'tool', 'check', 'profile']
     id: Key
     version: Version
     owner: Text
@@ -58,6 +62,10 @@ class Descriptor(Contract):
     resources: tuple[Text, ...] = ()
     effects: Literal['none', 'read-file'] = 'none'
     instruction: Text | None = None
+    # Проверка результата (CAP-004): номер требования и правило применимости
+    # словами; исполняемое правило живёт в result_audit под тем же номером.
+    requirement: Annotated[str, StringConstraints(pattern=r'^[A-Z][A-Z0-9]{1,7}-\d{3}$')] | None = None
+    applicability: Text | None = None
 
     @model_validator(mode='after')
     def complete(self):
@@ -66,6 +74,14 @@ class Descriptor(Contract):
                 raise ValueError('роли нужны имя и порядок')
             if self.legacy and not self.limitations:
                 raise ValueError('legacy требует явных ограничений')
+        elif self.kind == 'check':
+            if not self.requirement or not self.applicability:
+                raise ValueError('проверке нужны requirement ID и правило применимости')
+            if self.maturity == 'implemented' and not self.handler:
+                raise ValueError('нет обработчика реализованной проверки')
+        elif self.kind == 'profile':
+            if not self.checks:
+                raise ValueError('профилю нужен состав обязательных проверок')
         else:
             if not self.input_schema or not self.output_schema:
                 raise ValueError('нужны схемы входа и выхода')
@@ -131,26 +147,27 @@ class Catalogue:
         for d in self.descriptors:
             if d.maturity == 'qualified':
                 raise CatalogueError('квалификация требует проверяемого решения L4')
-            if d.handler is not None and (d.kind != 'tool' or d.handler not in TRUSTED_HANDLERS):
+            if d.handler is not None and not (
+                    (d.kind == 'tool' and d.handler in TRUSTED_HANDLERS)
+                    or (d.kind == 'check' and d.handler in TRUSTED_CHECKS
+                        and d.handler == 'audit.' + str(d.requirement).lower())):
                 raise CatalogueError('неизвестный/неуместный handler: ' + d.handler)
-            if d.kind != 'role' and (d.input_schema not in IO_SCHEMAS or d.output_schema not in IO_SCHEMAS):
+            if d.kind not in ('role', 'check', 'profile') and (
+                    d.input_schema not in IO_SCHEMAS or d.output_schema not in IO_SCHEMAS):
                 raise CatalogueError('схема входа/выхода не зарегистрирована')
             if d.handler == 'document.template_kind' and (
                     d.input_schema != 'document-input' or d.output_schema != 'document-kind'
                     or d.effects != 'read-file' or 'document.read' not in d.permissions
                     or not {'python', 'openpyxl'} <= set(d.resources)):
                 raise CatalogueError('описание ослабляет контракт доверенного обработчика')
-            for refs, kind in ((d.skills, 'skill'), (d.tools, 'tool')):
+            for refs, kind in ((d.skills, 'skill'), (d.tools, 'tool'), (d.checks, 'check')):
                 for ref in refs:
                     target = self.resolve(ref.id, ref.version)
                     if target.kind != kind:
                         raise CatalogueError('неверный тип ссылки: ' + ref.id)
-                    if d.kind != 'role' and (d.input_schema, d.output_schema) != (target.input_schema, target.output_schema):
+                    if kind != 'check' and d.kind != 'role' and (
+                            (d.input_schema, d.output_schema) != (target.input_schema, target.output_schema)):
                         raise CatalogueError('несовместимые схемы процедуры и инструмента')
-            # CAP-004 не имитируется: пока нет executor обязательных checks,
-            # описание с ними блокируется, а не объявляется неприменимым.
-            if d.checks:
-                raise CatalogueError('исполнение обязательных checks ещё не реализовано')
 
     @classmethod
     def from_documents(cls, documents):
@@ -195,6 +212,28 @@ class Catalogue:
             raise CatalogueError('для интерфейса нужна одна закреплённая версия роли')
         return {d.id: {'n': d.order, 'name': d.name, 'does': d.purpose,
                        'real': d.maturity == 'implemented'} for d in roles}
+
+    def required_checks(self, domain):
+        """Обязательные проверки результата для области — из профилей (CAP-004).
+
+        Наличие проверки в каталоге само по себе её не запускает: обязательной
+        она становится только через профиль. Нереализованная (declared)
+        остаётся в списке — исполнитель обязан показать её как not_run, а не
+        выкинуть и не объявить неприменимой.
+        """
+        out, seen = [], set()
+        for p in self.descriptors:
+            if p.kind != 'profile' or domain not in p.domains:
+                continue
+            for ref in p.checks:
+                d = self.resolve(ref.id, ref.version)
+                if d.id in seen:
+                    continue
+                seen.add(d.id)
+                out.append({'id': d.id, 'version': d.version, 'requirement': d.requirement,
+                            'applicability': d.applicability, 'maturity': d.maturity,
+                            'handler': d.handler})
+        return out
 
     def select(self, task: Task, authority: Authority):
         candidates = [d for d in self.descriptors if d.kind == 'capability' and d.task == task.kind]

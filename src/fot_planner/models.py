@@ -424,3 +424,5 @@ class PlanningResult:
     # решателя: «решение модели найдено» и «план годится» — разные вопросы.
     audit_status: str = "NOT_RUN"  # OK | FAIL | NOT_RUN
     audit_violations: list[AuditViolation] = field(default_factory=list)
+    # Состояние каждой проверки: passed | failed | not_applicable | not_run.
+    audit_checks: list[dict] = field(default_factory=list)

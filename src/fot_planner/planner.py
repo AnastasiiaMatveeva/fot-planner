@@ -22,6 +22,7 @@ def run_planning(
     output_path: str | Path,
     plan_override_path: str | Path | None = None,
     time_limit_sec: int = 120,
+    required_checks=None,
 ) -> PlanningResult:
     override = plan_override_path or output_path
     ctx = load_context(input_path, plan_path=override)
@@ -47,6 +48,7 @@ def run_planning(
         ctx,
         time_limit_sec=time_limit_sec,
         payroll_limit_mode=AVERAGE_LIMIT_MODE,
+        required_checks=required_checks,
     )
     if validation_issues:
         result.conflicts = validation_issues + result.conflicts
