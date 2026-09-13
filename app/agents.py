@@ -73,7 +73,21 @@ def version_of(agent):
 
 
 def agent_list():
-    return [dict(key=k, **v) for k, v in sorted(AGENTS.items(), key=lambda kv: kv[1]["n"])]
+    """Роли для интерфейса: зрелость (real) и доступность сейчас — разное.
+
+    Модель не настроена — роль реализована, но недоступна, и панель говорит
+    это словами, не изображая работу и не объявляя роль нереализованной
+    (CAP-002).
+    """
+    import llm
+    resources = {"python", "openpyxl"} | ({"llm"} if llm.available()[0] else set())
+    avail = default_catalogue().availability(resources)
+    rows = []
+    for k, v in sorted(AGENTS.items(), key=lambda kv: kv[1]["n"]):
+        a = avail.get(k, {})
+        rows.append(dict(key=k, **v, available=bool(a.get("available")),
+                         why=(a.get("why") or "").replace("llm", "модель")))
+    return rows
 
 
 def say(db, case_id, text, who="агент", agent=None, payload=None, to_agent=None,

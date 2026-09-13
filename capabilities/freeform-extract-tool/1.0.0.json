@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "tool",
+  "id": "freeform-extract-tool",
+  "version": "1.0.0",
+  "owner": "разработчик fot-planner",
+  "purpose": "Читает документ без шаблона моделью и предлагает строки экономисту",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "input_schema": "extraction-input",
+  "output_schema": "extraction-result",
+  "handler": "llm.freeform",
+  "effects": "read-file",
+  "permissions": [
+    "document.read",
+    "model.call"
+  ],
+  "resources": [
+    "python",
+    "llm"
+  ],
+  "limitations": "Ответ модели недетерминирован; строки — предложения до подтверждения экономистом; снимок контекста вызова — L2.3. Ревизию модели провайдер не сообщает."
+}

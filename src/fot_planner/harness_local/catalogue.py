@@ -17,7 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 Text = Annotated[str, StringConstraints(min_length=1)]
 Key = Annotated[str, StringConstraints(pattern=r'^[a-z][a-z0-9._-]*$')]
 Version = Annotated[str, StringConstraints(pattern=r'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')]
-TRUSTED_HANDLERS = frozenset({'document.template_kind'})
+TRUSTED_HANDLERS = frozenset({'document.template_kind', 'llm.freeform', 'llm.parse'})
+#: Обработчики, которым нужна модель: ресурс «llm» у инструмента, право model.call.
+LLM_HANDLERS = frozenset({'llm.freeform', 'llm.parse'})
 #: Проверки результата, реализованные в result_audit: handler = 'audit.' + requirement
 #: строчными (ключи handler — по общему образцу Key).
 TRUSTED_CHECKS = frozenset({'audit.rate-001', 'audit.salary-001', 'audit.payment-001',
@@ -102,7 +104,26 @@ class DocumentKind(Contract):
     kind: Literal['документ по договору', 'штатное расписание'] | None
 
 
-IO_SCHEMAS = {'document-input': DocumentInput, 'document-kind': DocumentKind}
+class ExtractionInput(Contract):
+    path: Text
+    filename: str = ''
+    hints: tuple[str, ...] = ()
+
+
+class ExtractionResult(BaseModel):
+    """Ответ модели: обязательные поля контракта, остальное — как пришло.
+
+    Строгая схема каждой сущности здесь не заявлена: строки модели идут в
+    предложения и проверяются экономистом, а не схемой.
+    """
+    model_config = ConfigDict(extra='allow', strict=False, frozen=True)
+    ok: bool
+    error: str | None = None
+    unavailable: bool = False
+
+
+IO_SCHEMAS = {'document-input': DocumentInput, 'document-kind': DocumentKind,
+              'extraction-input': ExtractionInput, 'extraction-result': ExtractionResult}
 
 
 def schemas():
@@ -160,6 +181,12 @@ class Catalogue:
                     or d.effects != 'read-file' or 'document.read' not in d.permissions
                     or not {'python', 'openpyxl'} <= set(d.resources)):
                 raise CatalogueError('описание ослабляет контракт доверенного обработчика')
+            if d.handler in LLM_HANDLERS and (
+                    d.input_schema != 'extraction-input' or d.output_schema != 'extraction-result'
+                    or d.effects != 'read-file'
+                    or not {'document.read', 'model.call'} <= set(d.permissions)
+                    or not {'python', 'llm'} <= set(d.resources)):
+                raise CatalogueError('описание ослабляет контракт обработчика модели')
             for refs, kind in ((d.skills, 'skill'), (d.tools, 'tool'), (d.checks, 'check')):
                 for ref in refs:
                     target = self.resolve(ref.id, ref.version)
@@ -212,6 +239,33 @@ class Catalogue:
             raise CatalogueError('для интерфейса нужна одна закреплённая версия роли')
         return {d.id: {'n': d.order, 'name': d.name, 'does': d.purpose,
                        'real': d.maturity == 'implemented'} for d in roles}
+
+    def availability(self, resources):
+        """Доступность ролей сейчас — отдельно от зрелости (CAP-002).
+
+        Роль доступна, если реализована и у сервиса есть все ресурсы
+        инструментов её процедур. Нехватка называется по имени ресурса:
+        это повод восстановить ресурс, а не объявить новую способность.
+        """
+        resources = set(resources)
+        out = {}
+        for d in self.descriptors:
+            if d.kind != 'role':
+                continue
+            if d.maturity != 'implemented':
+                out[d.id] = {'available': False, 'why': 'не реализована: ' + d.maturity}
+                continue
+            missing = set()
+            for ref in d.skills:
+                skill = self.resolve(ref.id, ref.version)
+                for tref in skill.tools:
+                    tool = self.resolve(tref.id, tref.version)
+                    missing |= set(tool.resources) - resources
+                    if tool.maturity != 'implemented':
+                        missing.add('%s: %s' % (tool.id, tool.maturity))
+            out[d.id] = {'available': not missing,
+                         'why': ('нет ресурса: ' + ', '.join(sorted(missing))) if missing else ''}
+        return out
 
     def required_checks(self, domain):
         """Обязательные проверки результата для области — из профилей (CAP-004).

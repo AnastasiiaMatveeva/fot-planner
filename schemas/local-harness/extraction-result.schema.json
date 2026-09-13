@@ -1,0 +1,33 @@
+{
+  "additionalProperties": true,
+  "description": "Ответ модели: обязательные поля контракта, остальное — как пришло.\n\nСтрогая схема каждой сущности здесь не заявлена: строки модели идут в\nпредложения и проверяются экономистом, а не схемой.",
+  "properties": {
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "unavailable": {
+      "default": false,
+      "title": "Unavailable",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ok"
+  ],
+  "title": "ExtractionResult",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

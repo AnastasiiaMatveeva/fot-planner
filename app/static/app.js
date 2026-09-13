@@ -439,6 +439,7 @@ function renderRoster() {
     var act = last[a.key];
     var cls = "ag", sub = a.does;
     if (!a.real) { cls += " mock"; sub = "в этой сборке не реализован"; }
+    else if (a.available === false) { cls += " mock"; sub = "сейчас недоступен — " + (a.why || "нет ресурса"); }
     if (act) {
       if (act.state === "идет") { cls = "ag work"; sub = act.title; }
       else if (act.state === "ошибка") { cls = "ag err"; sub = act.detail || "ошибка"; }

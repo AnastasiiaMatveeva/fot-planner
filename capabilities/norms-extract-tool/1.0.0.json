@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "tool",
+  "id": "norms-extract-tool",
+  "version": "1.0.0",
+  "owner": "разработчик fot-planner",
+  "purpose": "Извлекает величины нормативного документа моделью для сверки со справочником",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "input_schema": "extraction-input",
+  "output_schema": "extraction-result",
+  "handler": "llm.parse",
+  "effects": "read-file",
+  "permissions": [
+    "document.read",
+    "model.call"
+  ],
+  "resources": [
+    "python",
+    "llm"
+  ],
+  "limitations": "Без модели книга Excel разбирается по заголовкам (разбор без модели), PDF и .doc — нет. Применение величин — только после подтверждения экономистом."
+}

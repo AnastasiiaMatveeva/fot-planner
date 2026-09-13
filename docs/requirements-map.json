@@ -380,28 +380,35 @@
     {
       "id": "CAP-002",
       "implementation": "partial",
-      "tests": "partial",
+      "tests": "passed",
       "code": [
         "src/fot_planner/harness_local/catalogue.py",
         "app/agents.py",
         "app/intake.py",
-        "scripts/test_catalogue.py"
+        "scripts/test_catalogue.py",
+        "src/fot_planner/harness_local/catalogue.py::availability",
+        "app/agents.py::agent_list",
+        "scripts/test_capability_availability.py"
       ],
-      "evidence": "L2.1: 24 теста scripts/test_catalogue.py прошли (синтетические документы и временная БД); подключена document.template_kind, 8 ролей перенесены в versioned files. Подробности и общий прогон — checkpoint L2.1 в IMPLEMENTATION-STATUS.md.",
-      "gap": "Зрелость ролей отделена от доступности executor; scenario/memo/reconcile declared. Квалификация, динамическая доступность провайдеров и расширенное отображение статусов в UI ещё не реализованы."
+      "evidence": "L2.1: 24 теста scripts/test_catalogue.py прошли (синтетические документы и временная БД); подключена document.template_kind, 8 ролей перенесены в versioned files. Подробности и общий прогон — checkpoint L2.1 в IMPLEMENTATION-STATUS.md. L2.5: доступность ролей считается по ресурсам сервиса сейчас, отдельно от зрелости; без модели роли intake/norms «сейчас недоступны — нет ресурса: модель», declared-роли — «не реализованы»; недоступный ресурс не превращается в новую способность (8 тестов scripts/test_capability_availability.py)",
+      "gap": "Квалификация (qualified) требует L4; доступность считается по ресурсам «python, openpyxl, llm» без проверки живости сервера модели; расширенные статусы в UI — только строка панели ролей"
     },
     {
       "id": "CAP-003",
       "implementation": "partial",
-      "tests": "partial",
+      "tests": "passed",
       "code": [
         "src/fot_planner/harness_local/catalogue.py",
         "app/agents.py",
         "app/intake.py",
-        "scripts/test_catalogue.py"
+        "scripts/test_catalogue.py",
+        "capabilities/freeform-extract/1.0.0.json",
+        "capabilities/norms-extract/1.0.0.json",
+        "app/intake.py::_capability",
+        "scripts/test_capability_availability.py"
       ],
-      "evidence": "L2.1: 24 теста scripts/test_catalogue.py прошли (синтетические документы и временная БД); подключена document.template_kind, 8 ролей перенесены в versioned files. Подробности и общий прогон — checkpoint L2.1 в IMPLEMENTATION-STATUS.md.",
-      "gap": "Выбор по типу/области/правам/ресурсам применяется к распознаванию шаблонной книги. Остальные маршруты пока legacy; необходимы перенос обработчиков и общие resource budgets."
+      "evidence": "L2.1: 24 теста scripts/test_catalogue.py прошли (синтетические документы и временная БД); подключена document.template_kind, 8 ролей перенесены в versioned files. Подробности и общий прогон — checkpoint L2.1 в IMPLEMENTATION-STATUS.md. L2.5: разбор без шаблона и нормативный разбор идут через каталог; отсутствие обязательной способности возвращает причину и требуемое действие в ленту, вид документа не спрашивается, разбор не имитируется; книга по нормам разбирается чистым инструментом без модели",
+      "gap": "Разбор по шаблону, замещения и чат ещё вызываются напрямую (legacy); общие resource budgets, timeout и cancellation не реализованы"
     },
     {
       "id": "CAP-004",
@@ -666,10 +673,11 @@
       "tests": "partial",
       "code": [
         "app/static/app.js",
-        "app/main.py::case_state"
+        "app/main.py::case_state",
+        "app/agents.py::agent_list"
       ],
-      "evidence": "L1.5: в отчёте (таблица версий) и шапке плана показана актуальность расчёта — «требует пересмотра» с причинами в подсказке и репликой в ленте; у попытки повтора виден исходный прогон; для прерванного расчёта со снимком — ссылка «повторить»; проверено в браузере на временном сервере с подготовленной базой (шапка, таблица версий) и стендом данных плана (р10)",
-      "gap": "версия и зрелость способности, доступность, область применения, история и сравнение кандидатов не показываются; хеши снимка в интерфейсе не выводятся; нажатие ссылки «повторить» проверено только вызовом её маршрута, не браузерным сценарием"
+      "evidence": "L1.5: в отчёте (таблица версий) и шапке плана показана актуальность расчёта — «требует пересмотра» с причинами в подсказке и репликой в ленте; у попытки повтора виден исходный прогон; для прерванного расчёта со снимком — ссылка «повторить»; проверено в браузере на временном сервере с подготовленной базой (шапка, таблица версий) и стендом данных плана (р10); L2.5: панель ролей показывает «сейчас недоступен — нет ресурса: модель» отдельно от «не реализован»; состояния проверок результата лежат в сводке прогона (L2.4b)",
+      "gap": "Версия и зрелость способности, состояние кандидата, история и сравнение, состояния проверок в отчёте и решения в интерфейсе не показываются"
     },
     {
       "id": "UI-002",

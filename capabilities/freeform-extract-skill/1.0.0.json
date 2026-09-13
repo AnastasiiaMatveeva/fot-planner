@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "kind": "skill",
+  "id": "freeform-extract-skill",
+  "version": "1.0.0",
+  "owner": "разработчик fot-planner",
+  "purpose": "Читает документ без шаблона моделью и предлагает строки экономисту",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "input_schema": "extraction-input",
+  "output_schema": "extraction-result",
+  "instruction": "app/llm.py::FREEFORM_SYSTEM",
+  "tools": [
+    {
+      "id": "freeform-extract-tool",
+      "version": "1.0.0"
+    }
+  ]
+}

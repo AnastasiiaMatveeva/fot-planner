@@ -1,0 +1,29 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "minLength": 1,
+      "title": "Path",
+      "type": "string"
+    },
+    "filename": {
+      "default": "",
+      "title": "Filename",
+      "type": "string"
+    },
+    "hints": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Hints",
+      "type": "array"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "title": "ExtractionInput",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

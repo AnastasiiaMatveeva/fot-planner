@@ -13,5 +13,10 @@
   ],
   "legacy": true,
   "limitations": "Название и ответственность перенесены из legacy-каталога. Квалификация не выполнялась; ещё не все процедуры переведены на resolver.",
-  "skills": []
+  "skills": [
+    {
+      "id": "norms-extract-skill",
+      "version": "1.0.0"
+    }
+  ]
 }

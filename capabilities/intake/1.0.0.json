@@ -17,6 +17,10 @@
     {
       "id": "template-kind-skill",
       "version": "1.0.0"
+    },
+    {
+      "id": "freeform-extract-skill",
+      "version": "1.0.0"
     }
   ]
 }

@@ -725,6 +725,34 @@ def correction_hints(db, kind, limit=8, *, document=None):
     return correction_context(db, document, limit=limit)["hints"]
 
 
+def _capability(task_kind, doc):
+    """Выбор процедуры по каталогу для этого документа.
+
+    Доступность считается по ресурсам сервиса сейчас, а не по зрелости
+    описания: модель не настроена — способность «недоступна» с причиной и
+    действием, а не «не реализована» и не повод для новой роли (CAP-002/003).
+    """
+    from pathlib import Path
+    from fot_planner.harness_local.catalogue import Authority, Task, default_catalogue
+    resources = {'python', 'openpyxl'} | ({'llm'} if llm.available()[0] else set())
+    authority = Authority(permissions=frozenset({'document.read', 'model.call'}),
+                          resources=frozenset(resources), files=(Path(doc.path),))
+    catalogue = default_catalogue()
+    task = Task(kind=task_kind, domain='fot.local')
+    return catalogue, task, authority, catalogue.select(task, authority)
+
+
+MODEL_ACTION = ("задайте подключение модели в .env (FOT_LLM_BASE_URL и FOT_LLM_MODEL либо "
+                "ключ провайдера) и перезапустите сервис; новая способность для этого не нужна")
+
+
+def _missing_capability_text(doc, selection, what):
+    _ok, why = llm.available()
+    return ("Разбор «%s» %s сейчас невозможен: способность недоступна — %s%s. Что сделать: %s. "
+            "Документ остаётся в реестре, строки можно ввести вручную."
+            % (doc.name, what, selection.reason, (" (%s)" % why) if why else "", MODEL_ACTION))
+
+
 def _extraction_snapshot(doc, res, hints, selection):
     """Закрепить контекст извлечения в хранилище артефактов (VER-002, MEM-003).
 
@@ -774,6 +802,24 @@ def propose_entities(db, case, doc):
     Возвращает True, если что-то предложено.
     """
     with working(db, case.id, "intake", "перечитывает «%s» без шаблона" % doc.name) as w:
+        catalogue, task, authority, selection = _capability('document.freeform_extract', doc)
+        if selection.status != 'ready':
+            # Обязательной способности нет: причина и требуемое действие, а не
+            # вопрос «что за документ?» и не имитация разбора (CAP-003).
+            w["detail"] = "процедура недоступна: %s" % selection.reason
+            w["artifact"] = {"файл": doc.name, "способность": "freeform-extract",
+                             "состояние": selection.status, "причина": selection.reason,
+                             "действие": selection.action}
+            doc.state = "не распознан"
+            doc.summary = "модель недоступна: %s" % (llm.available()[1] or selection.reason)
+            db.commit()
+            say(db, case.id, _missing_capability_text(doc, selection, "без шаблона"),
+                agent="intake", document_id=doc.id,
+                payload={"kind": "capability_missing", "capability": "freeform-extract",
+                         "status": selection.status, "reason": selection.reason,
+                         "action": selection.action})
+            db.commit()
+            return None
         correction_selection = correction_context(db, doc)
         hints = correction_selection['hints']
         if correction_selection['conflicts']:
@@ -781,7 +827,11 @@ def propose_entities(db, case, doc):
                 '(№ %s). Не применяю их автоматически; уточните верное значение.'
                 % ', '.join(map(str, correction_selection['conflicts'])),
                 agent='intake', document_id=doc.id)
-        res = llm.freeform(doc.path, doc.name, hints=hints)
+        # Подсказки уходят списком, как и раньше: контракт каталога хранит их
+        # кортежем, а вызов модели и стенды ждут прежний вид аргумента.
+        res = catalogue.invoke(task, {"path": doc.path, "filename": doc.name, "hints": list(hints)},
+                               authority, {"llm.freeform": lambda path, filename="", hints=():
+                                           llm.freeform(path, filename, hints=list(hints))})
         # Что именно видела модель — в хранилище артефактов; предложения и
         # приговоры ссылаются на этот снимок (VER-002, MEM-003).
         context_sha = _extraction_snapshot(doc, res, hints, correction_selection)
@@ -1120,12 +1170,27 @@ def run_norms(db, case, doc):
     import reference
 
     with working(db, case.id, "norms", "сверяет «%s» со справочником" % doc.name) as w:
-        res = llm.parse(doc.path, doc.name)
+        catalogue, task, authority, selection = _capability('document.norms_extract', doc)
+        if selection.status == 'ready':
+            res = catalogue.invoke(task, {"path": doc.path, "filename": doc.name}, authority,
+                                   {"llm.parse": lambda path, filename='', hints=(): llm.parse(path, filename)})
+        else:
+            res = {"ok": False, "unavailable": True, "error": llm.available()[1] or selection.reason}
         if res.get("ok"):
             rows, by = res["rows"], "модель " + res["model"]
         elif docread.kind_of(doc.path) in (".xlsx", ".xlsm", ".xls"):
             # Запасной разбор читает ячейки книги — PDF и .doc ему не по зубам.
+            # Это чистый инструмент без модели (CAP-003), и он об этом говорит.
             rows, by = reference.rows_by_anchors(doc.path), "разбор по заголовкам"
+            if res.get("unavailable"):
+                say(db, case.id, "Модель недоступна (%s) — «%s» разобран по заголовкам книги без "
+                    "неё, величины стоит сверить глазами. Чтобы вернуть разбор моделью: %s."
+                    % (res.get("error"), doc.name, MODEL_ACTION), agent="norms", document_id=doc.id)
+                db.commit()
+        elif res.get("unavailable"):
+            raise ValueError("способность «norms-extract» недоступна: %s. Что сделать: %s. "
+                             "Для книги Excel есть разбор по заголовкам без модели."
+                             % (res.get("error"), MODEL_ACTION))
         else:
             raise ValueError(res.get("error") or "документ не разобран")
         changes, unknown, seen, given = reference.compare(rows)
@@ -1269,7 +1334,10 @@ def handle_document(db, case, doc):
         doc.parsed_by = by
         doc.state = "не распознан"
         db.commit()
-        if not propose_entities(db, case, doc):
+        found = propose_entities(db, case, doc)
+        if found is None:
+            return          # способности нет: причина и действие уже в ленте
+        if not found:
             _ask_kind(db, case, doc)
         return
 
@@ -1289,7 +1357,7 @@ def handle_document(db, case, doc):
             "«%s»: %s. Прочитаю его без шаблона." % (doc.name, bad), agent="intake",
             document_id=doc.id)
         db.commit()
-        if not propose_entities(db, case, doc):
+        if propose_entities(db, case, doc) is False:
             doc.summary = "%s; сверх этого данных не нашлось" % bad
             db.commit()
         return

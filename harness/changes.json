@@ -2,6 +2,57 @@
   "schema_version": 1,
   "changes": [
     {
+      "id": "DEV-L2-AVAILABILITY-001",
+      "status": "implemented",
+      "summary": "Доступность способности отдельно от зрелости; при отсутствии модели — причина и требуемое действие",
+      "expected": "Разбор без шаблона и нормативный разбор описаны в каталоге как процедуры с ресурсом «llm»; без модели выбор даёт unavailable с причиной и действием «восстановить ресурс, новая способность не нужна»; сервис пишет причину и действие в ленту, не спрашивает вид документа и не изображает разбор; книга Excel по нормам разбирается без модели и говорит об этом; панель ролей отличает «не реализован» от «сейчас недоступен»",
+      "requirement": {
+        "path": "docs/ТЕСТИРОВАНИЕ.md",
+        "id": "DEV-L2-AVAILABILITY-001"
+      },
+      "files": [
+        "src/fot_planner/harness_local/catalogue.py",
+        "app/intake.py",
+        "app/agents.py",
+        "app/static/app.js",
+        "scripts/parts.py",
+        "capabilities/freeform-extract/1.0.0.json",
+        "capabilities/freeform-extract-skill/1.0.0.json",
+        "capabilities/freeform-extract-tool/1.0.0.json",
+        "capabilities/norms-extract/1.0.0.json",
+        "capabilities/norms-extract-skill/1.0.0.json",
+        "capabilities/norms-extract-tool/1.0.0.json",
+        "capabilities/intake/1.0.0.json",
+        "capabilities/norms/1.0.0.json",
+        "schemas/local-harness/catalogue.schema.json",
+        "schemas/local-harness/extraction-input.schema.json",
+        "schemas/local-harness/extraction-result.schema.json"
+      ],
+      "tests": [
+        {
+          "path": "scripts/test_capability_availability.py",
+          "symbol": "CatalogueAvailabilityTests.test_availability_is_separate_from_maturity"
+        },
+        {
+          "path": "scripts/test_capability_availability.py",
+          "symbol": "ServiceAvailabilityTests.test_missing_model_gives_reason_and_action_instead_of_question"
+        },
+        {
+          "path": "scripts/test_capability_availability.py",
+          "symbol": "ServiceAvailabilityTests.test_available_model_goes_through_catalogue_with_hints"
+        },
+        {
+          "path": "scripts/test_capability_availability.py",
+          "symbol": "ServiceAvailabilityTests.test_norms_without_model_uses_anchor_parser_for_workbook_and_says_so"
+        },
+        {
+          "path": "scripts/test_capability_availability.py",
+          "symbol": "ServiceAvailabilityTests.test_agent_list_reports_availability_separately_from_real"
+        }
+      ],
+      "reproduction": "На коде a91f8e8 новый стенд: 4 провала и 4 ошибки из 8 — без модели сервис спрашивал вид документа, нормативная книга разбиралась молча, у каталога не было availability и процедур модели, у ролей — доступности. После реализации 8 из 8; каталог 24/24, контекст извлечения 11/11, область исправлений 16/16 (подсказки по-прежнему уходят списком), конфликты 7/7, решения 10/10, чат 18/18."
+    },
+    {
       "id": "DEV-L2-CHECKS-001",
       "status": "implemented",
       "summary": "Правило применимости и requirement ID у обязательных проверок результата; обязательный состав через профиль каталога",

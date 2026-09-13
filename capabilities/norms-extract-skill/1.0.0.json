@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "kind": "skill",
+  "id": "norms-extract-skill",
+  "version": "1.0.0",
+  "owner": "разработчик fot-planner",
+  "purpose": "Извлекает величины нормативного документа моделью для сверки со справочником",
+  "maturity": "implemented",
+  "domains": [
+    "fot.local"
+  ],
+  "input_schema": "extraction-input",
+  "output_schema": "extraction-result",
+  "instruction": "app/llm.py::SYSTEM",
+  "tools": [
+    {
+      "id": "norms-extract-tool",
+      "version": "1.0.0"
+    }
+  ]
+}
