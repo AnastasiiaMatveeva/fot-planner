@@ -1,0 +1,1181 @@
+{
+  "schema_version": 1,
+  "title": "Матрица применимых проверок (QA-001): правило свода → вход → решатель → аудит → случаи → представление",
+  "source": {
+    "rules": "docs/ПРАВИЛА_РЕШАТЕЛЯ.md",
+    "rules_sha256": "5345d1bbc9a0dd4446278ce3ecc069ba06f2672e25c4a25d505948e0ae323a59",
+    "links": "scripts/qa_matrix.py::LINKS"
+  },
+  "layers": {
+    "input": "валидация входа: src/fot_planner/validation.py",
+    "solver": "модель решателя, случаи harness/crisis.py",
+    "audit": "независимый аудит результата: src/fot_planner/result_audit.py, случаи harness/audit.py",
+    "report": "условия отчёта app/rules.py и список замечаний app/static/issues.js"
+  },
+  "statuses": {
+    "implemented": "слой есть и проверяется",
+    "unverified": "правило в модели по своду, случая нет",
+    "gap": "слоя нет — положительного заключения по этому слою нет"
+  },
+  "mandatory_for_result": [
+    "RATE-001",
+    "SALARY-001",
+    "PAYMENT-001",
+    "LABOR-001",
+    "PERSON-001",
+    "FOT-001"
+  ],
+  "rules": [
+    {
+      "rule": 1,
+      "scope": "строка",
+      "title": "Зарплата выплачивается целиком",
+      "source": "штатное расписание (зарплата строки); фрагмент не меньше 1 000 ₽ — владелец продукта 11.09.2026",
+      "layers": {
+        "input": {
+          "codes": [
+            "INVALID_PAYMENT"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "01",
+            "03",
+            "23"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "SALARY-001"
+          ],
+          "cases": [
+            "а10",
+            "а11"
+          ],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Человек получает всю месячную зарплату",
+            "Дефицит выплат разрешен настройками"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "01",
+          "03",
+          "23",
+          "а10",
+          "а11"
+        ],
+        "negative": [
+          "03",
+          "а10"
+        ]
+      },
+      "gaps": [
+        "свод: про фрагмент случая нет"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 2,
+      "scope": "строка",
+      "title": "Оклад идёт по ставке",
+      "source": "справочник должностей (оклад); шаг ставки — слова экономиста, карточка RATE-001",
+      "layers": {
+        "input": {
+          "codes": [
+            "UNKNOWN_POSITION",
+            "DEFAULT_REFERENCE_USED_WARNING",
+            "DEFAULT_VALUE_USED_WARNING"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "01"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "RATE-001"
+          ],
+          "cases": [
+            "а01",
+            "а02",
+            "а03",
+            "а04",
+            "а05",
+            "а06"
+          ],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Оклад идет по ставке, а не произвольной суммой"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "01",
+          "а01",
+          "а02",
+          "а03",
+          "а04",
+          "а05",
+          "а06"
+        ],
+        "negative": [
+          "а02",
+          "а03",
+          "а04"
+        ]
+      },
+      "gaps": [],
+      "verdict": "полный"
+    },
+    {
+      "rule": 3,
+      "scope": "строка",
+      "title": "Открытая ставка означает оклад с этого договора",
+      "source": "слова экономиста; docs/architecture/ADR-labor-attribution.md",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "22"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [],
+          "status": "gap"
+        }
+      },
+      "cases": {
+        "positive": [
+          "22"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "input",
+        "audit",
+        "report"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 4,
+      "scope": "строка",
+      "title": "Приказ № 2556",
+      "source": "приказ № 2556 через справочник должностей; приказ раз в месяц на строку — владелец продукта 11.09.2026",
+      "layers": {
+        "input": {
+          "codes": [
+            "MISSING_ORG_SALARY_CAP_WARNING"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "02",
+            "03",
+            "28"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [
+            "П2556: оклад и 122 не выше предела по должности"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "02",
+          "03",
+          "28"
+        ],
+        "negative": [
+          "03"
+        ]
+      },
+      "gaps": [
+        "audit"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 5,
+      "scope": "строка",
+      "title": "Приказ № 4",
+      "source": "приказ № 4 через справочник; предел П4 — справочная информация_ЗП.xlsx, лист «пример»",
+      "layers": {
+        "input": {
+          "codes": [
+            "P4_IGNORED_FOR_CATEGORY_WARNING"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "08",
+            "09"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [
+            "П4 при надбавке за интенсивность"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "08",
+          "09"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "audit"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 6,
+      "scope": "смешанное",
+      "title": "Средняя П4 по категории персонала",
+      "source": "владелец продукта 11.09.2026 (средняя П4 по категории существует)",
+      "layers": {
+        "input": {
+          "codes": [
+            "P4_IGNORED_FOR_CATEGORY_WARNING"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [],
+          "status": "unverified"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [],
+          "status": "gap"
+        }
+      },
+      "cases": {
+        "positive": [],
+        "negative": []
+      },
+      "gaps": [
+        "solver",
+        "audit",
+        "report",
+        "свод: случая нет"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 7,
+      "scope": "договор",
+      "title": "БЭП по ГОЗ",
+      "source": "БЭП по справочнику должностей; структура цены ГОЗ",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "10",
+            "11",
+            "11b"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [
+            "БЭП: средняя зарплата по ГОЗ-договору в пределах базовой"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "10",
+          "11",
+          "11b"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "input",
+        "audit"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 8,
+      "scope": "строка",
+      "title": "Платим только тем, что разрешено договором",
+      "source": "карточка договора (графы разрешений); SOURCE-002 (124 из типа договора не выводится)",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "12"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "PAYMENT-001"
+          ],
+          "cases": [
+            "а12"
+          ],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Платим только теми видами, которые разрешены договором"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "12",
+          "а12"
+        ],
+        "negative": [
+          "а12"
+        ]
+      },
+      "gaps": [
+        "input"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 9,
+      "scope": "строка",
+      "title": "122 только с того договора, где в этом месяце оклад этой строки",
+      "source": "справочная информация_ЗП.xlsx, лист «виды надбавок»",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "04"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [
+            "Надбавка 122 — с того же договора, что и оклад"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "04"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "input",
+        "audit"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 10,
+      "scope": "строка",
+      "title": "120 — надбавка сотрудника, а не договора",
+      "source": "реестр надбавки 120 (лист 120_надбавка); 120 без оклада — счёт 23 (ИСТОЧНИКИ.md); по человеку — владелец продукта 11.09.2026",
+      "layers": {
+        "input": {
+          "codes": [
+            "UNKNOWN_EMPLOYEE",
+            "UNKNOWN_CONTRACT",
+            "INVALID_SECRET_ALLOWANCE_RATE"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "05",
+            "06"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [],
+          "status": "gap"
+        }
+      },
+      "cases": {
+        "positive": [
+          "05",
+          "06"
+        ],
+        "negative": [
+          "05",
+          "06"
+        ]
+      },
+      "gaps": [
+        "audit",
+        "report",
+        "свод: про счёт 23 случая нет"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 11,
+      "scope": "строка",
+      "title": "152 вытесняет остальные надбавки",
+      "source": "справочная информация_ЗП.xlsx, лист «виды надбавок»; по строке — владелец продукта 11.09.2026",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "07"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [
+            "Режим «оклад плюс 152»"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "07"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "input",
+        "audit"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 12,
+      "scope": "строка",
+      "title": "Приоритет 2030",
+      "source": "условия договора программы «Приоритет 2030»",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "13",
+            "14"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [],
+          "status": "gap"
+        }
+      },
+      "cases": {
+        "positive": [
+          "13",
+          "14"
+        ],
+        "negative": [
+          "13"
+        ]
+      },
+      "gaps": [
+        "input",
+        "audit",
+        "report"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 13,
+      "scope": "человек",
+      "title": "Основное место одно",
+      "source": "штатное расписание (тип занятости)",
+      "layers": {
+        "input": {
+          "codes": [
+            "PART_TIME_WITHOUT_MAIN",
+            "SECOND_MAIN_ROW"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "15"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [],
+          "status": "gap"
+        }
+      },
+      "cases": {
+        "positive": [
+          "15"
+        ],
+        "negative": [
+          "15"
+        ]
+      },
+      "gaps": [
+        "audit",
+        "report"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 14,
+      "scope": "смешанное",
+      "title": "Пределы ставок",
+      "source": "ограничения по типу занятости и категории (штатное расписание); табельный номер — владелец продукта 11.09.2026",
+      "layers": {
+        "input": {
+          "codes": [
+            "INVALID_RATE",
+            "INVALID_EMPLOYMENT_RATE",
+            "TOO_MANY_PART_TIME"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "16",
+            "17",
+            "18"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "PERSON-001"
+          ],
+          "cases": [
+            "а14"
+          ],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Суммарная ставка — не больше 1,5",
+            "Совместительство — не больше 0,5 ставки"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "16",
+          "17",
+          "18",
+          "а14"
+        ],
+        "negative": [
+          "16",
+          "а14"
+        ]
+      },
+      "gaps": [
+        "свод: про третье совместительство случая нет"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 15,
+      "scope": "человек",
+      "title": "Одна должность в одном подразделении",
+      "source": "слова экономиста; вопрос 10 MODEL_REVIEW закрыт случаем 27",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "27"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [],
+          "status": "gap"
+        }
+      },
+      "cases": {
+        "positive": [
+          "27"
+        ],
+        "negative": [
+          "27"
+        ]
+      },
+      "gaps": [
+        "input",
+        "audit",
+        "report"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 16,
+      "scope": "строка",
+      "title": "Замещение направленное",
+      "source": "справочник замещения должностей; docs/architecture/ADR-labor-attribution.md",
+      "layers": {
+        "input": {
+          "codes": [
+            "UNKNOWN_LABOR_POSITION_WARNING",
+            "UNKNOWN_CONTRACT_POSITION_WARNING",
+            "LABOR_ROW_GROUP_ONLY_WARNING"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "19",
+            "20"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [
+            "Работу закрывает подходящая должность"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "19",
+          "20"
+        ],
+        "negative": [
+          "20"
+        ]
+      },
+      "gaps": [
+        "audit"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 17,
+      "scope": "строка",
+      "title": "Человеко-месяцы даёт только открытая ставка",
+      "source": "РКМ и структура цены; docs/architecture/ADR-labor-attribution.md",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "22"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [],
+          "status": "gap"
+        }
+      },
+      "cases": {
+        "positive": [
+          "22"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "input",
+        "audit",
+        "report"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 18,
+      "scope": "строка",
+      "title": "Деньги строки РКМ закрывают оклад и надбавки",
+      "source": "РКМ и структура цены; приказ вне трудоёмкости — docs/architecture/ADR-labor-attribution.md",
+      "layers": {
+        "input": {
+          "codes": [
+            "MISSING_AVG_LABOR_COST_WARNING"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "22"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [
+            "Сумма трудоемкости выбрана"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "22"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "audit",
+        "свод: про приказ случая нет"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 19,
+      "scope": "строка",
+      "title": "Строка РКМ закрывается не дальше чем на 5 %",
+      "source": "РКМ (человеко-месяцы, сумма, специалисты); допуск 5 % жёсткий — владелец продукта 11.09.2026",
+      "layers": {
+        "input": {
+          "codes": [
+            "INVALID_LABOR",
+            "INVALID_LABOR_TOLERANCE",
+            "LABOR_WITHOUT_FOT"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "21"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "LABOR-001"
+          ],
+          "cases": [
+            "а13"
+          ],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Плановые человеко-месяцы закрыты",
+            "Сумма трудоемкости выбрана"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "21",
+          "а13"
+        ],
+        "negative": [
+          "а13"
+        ]
+      },
+      "gaps": [
+        "свод: для запрета дробления отдельного случая нет"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 20,
+      "scope": "договор",
+      "title": "План по месяцам соблюдается с допуском не более 5 %",
+      "source": "РКМ (этапы по месяцам)",
+      "layers": {
+        "input": {
+          "codes": [],
+          "status": "gap"
+        },
+        "solver": {
+          "cases": [
+            "31"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "LABOR-001"
+          ],
+          "cases": [],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Плановые человеко-месяцы закрыты"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "31"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "input",
+        "свод: про годовую строку случая нет"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 21,
+      "scope": "договор",
+      "title": "Касса",
+      "source": "поступления по договору (карточка договора)",
+      "layers": {
+        "input": {
+          "codes": [
+            "INVALID_BUDGET_INFLOW"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "23"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "FOT-001"
+          ],
+          "cases": [
+            "а15"
+          ],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Деньги нельзя потратить раньше, чем они пришли"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "23",
+          "а15"
+        ],
+        "negative": [
+          "23",
+          "а15"
+        ]
+      },
+      "gaps": [],
+      "verdict": "полный"
+    },
+    {
+      "rule": 22,
+      "scope": "договор",
+      "title": "Сроки",
+      "source": "карточка договора (сроки, предел выплат); SOURCE-001 (пустой предел = дата окончания)",
+      "layers": {
+        "input": {
+          "codes": [
+            "MISSING_CONTRACT_DATES",
+            "INVALID_DATES",
+            "MISSING_PAYMENT_DEADLINE",
+            "EMPTY_PAYMENT_WINDOW"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "24"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "PAYMENT-001"
+          ],
+          "cases": [
+            "а12"
+          ],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Договор платит только в свои сроки"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "24",
+          "а12"
+        ],
+        "negative": [
+          "24",
+          "а12"
+        ]
+      },
+      "gaps": [
+        "свод: пустой предел случаем не проверен"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 23,
+      "scope": "договор",
+      "title": "Выплаты не превышают ФОТ договора",
+      "source": "карточка договора (ФОТ); остаток без порога — владелец продукта 11.09.2026",
+      "layers": {
+        "input": {
+          "codes": [
+            "INVALID_FOT"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "21",
+            "26"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [
+            "FOT-001"
+          ],
+          "cases": [
+            "а15"
+          ],
+          "status": "implemented"
+        },
+        "report": {
+          "conditions": [
+            "Выплаты не превышают ФОТ договора",
+            "ФОТ договоров освоен"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "21",
+          "26",
+          "а15"
+        ],
+        "negative": [
+          "26",
+          "а15"
+        ]
+      },
+      "gaps": [],
+      "verdict": "полный"
+    },
+    {
+      "rule": 24,
+      "scope": "строка",
+      "title": "Ручные назначения и запреты",
+      "source": "ручное решение экономиста в чате (настройки плана) и графы разрешённых/запрещённых договоров строки",
+      "layers": {
+        "input": {
+          "codes": [
+            "CONTRACT_ALLOWED_AND_FORBIDDEN",
+            "UNKNOWN_CONTRACT"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "25"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [],
+          "status": "gap"
+        }
+      },
+      "cases": {
+        "positive": [
+          "25"
+        ],
+        "negative": []
+      },
+      "gaps": [
+        "audit",
+        "report"
+      ],
+      "verdict": "частичный"
+    },
+    {
+      "rule": 25,
+      "scope": "—",
+      "title": "Настройки расчёта",
+      "source": "настройки расчёта; макс договоров по человеку и допуск не больше 5 % — владелец продукта 11.09.2026",
+      "layers": {
+        "input": {
+          "codes": [
+            "INVALID_LABOR_TOLERANCE"
+          ],
+          "status": "implemented"
+        },
+        "solver": {
+          "cases": [
+            "26"
+          ],
+          "status": "implemented"
+        },
+        "audit": {
+          "cards": [],
+          "cases": [],
+          "status": "gap"
+        },
+        "report": {
+          "conditions": [
+            "Дефицит выплат разрешен настройками"
+          ],
+          "status": "implemented"
+        }
+      },
+      "cases": {
+        "positive": [
+          "26"
+        ],
+        "negative": [
+          "26"
+        ]
+      },
+      "gaps": [
+        "audit"
+      ],
+      "verdict": "частичный"
+    }
+  ],
+  "unmapped": {
+    "input_codes": [],
+    "report_conditions": [],
+    "audit_cards": []
+  },
+  "summary": {
+    "rules": 25,
+    "audit_gap": 16,
+    "report_gap": 8,
+    "input_gap": 9,
+    "solver_unverified": 1,
+    "full": 3
+  }
+}
