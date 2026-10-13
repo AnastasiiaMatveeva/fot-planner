@@ -1,0 +1,34 @@
+{
+  "v": 3,
+  "layout": "files",
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-09-17T20:23:26Z"
+  },
+  "title": "ФОТ · Планирование",
+  "namespace": "FOT",
+  "libraries": [
+    {
+      "name": "react",
+      "version": "18"
+    },
+    {
+      "name": "react-dom",
+      "version": "18"
+    }
+  ],
+  "sections": {},
+  "groups": [],
+  "assetGroups": {},
+  "blobs": {},
+  "docs": {
+    "readme": "project/README.md",
+    "sections": []
+  },
+  "lastChange": {
+    "by": "Anastasia",
+    "at": "2026-09-17T22:21:36Z",
+    "via": "Cowork",
+    "note": "Разбор логики решателя, навигация и решения, проверенные по практике"
+  }
+}

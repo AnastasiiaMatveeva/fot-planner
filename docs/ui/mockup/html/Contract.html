@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Договор · реквизиты и документы</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #FFFFFF; color: #17191C; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 13px; -webkit-font-smoothing: antialiased; }
+    sc-for, sc-if { display: contents; }
+    a { color: #1F4FA8; text-decoration: none; }
+    a:hover { color: #163A78; text-decoration: underline; }
+    .btn { height: 32px; padding: 0 13px; border: 1px solid #CBD0D6; border-radius: 3px; background: #FFFFFF; color: #17191C; font: 500 13px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; white-space: nowrap; text-decoration: none; }
+    .btn:hover { background: #F1F3F5; color: #17191C; text-decoration: none; }
+    .btn:active { background: #E4E8EC; }
+    .btn:disabled { color: #A8AEB4; cursor: default; }
+    .btn-pri { background: #1F4FA8; border-color: #1F4FA8; color: #FFFFFF; }
+    .btn-pri:hover { background: #163A78; border-color: #163A78; color: #FFFFFF; }
+    .btn-pri:active { background: #12306B; border-color: #12306B; }
+    .btn-sm { height: 26px; padding: 0 8px; font-size: 12.5px; }
+    .btn-ic { width: 26px; padding: 0; color: #5C636B; }
+    .btn-ic:hover { color: #17191C; }
+    .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .tin { border: 1px solid transparent; background: none; font: 600 20px/1.3 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; padding: 3px 7px; margin-left: -7px; border-radius: 3px; width: 100%; }
+    .tin:hover { border-color: #DDE0E3; }
+    .tin:focus-visible { border-color: #1F4FA8; outline: none; background: #FFFFFF; box-shadow: 0 0 0 2px #A9C0E6; }
+    .tbl-ref { background: #FBFCFD; }
+    .tbl-ref .r { min-height: 28px; }
+    .tbl-ref .thead .r { min-height: 26px; }
+    .tbl { border: 1px solid #E1E4E7; border-radius: 3px; background: #FFFFFF; }
+    .r { display: grid; align-items: center; column-gap: 10px; padding: 0 11px; min-height: 40px; border-top: 1px solid #EDEFF1; }
+    .thead .r { min-height: 34px; border-top: 0; background: #F5F6F8; padding: 0 11px; }
+    .tbody .r:first-child { border-top: 0; }
+    .tbody .r:hover { background: #F7F9FC; }
+    .sub-r { background: #FBFCFD; }
+    .sub-r:hover { background: #F5F8FB; }
+    .thb { width: 100%; height: 32px; padding: 0; border: 0; border-radius: 3px; background: none; color: #5C636B; font: 600 11px/1.25 "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 4px; }
+    .thb:hover { background: #E8EBEE; color: #17191C; }
+    .thb .ar { color: #7A828A; font-size: 11px; }
+    .thb-on .ar { color: #1F4FA8; }
+    .thb-n { justify-content: flex-end; text-align: right; }
+    .thb-on { color: #17191C; }
+    .th { font: 600 11px/1.25 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; }
+    .td { font: 400 12.5px/1.3 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .num { font-variant-numeric: tabular-nums; text-align: right; }
+    .lft { text-align: left; }
+    .sub { font: 400 11px/1.35 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; }
+    .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .warn { color: #8A5A00; }
+    .bad { color: #A4382C; }
+    .mut { color: #5C636B; }
+    .cap { font: 600 11px/1.2 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; }
+    .tot { background: #F5F6F8; border-top: 1px solid #DDE0E3; font-weight: 600; }
+    .nav { display: block; height: 32px; padding: 0 9px; border: 0; border-radius: 3px; background: none; color: #3B424A; font: 400 12.5px/32px "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; width: 100%; text-align: left; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav:hover { background: #E3E6E9; color: #17191C; text-decoration: none; }
+    .nav-on { background: #D9DFE7; color: #17191C; font-weight: 500; }
+    .pag { display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 38px; border-top: 1px solid #E1E4E7; background: #FBFBFC; border-radius: 0 0 3px 3px; }
+    .exp { width: 22px; height: 22px; border: 0; background: none; padding: 0; color: #5C636B; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .exp:hover { color: #17191C; }
+    .t-cmp { width: max-content; min-width: 100%; }
+    .t-cmp .r { display: flex; }
+    .cw-name { flex: 1 1 150px; min-width: 0; }
+    .cw-num { flex: 0 0 92px; }
+    .cw-wide { flex: 0 0 118px; }
+    .cw-st { flex: 0 0 104px; }
+    .t-cmp .thb { height: auto; min-height: 30px; white-space: normal; line-height: 1.2; align-items: flex-start; padding-top: 6px; }
+    .cc { display: block; line-height: 28px; padding: 0 6px; border-radius: 2px; font: 400 12.5px/28px "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .cch { background: #FFF1CF; color: #6B4400; }
+    .cadd { background: #E3F2E6; color: #1E5A2C; }
+    .cdel { background: #FBE7E4; color: #8A2E23; text-decoration: line-through; }
+    .cgh { background: #F1F3F5; }
+    .pane-b { border-left: 2px solid #C2C8CE; margin-left: 4px; padding-left: 10px; }
+    .pane-hd { font: 600 11px/1.2 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; padding: 0 6px; }
+    .t-doc .r { grid-template-columns: 18px minmax(0, 1fr) 92px 124px 132px 108px; }
+    .t-req .r { grid-template-columns: minmax(0, 1fr) 236px 232px; }
+    .cin { height: 24px; width: 100%; border: 1px solid #D6DAE0; border-radius: 2px; background: #FFFFFF; color: #17191C; font: 400 12.5px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-variant-numeric: tabular-nums; text-align: right; padding: 0 5px; }
+    .cin:focus-visible { border-color: #1F4FA8; outline: none; box-shadow: 0 0 0 2px #A9C0E6; }
+    .cin-l { text-align: left; }
+    .cin-set { background: #FDF4E0; border-color: #DCC287; color: #7A4F00; font-weight: 600; }
+    .sel { height: 23px; border: 1px solid #CBD0D6; border-radius: 3px; background: #FFFFFF; color: #17191C; font: 400 12.5px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; padding: 0 4px; }
+    .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn {
+      transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn { transition: none; }
+    }
+  </style>
+  <script src="support.js"></script>
+</head>
+<body style="margin: 0;">
+<x-dc>
+
+<div style="width: 1440px; height: 1680px; display: flex; background: #FFFFFF; overflow: hidden;">
+
+  <aside style="width: 240px; flex-shrink: 0; height: 1680px; background: #EFF0F1; border-right: 1px solid #E1E4E7; display: flex; flex-direction: column; padding: 13px 11px 11px;">
+    <div style="display: flex; align-items: center; gap: 9px; padding: 0 6px 13px;">
+      <div style="width: 23px; height: 23px; border-radius: 3px; background: #1F4FA8; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;">Ф</div>
+      <div style="font-size: 12.5px; font-weight: 600;">Планирование ФОТ</div>
+    </div>
+    <a class="btn btn-pri" href="Plan.html" style="width: 100%;">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3 8h10"></path></svg>
+      Новый план
+    </a>
+    <div class="cap" style="padding: 16px 8px 6px;">Планы</div>
+    <a class="nav" href="Plan.html">План 2027 — базовый</a>
+    <a class="nav" href="Plan.html">План 2027 — индексация</a>
+    <div style="height: 1px; background: #DDE0E3; margin: 13px 4px;"></div>
+    <a class="nav nav-on" href="Main.html">Реестр</a>
+    <div style="flex-grow: 1;"></div>
+    <a class="nav" href="Help.html">Инструкция</a>
+  </aside>
+
+  <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 18px 24px 20px;">
+
+    <div class="sub" style="padding-bottom: 8px;"><a href="Main.html">← Договоры</a> / <span class="num">41-2026</span></div>
+
+    <label class="vh" for="cname">Наименование договора</label>
+    <input class="tin" id="cname" type="text" value="{{ name }}" onChange="{{ h.name }}">
+
+    <div class="cap" style="padding: 17px 0 7px;">Реквизиты</div>
+    <div class="tbl tbl-ref t-req">
+      <div class="thead">
+        <div class="r">
+          <div class="th">Величина</div>
+          <div class="th">Значение</div>
+          <div class="th">Источник</div>
+        </div>
+      </div>
+      <div class="tbody">
+        <sc-for list="{{ req }}" as="p" hint-placeholder-count="12">
+          <div class="r">
+            <div class="td">{{ p.k }}</div>
+            <div style="min-width: 0;">
+              <sc-if value="{{ p.ro }}" hint-placeholder-val="{{ no }}">
+                <div class="td num lft {{ p.cls }}">{{ p.v }}</div>
+              </sc-if>
+              <sc-if value="{{ p.txt }}" hint-placeholder-val="{{ yes }}">
+                <input class="cin cin-l {{ p.cls }}" type="text" aria-label="Значение реквизита" value="{{ p.v }}" onChange="{{ p.set }}">
+              </sc-if>
+              <sc-if value="{{ p.yn }}" hint-placeholder-val="{{ no }}">
+                <select class="sel" aria-label="Значение реквизита" value="{{ p.v }}" onChange="{{ p.set }}">
+                  <option>да</option>
+                  <option>нет</option>
+                </select>
+              </sc-if>
+            </div>
+            <div class="td {{ p.scls }}">{{ p.src }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 12px; padding: 17px 0 7px;">
+      <span class="cap">Документы</span>
+      <label style="display: flex; align-items: center; gap: 7px; cursor: pointer;">
+        <input type="checkbox" style="width: 14px; height: 14px; accent-color: #1F4FA8; margin: 0;" checked="{{ allOpen }}" onChange="{{ h.all }}">
+        <span style="font-size: 12.5px;">Показывать редакции</span>
+      </label>
+      <div style="flex-grow: 1;"></div>
+      <button class="btn btn-sm btn-pri" type="button">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 10.6V3.2"></path><path d="M5.4 5.6 8 3l2.6 2.6"></path><path d="M3 10.6v2.4h10v-2.4"></path></svg>
+        Добавить документ
+      </button>
+    </div>
+
+    <div class="tbl t-doc">
+      <div class="thead">
+        <div class="r">
+          <div></div>
+          <div class="th">Документ</div>
+          <div class="th">Редакция</div>
+          <div class="th">Дата загрузки</div>
+          <div class="th">Состояние</div>
+          <div class="th"></div>
+        </div>
+      </div>
+      <div class="tbody">
+        <sc-for list="{{ rows }}" as="d" hint-placeholder-count="8">
+          <div class="r {{ d.rowCls }}">
+            <div>
+              <sc-if value="{{ d.parent }}" hint-placeholder-val="{{ yes }}">
+                <button class="exp" type="button" aria-label="Показать редакции" onClick="{{ d.toggle }}">
+                  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="{{ d.mark }}"></path></svg>
+                </button>
+              </sc-if>
+            </div>
+            <div class="td {{ d.nameCls }}" style="{{ d.indent }}">{{ d.file }}</div>
+            <div class="td num lft {{ d.verCls }}">{{ d.ver }}</div>
+            <div class="td num lft mut">{{ d.when }}</div>
+            <div class="td {{ d.stateCls }}" style="font-size: 12.5px;">{{ d.state }}</div>
+            <div style="display: flex; gap: 5px; justify-content: flex-end;">
+              <sc-if value="{{ d.parent }}" hint-placeholder-val="{{ yes }}">
+                <button class="btn btn-sm btn-ic" type="button" aria-label="Загрузить новую редакцию">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 10.6V3.2"></path><path d="M5.4 5.6 8 3l2.6 2.6"></path><path d="M3 10.6v2.4h10v-2.4"></path></svg>
+                </button>
+              </sc-if>
+              <button class="btn btn-sm btn-ic" type="button" aria-label="Скачать">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v7.4"></path><path d="M5.2 7.8 8 10.6l2.8-2.8"></path><path d="M3 11.4v1.8h10v-1.8"></path></svg>
+              </button>
+              <sc-if value="{{ d.canCmp }}" hint-placeholder-val="{{ yes }}">
+                <button class="btn btn-sm btn-ic {{ d.cmpCls }}" type="button" title="{{ d.cmpTitle }}" aria-label="{{ d.cmpTitle }}" onClick="{{ d.cmp }}">
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.4v11.2"></path><path d="M2.6 5.2h3.8M2.6 8h3.8M9.6 8h3.8M9.6 10.8h3.8"></path></svg>
+                </button>
+              </sc-if>
+              <button class="btn btn-sm btn-ic" type="button" aria-label="Удалить">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.2 4.4h9.6"></path><path d="M6.4 4.4V2.8h3.2v1.6"></path><path d="M4.4 4.4v8.8h7.2V4.4"></path></svg>
+              </button>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <div class="pag">
+        <label class="sub" for="ps">Строк на странице</label>
+        <select class="btn btn-sm" id="ps" style="width: 70px;" aria-label="Строк на странице">
+          <option>25</option>
+          <option>50</option>
+        </select>
+        <div class="sub num">{{ pageInfo }}</div>
+        <div class="sub num">{{ docInfo }}</div>
+        <div style="flex-grow: 1;"></div>
+        <button class="btn btn-sm btn-ic" type="button" aria-label="Предыдущая страница" disabled="{{ yes }}">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 4 6 8l4 4"></path></svg>
+        </button>
+        <div class="sub num">1 / 1</div>
+        <button class="btn btn-sm btn-ic" type="button" aria-label="Следующая страница" disabled="{{ yes }}">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 4 4 4-4 4"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <sc-if value="{{ cmpOn }}" hint-placeholder-val="{{ yes }}">
+      <div style="display: flex; align-items: center; gap: 12px; padding: 17px 0 7px;">
+        <span class="cap">Расхождения редакций</span>
+        <label style="display: flex; align-items: center; gap: 7px; cursor: pointer;">
+          <input type="checkbox" style="width: 14px; height: 14px; accent-color: #1F4FA8; margin: 0;" checked="{{ cmpOnly }}" onChange="{{ h.cmpOnly }}">
+          <span style="font-size: 12.5px;">Только изменившиеся</span>
+        </label>
+        <div style="flex-grow: 1;"></div>
+        <button class="btn btn-sm" type="button" onClick="{{ h.cmpClose }}">Закрыть</button>
+      </div>
+
+      <div class="tbl t-cmp">
+        <div style="display: flex; align-items: center; gap: 9px; padding: 0 11px; height: 38px; border-bottom: 1px solid #E1E4E7;">
+          <span class="td">{{ cmpFile }}</span>
+        </div>
+        <div class="scroll">
+          <div class="t-cmp">
+            <div class="thead">
+              <div class="r" style="min-height: 26px; border-bottom: 1px solid #E1E4E7;">
+                <div class="pane-hd" style="flex: 1 1 0; min-width: 0;">{{ cmpA }}</div>
+                <div class="pane-hd pane-b" style="flex: 1 1 0; min-width: 0;">{{ cmpB }}</div>
+                <div class="cw-st"></div>
+              </div>
+              <div class="r">
+                <sc-for list="{{ cmpCols }}" as="c" hint-placeholder-count="4">
+                  <button class="thb {{ c.w }} {{ c.cls }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                </sc-for>
+                <sc-for list="{{ cmpCols }}" as="c" hint-placeholder-count="4">
+                  <button class="thb {{ c.w }} {{ c.cls }} {{ c.pb }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                </sc-for>
+                <button class="thb cw-st {{ cmpStCls }}" type="button" onClick="{{ h.cmpSt }}">Изменение<sc-if value="{{ cmpStHas }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ cmpStArr }}</span></sc-if></button>
+              </div>
+            </div>
+            <div class="tbody">
+              <sc-for list="{{ cmpRows }}" as="x" hint-placeholder-count="6">
+                <div class="r" style="min-height: 40px;">
+                  <sc-for list="{{ x.left }}" as="y" hint-placeholder-count="4">
+                    <div class="cc {{ y.cls }}">{{ y.v }}</div>
+                  </sc-for>
+                  <sc-for list="{{ x.right }}" as="y" hint-placeholder-count="4">
+                    <div class="cc {{ y.cls }}">{{ y.v }}</div>
+                  </sc-for>
+                  <div class="td {{ x.scls }}" style="font-size: 12.5px;">{{ x.s }}</div>
+                </div>
+              </sc-for>
+              <sc-if value="{{ cmpEmpty }}" hint-placeholder-val="{{ no }}">
+                <div class="r">
+                  <div class="td mut">{{ cmpEmptyText }}</div>
+                </div>
+              </sc-if>
+              <sc-if value="{{ cmpHasTot }}" hint-placeholder-val="{{ yes }}">
+                <div class="r tot" style="min-height: 40px;">
+                  <sc-for list="{{ cmpTotL }}" as="t" hint-placeholder-count="4">
+                    <div class="cc {{ t.cls }}">{{ t.v }}</div>
+                  </sc-for>
+                  <sc-for list="{{ cmpTotR }}" as="t" hint-placeholder-count="4">
+                    <div class="cc {{ t.cls }}">{{ t.v }}</div>
+                  </sc-for>
+                  <div class="cw-st"></div>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+        </div>
+        <div class="pag">
+          <div class="sub num">{{ cmpInfo }}</div>
+          <div class="sub num">{{ cmpTot }}</div>
+          <div style="flex-grow: 1;"></div>
+          <button class="btn btn-sm btn-ic" type="button" aria-label="Предыдущая страница" onClick="{{ h.cmpPrev }}">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 4 6 8l4 4"></path></svg>
+          </button>
+          <div class="sub num">{{ cmpPages }}</div>
+          <button class="btn btn-sm btn-ic" type="button" aria-label="Следующая страница" onClick="{{ h.cmpNext }}">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 4 4 4-4 4"></path></svg>
+          </button>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { open: ['rkm'], name: 'Комплекс бортовой аппаратуры «Сфера»', sort: 'when', dir: -1, menu: '', hidden: {},
+                   rs: 'k', rd: 1, goz: 'да', pri: 'нет', fix: {},
+                   cmp: { id: 'rkm', from: 'ред. 2', to: 'ред. 3' }, cmpOnly: false,
+                   cmpS: 0, cmpD: 1, cmpPage: 1, cmpSize: 25 };
+  }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+
+    // Снимок того, что извлечено из редакции. Расхождения считаются из него,
+    // а не пишутся отдельно, поэтому итог всегда сходится со строками.
+    // Снимок редакции — та же таблица, что в документе: свои графы, своя
+    // ключевая графа, по ней строки и сопоставляются между редакциями.
+    var SNAP = {
+      rkm: {
+        key: 'pos',
+        cols: [
+          { k: 'pos', label: 'Должность', w: 'cw-name' },
+          { k: 'n', label: 'Привлекаемых специалистов', w: 'cw-num', num: true, sum: true },
+          { k: 'mm', label: 'Трудоёмкость, чел.-мес.', w: 'cw-num', num: true, sum: true, dec: 1 },
+          { k: 'cost', label: 'Средняя стоимость выполнения работ в месяц, руб.', w: 'cw-wide', num: true }
+        ],
+        vers: {
+          'ред. 1': [
+            { pos: 'Ведущий инженер-конструктор', n: '4', mm: '84,0', cost: '178 200' },
+            { pos: 'Инженер-конструктор 1 категории', n: '6', mm: '132,0', cost: '146 300' },
+            { pos: 'Инженер-конструктор 2 категории', n: '3', mm: '72,0', cost: '128 700' },
+            { pos: 'Начальник сектора', n: '1', mm: '24,0', cost: '214 000' },
+            { pos: 'Техник 1 категории', n: '2', mm: '48,0', cost: '84 500' }
+          ],
+          'ред. 2': [
+            { pos: 'Ведущий инженер-конструктор', n: '4', mm: '84,0', cost: '178 200' },
+            { pos: 'Инженер-конструктор 1 категории', n: '6', mm: '132,0', cost: '146 300' },
+            { pos: 'Инженер-конструктор 2 категории', n: '3', mm: '72,0', cost: '128 700' },
+            { pos: 'Начальник сектора', n: '1', mm: '24,0', cost: '214 000' },
+            { pos: 'Техник 1 категории', n: '2', mm: '48,0', cost: '84 500' },
+            { pos: 'Инженер-технолог', n: '2', mm: '40,5', cost: '121 000' }
+          ],
+          'ред. 3': [
+            { pos: 'Ведущий инженер-конструктор', n: '4', mm: '96,0', cost: '182 400' },
+            { pos: 'Инженер-конструктор 1 категории', n: '6', mm: '132,0', cost: '146 300' },
+            { pos: 'Инженер-конструктор 2 категории', n: '3', mm: '72,0', cost: '128 700' },
+            { pos: 'Начальник сектора', n: '1', mm: '24,0', cost: '214 000' },
+            { pos: 'Техник 1 категории', n: '2', mm: '48,0', cost: '84 500' },
+            { pos: 'Инженер-технолог', n: '2', mm: '40,5', cost: '121 000' }
+          ]
+        }
+      },
+      dog: {
+        key: 'k',
+        cols: [
+          { k: 'k', label: 'Реквизит', w: 'cw-name' },
+          { k: 'v', label: 'Значение', w: 'cw-wide' }
+        ],
+        vers: {
+          'ред. 1': [
+            { k: 'Срок действия', v: '01.02.2026 — 30.06.2027' },
+            { k: 'Номер договора', v: '41/26-ГОЗ' }
+          ],
+          'ред. 2': [
+            { k: 'Срок действия', v: '01.02.2026 — 31.12.2027' },
+            { k: 'Номер договора', v: '41/26-ГОЗ' },
+            { k: 'Лицевой счёт', v: '21-04-117' }
+          ]
+        }
+      },
+      tz: { key: 'k', cols: [{ k: 'k', label: 'Реквизит', w: 'cw-name' }], vers: { 'ред. 1': [], 'ред. 2': [] } }
+    };
+
+    var docs = [
+      { id: 'rkm', file: 'РКМ_41-2026_форма3.xlsx', kind: 'РКМ по ГОЗ', ver: 'ред. 3', when: '14.09.2026', state: 'разобран', rowsN: '6', vals: '2', snap: 'есть',
+        vers: [
+          { ver: 'ред. 2', when: '02.07.2026', state: 'разобран', rowsN: '6', vals: '2', snap: 'есть' },
+          { ver: 'ред. 1', when: '04.02.2026', state: 'разобран', rowsN: '5', vals: '2', snap: 'нет', snapW: true }
+        ] },
+      { id: 'price', file: 'Структура_цены_41-2026.xlsx', kind: 'Структура цены', ver: 'ред. 1', when: '04.02.2026', state: 'разобран', rowsN: '0', vals: '7', snap: 'есть', vers: [] },
+      { id: 'dog', file: 'Договор_41-2026.pdf', kind: 'Договор', ver: 'ред. 2', when: '03.07.2026', state: 'разобран', rowsN: '0', vals: '3', snap: 'есть',
+        vers: [{ ver: 'ред. 1', when: '04.02.2026', state: 'разобран', rowsN: '0', vals: '2', snap: 'есть' }] },
+      { id: 'tz', file: 'ТЗ_приложение-1.docx', kind: 'Техническое задание', ver: 'ред. 2', when: '11.03.2026', state: 'ошибка чтения', stateW: 2, rowsN: '0', vals: '0', snap: 'есть',
+        vers: [{ ver: 'ред. 1', when: '20.02.2026', state: 'разобран', rowsN: '0', vals: '0', snap: 'есть' }] },
+      { id: 'sec', file: 'Секретность_41-2026.pdf', kind: 'Договор секретности', ver: 'ред. 1', when: '20.08.2026', state: 'разобран', rowsN: '1', vals: '1', snap: 'есть', vers: [] },
+      { id: 'new', file: 'ДС-2_к_41-2026.pdf', kind: 'Дополнительное соглашение', ver: 'ред. 1', when: '17.09.2026', state: 'в очереди', stateW: 1, rowsN: '—', vals: '—', snap: 'нет', vers: [] }
+    ];
+    function dnum(v) { var p = String(v).split('.'); return p.length === 3 ? p[2] + p[1] + p[0] : String(v); }
+    var k = st.sort, dir = st.dir;
+    var kept = docs.filter(function (d) {
+      for (var k in st.hidden) {
+        if (st.hidden[k].length && st.hidden[k].indexOf(d[k]) >= 0) { return false; }
+      }
+      return true;
+    });
+    var sorted = kept.slice().sort(function (a, b) {
+      var x = a[k], y = b[k];
+      if (k === 'when') { x = dnum(x); y = dnum(y); }
+      if (k === 'rowsN' || k === 'vals') { return (Number(x) - Number(y)) * dir; }
+      return (String(x) < String(y) ? -1 : (String(x) > String(y) ? 1 : 0)) * dir;
+    });
+
+
+    var rows = [];
+    var totVals = 0;
+    sorted.forEach(function (d) {
+      var isOpen = st.open.indexOf(d.id) >= 0 && d.vers.length > 0;
+      totVals += Number(d.vals) || 0;
+      rows.push({
+        parent: d.vers.length > 0,
+        mark: isOpen ? 'm4 6 4 4 4-4' : 'm6 4 4 4-4 4',
+        file: d.file, kind: d.kind, ver: d.ver, when: d.when, state: d.state, rowsN: d.rowsN, vals: d.vals, snap: d.snap,
+        stateCls: d.stateW === 2 ? 'bad' : (d.stateW === 1 ? 'warn' : 'mut'),
+        indent: '', rowCls: '', nameCls: '', verCls: '', snapCls: 'mut',
+        canCmp: d.vers.length > 0,
+        cmpCls: st.cmp && st.cmp.id === d.id && st.cmp.from === (d.vers[0] || {}).ver ? 'btn-on' : '',
+        cmpTitle: d.vers.length > 0 ? ('Сравнить ' + (d.vers[0] || {}).ver + ' с действующей ' + d.ver) : '',
+        cmp: function () {
+          self.setState({ cmp: { id: d.id, from: (d.vers[0] || {}).ver, to: d.ver } });
+        },
+        toggle: function () {
+          var s = st.open.slice();
+          var i = s.indexOf(d.id);
+          if (i >= 0) { s.splice(i, 1); } else { s.push(d.id); }
+          self.setState({ open: s });
+        }
+      });
+      if (isOpen) {
+        d.vers.forEach(function (v) {
+          rows.push({
+            parent: false, mark: '', toggle: function () {},
+            file: d.file, kind: d.kind, ver: v.ver, when: v.when, state: v.state, rowsN: v.rowsN, vals: v.vals, snap: v.snap,
+            stateCls: 'mut',
+            indent: 'padding-left: 18px;', rowCls: 'sub-r', nameCls: 'mut', verCls: 'mut',
+            snapCls: v.snapW ? 'warn' : 'mut',
+            canCmp: true,
+            cmpCls: st.cmp && st.cmp.id === d.id && st.cmp.from === v.ver ? 'btn-on' : '',
+            cmpTitle: 'Сравнить ' + v.ver + ' с действующей ' + d.ver,
+            cmp: function () {
+              self.setState({ cmp: { id: d.id, from: v.ver, to: d.ver } });
+            }
+          });
+        });
+      }
+    });
+
+    // Расхождения выбранной редакции с действующей: строки сопоставляются по
+    // ключевой графе документа, клетки сравниваются по каждой графе, и каждая
+    // строка показана дважды — как была и как стала.
+    var cmpFile = '', cmpA = '', cmpB = '', cmpCols = [], cmpRows = [], cmpTot = '';
+    var cmpEmptyText = '', cmpAll = 0, cmpPages = '1 / 1';
+    var cmpTotL = [], cmpTotR = [], cmpHasTot = false;
+    if (st.cmp) {
+      var cd = docs.filter(function (d) { return d.id === st.cmp.id; })[0];
+      var sheet = SNAP[st.cmp.id] || { key: 'k', cols: [], vers: {} };
+      var A = sheet.vers[st.cmp.from] || [];
+      var B = sheet.vers[st.cmp.to] || [];
+      var byA = {}, byB = {}, keys = [];
+      A.forEach(function (r) { byA[r[sheet.key]] = r; keys.push(r[sheet.key]); });
+      B.forEach(function (r) { byB[r[sheet.key]] = r; if (keys.indexOf(r[sheet.key]) < 0) { keys.push(r[sheet.key]); } });
+
+      var cnt = { 'изменено': 0, 'добавлено': 0, 'удалено': 0, 'без изменений': 0 };
+      var full = keys.map(function (kk) {
+        var a = byA[kk], b = byB[kk];
+        var state = !a ? 'добавлено' : (!b ? 'удалено' : 'без изменений');
+        var left = [], right = [];
+        sheet.cols.forEach(function (c, i) {
+          var va = a ? a[c.k] : '';
+          var vb = b ? b[c.k] : '';
+          var ch = a && b && va !== vb;
+          if (ch) { state = 'изменено'; }
+          var num = c.num ? ' num' : '';
+          left.push({
+            v: a ? va : '',
+            cls: c.w + num + (ch ? ' cch' : '') + (!b ? ' cdel' : '') + (!a ? ' cgh' : '')
+          });
+          right.push({
+            v: b ? vb : '',
+            cls: c.w + num + (ch ? ' cch' : '') + (!a ? ' cadd' : '') + (!b ? ' cgh' : '')
+              + (i === 0 ? ' pane-b' : '')
+          });
+        });
+        cnt[state] += 1;
+        return {
+          left: left, right: right, s: state, k: kk,
+          sortv: sheet.cols.map(function (c) { return b ? b[c.k] : (a ? a[c.k] : ''); }),
+          scls: 'cw-st ' + (state === 'без изменений' ? 'mut'
+            : (state === 'удалено' ? 'bad' : 'warn'))
+        };
+      });
+
+      cmpFile = cd ? cd.file : '';
+      cmpA = 'Было · ' + st.cmp.from;
+      cmpB = 'Стало · ' + st.cmp.to;
+      cmpTot = 'Изменено ' + cnt['изменено'] + ' · добавлено ' + cnt['добавлено']
+        + ' · удалено ' + cnt['удалено'] + ' · без изменений ' + cnt['без изменений'];
+      cmpEmptyText = keys.length
+        ? 'Изменений между редакциями нет'
+        : 'Из редакций ничего не извлечено';
+      cmpAll = full.length;
+
+      var shown = st.cmpOnly
+        ? full.filter(function (x) { return x.s !== 'без изменений'; })
+        : full;
+      var cs = st.cmpS, cdr = st.cmpD;
+      shown = shown.slice().sort(function (x, y) {
+        var px = cs === 's' ? x.s : (x.sortv[cs] === undefined ? '' : x.sortv[cs]);
+        var py = cs === 's' ? y.s : (y.sortv[cs] === undefined ? '' : y.sortv[cs]);
+        var nx = Number(String(px).replace(/[\s\u00A0]/g, '').replace(',', '.'));
+        var ny = Number(String(py).replace(/[\s\u00A0]/g, '').replace(',', '.'));
+        if (isFinite(nx) && isFinite(ny)) { return (nx - ny) * cdr; }
+        return (String(px) < String(py) ? -1 : (String(px) > String(py) ? 1 : 0)) * cdr;
+      });
+
+      var size = Number(st.cmpSize) || 25;
+      var pages = Math.max(1, Math.ceil(shown.length / size));
+      var page = Math.min(st.cmpPage, pages);
+      cmpPages = page + ' / ' + pages;
+      cmpRows = shown.slice((page - 1) * size, (page - 1) * size + size);
+
+      // Итог — только по графам, которые складываются; в обеих половинах.
+      var hasSum = false;
+      function total(list, key) {
+        var t = 0;
+        list.forEach(function (r) {
+          t += Number(String(r[key]).replace(/[\s\u00A0]/g, '').replace(',', '.')) || 0;
+        });
+        return t;
+      }
+      function fmt(v, dec) {
+        var d = dec !== undefined ? dec : (Math.abs(v - Math.round(v)) > 0.001 ? 1 : 0);
+        return v.toLocaleString('ru-RU', { minimumFractionDigits: d, maximumFractionDigits: d });
+      }
+      sheet.cols.forEach(function (c, i) {
+        if (i === 0) {
+          cmpTotL.push({ v: 'Итого', cls: c.w });
+          cmpTotR.push({ v: 'Итого', cls: c.w + ' pane-b' });
+          return;
+        }
+        if (!c.sum) {
+          cmpTotL.push({ v: '', cls: c.w });
+          cmpTotR.push({ v: '', cls: c.w });
+          return;
+        }
+        var ta = total(A, c.k), tb = total(B, c.k);
+        hasSum = true;
+        cmpTotL.push({ v: fmt(ta, c.dec), cls: c.w + ' num' + (ta !== tb ? ' cch' : '') });
+        cmpTotR.push({ v: fmt(tb, c.dec), cls: c.w + ' num' + (ta !== tb ? ' cch' : '') });
+      });
+      cmpHasTot = hasSum && keys.length > 0;
+
+      cmpCols = sheet.cols.map(function (c, i) {
+        return {
+          label: c.label, w: c.w, pb: i === 0 ? 'pane-b' : '',
+          cls: (c.num ? 'thb-n ' : '') + (st.cmpS === i ? 'thb-on' : ''),
+          arr: st.cmpS === i ? (st.cmpD > 0 ? '▲' : '▼') : '',
+          hasArr: !!(st.cmpS === i ? (st.cmpD > 0 ? '▲' : '▼') : ''),
+          sort: function () { self.setState({ cmpS: i, cmpD: st.cmpS === i ? -st.cmpD : 1 }); }
+        };
+      });
+    }
+
+    return {
+      yes: true, no: false,
+      name: st.name,
+      rows: rows,
+      allOpen: st.open.length > 0,
+      cmpOn: !!st.cmp, cmpOnly: st.cmpOnly,
+      cmpFile: cmpFile, cmpA: cmpA, cmpB: cmpB, cmpCols: cmpCols, cmpRows: cmpRows, cmpTot: cmpTot,
+      cmpEmpty: cmpRows.length === 0, cmpEmptyText: cmpEmptyText,
+      cmpTotL: cmpTotL, cmpTotR: cmpTotR, cmpHasTot: cmpHasTot,
+      cmpInfo: 'Строк ' + cmpRows.length + ' из ' + cmpAll,
+      cmpPages: cmpPages,
+      cmpStCls: st.cmpS === 's' ? 'thb-on' : '',
+      cmpStArr: st.cmpS === 's' ? (st.cmpD > 0 ? '▲' : '▼') : '',
+      cmpStHas: st.cmpS === 's',
+      docInfo: 'Документов ' + docs.length + ' · редакций '
+        + docs.reduce(function (n, d) { return n + d.vers.length; }, 0),
+      pageInfo: 'Строк ' + rows.length + ' из ' + rows.length,
+      req: (function () {
+        var a = [
+          { key: 'term', k: 'Срок действия', v: '01.02.2026 — 31.12.2027', src: 'Договор', page: '1', ver: '2' },
+          { key: 'fot', k: 'ФОТ по договору, руб.', v: '64 255 800,00', src: 'Структура цены', page: '2', ver: '1' },
+          { key: 'mm', k: 'Трудоёмкость, чел.-мес.', v: '412,5', src: 'РКМ', page: '4', ver: '3' },
+          { k: 'Строк трудоёмкости', v: '6', src: 'РКМ', page: '4', ver: '3', ro: true },
+          { key: 'ext', k: 'Дополнительная заработная плата, %', v: '8,6866', src: 'Структура цены', page: '2', ver: '1' },
+          { key: 'ins', k: 'Страховые взносы, %', v: '30,2', src: 'Структура цены', page: '2', ver: '1' },
+          { key: 'ovh', k: 'Накладные расходы, %', v: '60,65', src: 'Структура цены', page: '2', ver: '1' },
+          { key: 'sd', k: 'Выплата оклада до', v: '31.12.2027', src: 'допущение', page: '—', ver: '—', cls: 'warn', scls: 'warn' },
+          { key: 'ad', k: 'Выплата надбавок до', v: '31.12.2027', src: 'допущение', page: '—', ver: '—', cls: 'warn', scls: 'warn' },
+          { key: 'acc', k: 'Лицевой счёт', v: '21-04-117', src: 'Договор', page: '9', ver: '2' },
+          { key: 'code', k: 'Шифр', v: '41-2026', src: 'из шапки документов', page: '1', ver: '3' },
+          { key: 'dnum', k: 'Номер договора', v: '41/26-ГОЗ', src: 'Договор', page: '1', ver: '2' },
+          { key: 'cat', k: 'Категория договора', v: 'ГОЗ', src: 'реквизит договора', page: '—', ver: '—' },
+          { key: 'fund', k: 'Источник финансирования', v: 'ОКР', src: 'реквизит договора', page: '—', ver: '—' },
+          { key: 'pay', k: 'Разрешённые виды начислений', v: 'оклад, 120, 122, 124, 152, приказ', src: 'реквизит договора', page: '—', ver: '—' },
+          { k: 'Гособоронзаказ', v: st.goz, src: 'реквизит договора', page: '—', ver: '—', yn: 'goz' },
+          { k: 'Приоритет 2030', v: st.pri, src: 'категория договора: ГОЗ', page: '—', ver: '—', yn: 'pri' }
+        ];
+        var key = st.rs;
+        a = a.slice().sort(function (x, y) {
+          return String(x[key]).localeCompare(String(y[key]), 'ru', { numeric: true }) * st.rd;
+        });
+        return a.map(function (r) {
+          var v = r.key && st.fix[r.key] !== undefined ? st.fix[r.key] : r.v;
+          var src = r.src;
+          if (r.ver !== '—') { src += ', ред. ' + r.ver; }
+          if (r.page !== '—') { src += ', с. ' + r.page; }
+          return {
+            k: r.k, v: r.yn ? st[r.yn] : v, src: src,
+            cls: (r.key && st.fix[r.key] !== undefined ? 'cin-set' : (r.cls || '')),
+            scls: r.scls || 'mut',
+            ro: !!r.ro, txt: !r.ro && !r.yn, yn: !!r.yn,
+            set: function (e) {
+              if (r.yn) {
+                var p = {};
+                p[r.yn] = e.target.value;
+                self.setState(p);
+                return;
+              }
+              var m = {};
+              for (var q in st.fix) { m[q] = st.fix[q]; }
+              m[r.key] = e.target.value;
+              self.setState({ fix: m });
+            }
+          };
+        });
+      })(),
+      h: {
+        name: function (e) { self.setState({ name: e.target.value }); },
+        all: function () { self.setState({ open: st.open.length > 0 ? [] : ['rkm', 'dog', 'tz'] }); },
+        cmpClose: function () { self.setState({ cmp: null }); },
+        cmpOnly: function () { self.setState({ cmpOnly: !st.cmpOnly, cmpPage: 1 }); },
+        cmpSt: function () { self.setState({ cmpS: 's', cmpD: st.cmpS === 's' ? -st.cmpD : 1 }); },
+        cmpPrev: function () { self.setState({ cmpPage: Math.max(1, st.cmpPage - 1) }); },
+        cmpNext: function () { self.setState({ cmpPage: st.cmpPage + 1 }); }
+      }
+    };
+  }
+}
+window.Component = Component;
+</script>
+</body>
+</html>

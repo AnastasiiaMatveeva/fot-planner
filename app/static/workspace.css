@@ -1,0 +1,264 @@
+/* UI-019. Синий рабочий интерфейс: цвет отделяет навигацию от данных,
+   а таблица сохраняет белую бумагу и спокойные числовые колонки. */
+:root{
+  --canvas:#FCFCFC; --paper:#FFFFFF; --s0:#FFFFFF; --s1:#F7F7F7; --s2:#EFEFEF;
+  --ink:#2C3035; --ink2:#555B63; --ink3:#646B73; --ink4:#8B9299;
+  --line2:#EBEBEB; --line:#DDDFE2; --line3:#858E94;
+  --nav:#F6F6F6; --navon:#E0E7ED; --navhov:#EEEEEE;
+  --navtext:#303B47; --navmuted:#56616D;
+  --acc:#4B6F99; --acc2:#3B5D85; --acc3:#314F72;
+  --accbg:#EDF1F6; --accink:#45658A; --onacc:#FFFFFF;
+  --accring:#4B6F99; --accsoft:#89A0B9;
+  --agent:#45658A; --agentbg:#EDF1F6;
+  --r2:4px; --r:6px; --rlg:6px;
+}
+
+/* Нейтральная навигация отделяется от белой таблицы одним шагом тона.
+   Голубая заливка обозначает только выбранный пункт, а не всю колонку. */
+.cases{
+  --ink:var(--navtext); --ink2:var(--navmuted); --ink3:var(--navmuted);
+  --acc:#4B6F99; --acc2:#3B5D85; --accring:#4B6F99;
+  --s0:var(--navhov); --s1:var(--navhov); --s2:var(--navon);
+  --line:#DDDFE2; --line3:#858E94;
+  padding:0 14px 18px;border-right:1px solid var(--line);
+}
+.cases .bmark{padding:26px 10px 6px}
+.cases .bmark .logo{filter:none}
+.cases .bname{margin-top:10px;font-weight:400}
+.cases .nav{margin-top:24px;padding-bottom:22px;gap:5px}
+.cases .navi{min-height:40px;padding:9px 10px;border-radius:var(--r)}
+.cases .navi.on{background:var(--navon);color:var(--navtext)}
+.cases .ctitle{padding:24px 10px 12px;font-size:12px;letter-spacing:.06em}
+.cases .case{padding:10px;min-height:40px;color:var(--navmuted)}
+.cases .case:hover,.cases .case.on{color:var(--navtext)}
+.cases .case.on::before{background:var(--acc);top:10px;bottom:10px}
+.cases .ctitle .cta{color:var(--navtext)}
+.cases .clist{gap:3px}
+
+/* Фильтр пропусков — действие, а не предупреждение о состоянии договора. */
+.view .req > .cath .ghost{color:var(--ink2);font-weight:400;min-height:30px;
+  border-color:var(--line);background:var(--paper)}
+.view .req > .cath .ghost:hover{color:var(--acc);background:var(--accbg)}
+.view .req > .cath .ghost[aria-pressed=true]{color:var(--accink);
+  border-color:var(--acc);background:var(--accbg)}
+.view .req td .kd{color:var(--ink3)}
+.view .req .hscroll{box-shadow:none;border-radius:var(--r)}
+
+/* Заголовок и вкладки принадлежат разделу, панель ниже — работе с данными. */
+#regview{padding:0 32px 32px}
+#regview .regtitle{padding:27px 0 20px}
+#regview .regtitle h1{font-size:24px;line-height:32px;font-weight:600;letter-spacing:-.025em}
+#regview > .reghead{margin-bottom:24px}
+#regview .reghead .rtabrow{border-bottom-color:var(--line)}
+#regview .reghead .rtabrow > .rtabs{gap:0 24px}
+#regview .reghead .rtabs button,
+#regview .reghead .rtabs button[data-glast]{margin-right:0;min-height:42px;padding:0 0 12px;
+  font-size:13px;color:var(--ink2);justify-content:flex-start;gap:7px}
+#regview .reghead .rtabs button.on{color:var(--acc);border-bottom-color:var(--acc);font-weight:500}
+#regview .reghead .rtabs button .c{font-size:12px;font-variant-numeric:tabular-nums}
+/* Список договоров плана — тем же видом ведомости, что таблицы реестра
+   (проект дизайнера 20.09.2026): шапка обычным регистром, строка 40 px с
+   выравниванием по середине, наименование не выше двух строк, рамка без тени
+   и крупного скругления. */
+#view .pctr .hscroll{border-radius:var(--r2);box-shadow:none}
+#view .pctr .pager{border:0;border-top:1px solid var(--line2);box-shadow:none;margin-bottom:0}
+/* Наименование — не выше двух строк: в узком списке оно растило строку до
+   ста пикселей, а флажок, номер и шифр висели у её верха. */
+#view .pctr .clamp2{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;
+  overflow:hidden;font-weight:500}
+/* Строка «В расчёте N из M» и «Графы» — одна полоса над таблицей; заголовок
+   крупнее данных, кнопка тихим значком с подписью, как в реестре. */
+#view .tbar{display:flex;align-items:center;gap:2px;min-height:36px;padding:0 0 8px}
+#view .tbar .preflight{margin:0;font:600 14px/20px var(--f);color:var(--ink)}
+#view .tbar .sp{flex:1}
+#view .tbar [data-tb]{display:inline-flex;align-items:center;gap:7px;height:28px;margin:0;
+  padding:0 8px;border:0;border-radius:var(--r2);background:none;color:var(--ink2);
+  text-decoration:none;
+  font:500 13px/18px var(--f);cursor:pointer;white-space:nowrap;
+  transition:background-color .12s ease-out,color .12s ease-out}
+#view .tbar [data-tb]:hover{background:color-mix(in srgb,var(--acc) 12%,transparent);
+  color:var(--acc)}
+#view .tbar [data-tb]:focus-visible{outline:2px solid var(--accring);outline-offset:0}
+@media (prefers-reduced-motion:reduce){#view .tbar [data-tb]{transition:none}}
+
+/* Вкладки плана — того же вида, что вкладки реестра (пользователь 20.09.2026:
+   «сделай вкладки такие же по стилю»): выбранная — акцентом, прочие —
+   вторыми чернилами, шаг 24 px, подпись над чертой. */
+/* Не помещаются — переносятся на следующую строку, как вкладки реестра:
+   боковой прокрутки у строки вкладок нет (UI-014). */
+.tabs{column-gap:24px;padding:0 22px;flex-wrap:wrap;overflow-x:visible}
+.tabs .tab{display:inline-flex;align-items:center;height:auto;min-height:42px;
+  padding:0 0 12px;margin-right:0;color:var(--ink2)}
+.tabs .tab.on{color:var(--acc);border-bottom-color:var(--acc);font-weight:500}
+
+/* Действия подписаны, поиск виден до первого щелчка: экономисту не нужно
+   вспоминать значение значка. Панель без декоративного подъёма. */
+#regview .tpanel,#view :where(.gridwrap) .tpanel{--tint:#FAFAFA;border-color:var(--line);border-radius:var(--rlg);box-shadow:none}
+#regview .tbar,#view :where(.gridwrap) .tbar{height:auto;min-height:64px;padding:14px 16px;gap:16px;flex-wrap:wrap;
+  border-bottom:1px solid var(--line2)}
+#regview .tbar [data-tb],#view :where(.gridwrap) .tbar [data-tb]{display:inline-flex;align-items:center;justify-content:center;
+  gap:7px;width:auto;height:32px;padding:0 10px;font:500 13px/18px var(--f);
+  text-decoration:none;
+  color:var(--ink2);white-space:nowrap;transition:background-color .12s ease-out}
+/* Добавление и загрузка — тихой кнопкой, а не заливкой акцентом: заливка
+   спорила с данными (пользователь 19.09.2026: «сделать эти кнопки не такие
+   яркие и контрастные»). Залитой остаётся одна кнопка — «Рассчитать план».
+   Текст --accink на --accbg — 5,3:1. */
+#regview .tbar [data-tbadd],#view :where(.gridwrap) .tbar [data-tbadd]{background:var(--accbg);color:var(--accink);padding:0 12px}
+#regview .tbar [data-tbadd]:hover,#view :where(.gridwrap) .tbar [data-tbadd]:hover{background:color-mix(in srgb,var(--acc) 14%,var(--accbg));
+  color:var(--acc2)}
+#regview .tbar [data-tb]:active,#view :where(.gridwrap) .tbar [data-tb]:active{transform:none}
+#regview .tbar .find,
+#regview .tbar .find:focus-within,#regview .tbar .find.has,
+#view :where(.gridwrap) .tbar .find,
+#view :where(.gridwrap) .tbar .find:focus-within,
+#view :where(.gridwrap) .tbar .find.has{
+  width:240px;max-width:100%;flex:0 1 240px;cursor:text;transition:none}
+#regview .tbar .find > svg,#view :where(.gridwrap) .tbar .find > svg{left:10px;top:9px;color:var(--ink3)}
+#regview .tbar .find .ctrq,
+#regview .tbar .find:not(:focus-within):not(.has) .ctrq,
+#view :where(.gridwrap) .tbar .find .ctrq,
+#view :where(.gridwrap) .tbar .find:not(:focus-within):not(.has) .ctrq{
+  height:32px;padding:0 10px 0 32px;border:1px solid var(--line3);
+  background:var(--paper);color:var(--ink);cursor:text}
+#regview .tbar .find .ctrq::placeholder,
+#regview .tbar .find:not(:focus-within):not(.has) .ctrq::placeholder,
+#view :where(.gridwrap) .tbar .find .ctrq::placeholder,
+#view :where(.gridwrap) .tbar .find:not(:focus-within):not(.has) .ctrq::placeholder{color:var(--ink3)}
+#regview .tbar .find:not(:focus-within):not(.has):hover .ctrq,
+#view :where(.gridwrap) .tbar .find:not(:focus-within):not(.has):hover .ctrq{background:var(--paper)}
+#regview .tpanel .pager,#view :where(.gridwrap) .tpanel .pager{min-height:52px;padding:8px 16px;color:var(--ink3);font-size:12px}
+
+/* Сетка ведомости: шапка обычным регистром, даты компактно, свободное
+   место у наименования. Липкие столбцы и шапки наследуются из app.css. */
+#regview .tpanel thead th,#regview .tpanel thead th.num,
+#regview .tpanel thead th.key,#regview .tpanel thead th.pin,
+#view :where(.gridwrap) .tpanel thead th,
+#view :where(.gridwrap) .tpanel thead th.num,
+#view :where(.gridwrap) .tpanel thead th.key,
+#view :where(.gridwrap) .tpanel thead th.pin{
+  padding:11px 14px;font-size:12px;font-weight:500;text-transform:none;
+  letter-spacing:0;color:var(--ink2)}
+#regview .tpanel thead .thc button,#view :where(.gridwrap) .tpanel thead .thc button{font:inherit;text-transform:none;letter-spacing:0}
+#regview .tpanel td,#view :where(.gridwrap) .tpanel td{padding:14px;line-height:20px;vertical-align:middle}
+#regview .tpanel td.num,#view :where(.gridwrap) .tpanel td.num{color:var(--ink3)}
+#regview .tpanel .rowkey,#view :where(.gridwrap) .tpanel .rowkey{font-weight:500}
+#regview .ctrlist th.w-code{width:118px}
+#regview .ctrlist th.w-name{width:auto;min-width:240px}
+#regview .ctrlist th.w-date_from,#regview .ctrlist th.w-date_to{width:112px}
+#regview .ctrlist th.w-sign{width:128px}
+#regview .ctrlist th.w-fund{width:138px}
+#regview .ctrlist tr.total td{padding-top:13px;padding-bottom:13px;background:var(--tint);
+  border-top:1px solid var(--line);font-weight:600}
+#regview .ctrlist td.n{font-variant-numeric:tabular-nums;letter-spacing:.01em}
+#regview .ctrlist .clamp2{-webkit-line-clamp:2}
+
+/* Ведомость без «нашлёпки»: таблица живёт на странице, а не внутри ещё одной
+   декоративной рамки. Остаются только рабочие границы шапки и подвала. */
+#regview .ctrlist .tpanel,
+#regview .gridwrap .tpanel,
+#regview .cat .tpanel,#view .gridwrap .tpanel{
+  border:0;border-radius:0;background:transparent;box-shadow:none;overflow:visible;
+}
+#regview .ctrlist .tbar,
+#regview .gridwrap .tbar,
+#regview .cat .tbar,#view .gridwrap .tbar{
+  min-height:48px;padding:8px 0 10px;background:transparent;
+  border-bottom:1px solid var(--line);gap:10px;
+}
+#regview .ctrlist .tpanel > .hscroll,
+#regview .gridwrap .tpanel > .hscroll,
+#regview .cat .tpanel > .hscroll,#view .gridwrap .tpanel > .hscroll{
+  border:0;border-bottom:1px solid var(--line);border-radius:0;background:var(--paper);
+}
+#regview .ctrlist .tpanel thead th,
+#regview .gridwrap .tpanel thead th,
+#regview .cat .tpanel thead th,#view .gridwrap .tpanel thead th{
+  background:#F8F8F7;border-bottom:1px solid var(--line);padding-top:10px;padding-bottom:10px;
+}
+#regview .ctrlist .tpanel td,
+#regview .gridwrap .tpanel td,
+#regview .cat .tpanel td,#view .gridwrap .tpanel td{padding-top:11px;padding-bottom:11px}
+#regview .ctrlist .tpanel .pager,
+#regview .gridwrap .tpanel .pager,
+#regview .cat .tpanel .pager,#view .gridwrap .tpanel .pager{
+  min-height:48px;padding:8px 0;background:transparent;border-top:0;
+}
+#regview .tbar [data-tbadd],#view :where(.gridwrap) .tbar [data-tbadd]{border-radius:var(--r2)}
+
+@media (max-width:760px){
+  #regview{padding-left:14px;padding-right:14px}
+  #regview .ctrlist .tbar,
+  #regview .gridwrap .tbar,
+  #regview .cat .tbar,#view .gridwrap .tbar{padding-top:6px;gap:8px}
+  #regview .ctrlist .tpanel > .hscroll,
+  #regview .gridwrap .tpanel > .hscroll,
+  #regview .cat .tpanel > .hscroll,#view .gridwrap .tpanel > .hscroll{max-width:100%;overflow-x:auto}
+  #regview .tbar .find,#view :where(.gridwrap) .tbar .find{flex-basis:180px}
+}
+
+/* Тихая обратная связь после сохранения: это подтверждение, а не баннер. */
+.toast{position:fixed;right:20px;bottom:20px;z-index:30;max-width:min(360px,calc(100vw - 40px));
+  padding:9px 12px;border:1px solid var(--line);border-left:3px solid var(--acc);
+  border-radius:var(--r2);background:var(--paper);color:var(--ink2);font-size:13px;
+  box-shadow:0 4px 14px rgba(36,43,52,.10);opacity:0;transform:translateY(5px);
+  pointer-events:none;transition:opacity .14s ease-out,transform .14s ease-out}
+.toast.show{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){.toast{transition:none}}
+
+@media (max-width:1280px){
+  #regview{padding-right:22px;padding-left:22px}
+  #regview .reghead .rtabrow > .rtabs{gap:0 18px}
+}
+@container (max-width:960px){
+  #regview .tpanel thead th,#regview .tpanel td,
+#view :where(.gridwrap) .tpanel thead th,
+#view :where(.gridwrap) .tpanel td{padding-left:10px;padding-right:10px}
+  #regview .ctrlist th.w-name{min-width:220px}
+  #regview .ctrlist th.w-code{width:104px}
+  #regview .ctrlist th.w-date_from,#regview .ctrlist th.w-date_to{width:100px}
+  #regview .ctrlist th.w-sign{width:106px}
+  #regview .ctrlist th.w-fund{width:120px}
+}
+@media (max-width:600px){
+  #regview{padding:0 14px 20px}
+  #regview .regtitle{padding-top:20px}
+  #regview .regtitle h1{font-size:22px}
+  #regview .tbar,#view :where(.gridwrap) .tbar{gap:10px;padding:12px}
+  #regview .tbar .find,#view :where(.gridwrap) .tbar .find{flex:1 1 160px}
+}
+@media (prefers-reduced-motion:reduce){
+  #regview .tbar [data-tb],#view :where(.gridwrap) .tbar [data-tb]{transition:none}
+}
+
+/* Чат — видом интерфейса, а не мессенджера (пользователь 30.09.2026:
+   «сделай боковую панель по размеру шрифта, стилю и т. д. такой же, как весь
+   интерфейс»). Шапка — заголовком раздела реестра, 13 px; реплики — плоские
+   строки без тени, со скруглением полей; имя агента — цветом заголовка
+   графы; поле — как поиск реестра; «+» и «Отправить» — мягкие кнопки полосы:
+   залитой остаётся одна кнопка, «Рассчитать план». */
+.chatpanel .chath{min-height:47px;padding:0 12px 0 16px;background:transparent}
+.chatpanel .chath h2{font:600 13px/18px var(--f);color:var(--ink)}
+.chatpanel .feed{padding:12px 16px;gap:12px}
+.chatpanel .msg{max-width:100%;gap:4px}
+.chatpanel .msg .head{font-size:12px;line-height:16px;color:var(--ink3)}
+.chatpanel .msg .head b{font-weight:500;color:var(--ink2);letter-spacing:0}
+.chatpanel .msg.me .head b{color:var(--ink2)}
+.chatpanel .msg .bubble{padding:8px 10px;border:1px solid var(--line2);border-radius:var(--r2);
+  box-shadow:none;background:var(--paper);font:13px/18px var(--f);color:var(--ink)}
+.chatpanel .msg.me .bubble{background:var(--accbg);border-color:var(--accbg)}
+.chatpanel .msg.sys .bubble{padding:0;border:0;background:transparent;color:var(--ink3)}
+.chatpanel .composer{gap:8px;padding:10px 12px;background:transparent;border-top:1px solid var(--line)}
+.chatpanel .composer input[type=text]{height:32px;padding:0 10px;border:1px solid var(--line3);
+  border-radius:var(--r2);background:var(--paper);color:var(--ink);font:13px var(--f)}
+.chatpanel .composer input[type=text]::placeholder{color:var(--ink3)}
+.chatpanel .composer input[type=text]:focus-visible{outline:2px solid var(--accring);outline-offset:-1px;
+  border-color:var(--acc)}
+.chatpanel .composer button,.chatpanel .composer button.attach{height:32px;border:0;border-radius:var(--r2);
+  background:var(--accbg);color:var(--accink);font:500 13px/1 var(--f);cursor:pointer}
+.chatpanel .composer button{padding:0 12px}
+.chatpanel .composer button.attach{width:32px;padding:0;font:500 17px/1 var(--f)}
+.chatpanel .composer button:hover,.chatpanel .composer button.attach:hover{
+  background:color-mix(in srgb,var(--acc) 14%,var(--accbg));color:var(--acc2)}
+.chatpanel .composer button:focus-visible{outline:2px solid var(--accring);outline-offset:1px}
+.chatpanel .composer button:disabled{background:var(--s2);color:var(--ink4);cursor:default}

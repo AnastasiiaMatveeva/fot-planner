@@ -5,9 +5,9 @@
   const months = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
   const categories = {contracts:'Договоры',employees:'Сотрудники',labor:'Трудоёмкость',limits:'Ограничения',data:'Проверки данных'};
   const metric = (label,value,unit) => ({label,value,unit:unit || ''});
-  /* Величины замечания: факт, предел и разница между ними. Подписи графам
-     даёт таблица, а не проверка, поэтому здесь только числа. Разница
-     считается сама: «превышение» и «недоплата» — это она и есть. */
+  /* Величины замечания: значение, предел или норма и отклонение между ними.
+     Подписи графам даёт таблица, а не проверка, поэтому здесь только числа.
+     Отклонение считается само: «превышение» и «недоплата» — это оно и есть. */
   const values = (fact,limit,unit,diff) => ({
     fact:{value:fact,unit:unit || ''},
     limit:{value:limit,unit:unit || ''},
@@ -26,15 +26,16 @@
      раздел 15 остаётся только там, где место указать нечем.
 
      Ключи строк те же, что расставлены в отчёте (data-review-key):
-     2 — шифр договора; 4 — «cash:шифр:конец»; 6 — «pay:табельный:вид»
-     (ищется по началу); 7 — «rate:табельный»; 8 — «bep:N»; 9 — «p4:N»;
-     10 — «labor:N»; 11 — «who:N»; 14 — «deficit:N». */
+     2 — шифр договора; 4 — «cum:шифр:остаток»; 6 — «pay:табельный:вид»
+     (ищется по началу); 7 — «rate:табельный»; 8 — «bep:N»; 9 — «p2556:N»,
+     «p4:N», «p2556o:N»; 10 — «labor:N»; 11 — «who:N»; 14 — «deficit:N».
+     Номер графы (column) — порядковый номер графы таблицы без «№». */
   const RULE_SECTION = {
     'Человек получает всю месячную зарплату':6,
     'Оклад идет по ставке, а не произвольной суммой':6,
     'Надбавка 122 — с того же договора, что и оклад':6,
     'Режим «оклад плюс 152»':6,
-    'П2556: оклад и 122 не выше предела по должности':6,
+    'П2556: оклад и 122 не выше предела по должности':9,
     'Платим только теми видами, которые разрешены договором':2,
     'Договор платит только в свои сроки':2,
     'Выплаты не превышают ФОТ договора':2,
@@ -48,11 +49,28 @@
     'Сумма трудоемкости выбрана':10,
     'Работу закрывает подходящая должность':11,
   };
+  /* Раздел 9 — три таблицы: условие ищет строку в своей. Прежде раздел 9
+     искал только в П4, и замечание по П2556 открывало раздел без строки. */
+  const RULE_TABLE = {
+    'П2556: оклад и 122 не выше предела по должности':'п2556',
+    'П4 при надбавке за интенсивность':'п4',
+  };
+  /* Условия, которые отчёт уже показал своими строками (БЭП, П4,
+     трудоёмкость): замечание проверки rules.py о том же было бы вторым
+     замечанием об одном нарушении (UI-002). */
+  const REPORT_COVERED = {
+    'БЭП: средняя зарплата по ГОЗ-договору в пределах базовой':'bep.',
+    'П4 при надбавке за интенсивность':'p4.',
+    'Плановые человеко-месяцы закрыты':'labor.',
+    'Сумма трудоемкости выбрана':'labor.',
+  };
+  const TABLE_KEY = {'п2556':'p2556','п4':'p4'};
   const MSG_SECTION = {'Трудоёмкость':10,'Дробление выплат':6,'Касса':4,
                        'Дефицит':14,'Конфликт':2,'Освоение':2};
+  const ruleSection = name => RULE_SECTION[name] || null;
 
   /* Разобрать объект замечания: «Иванов Игорь Иванович, янв, C_BASE-26»,
-     «C_GOZ-26, сен», «C_GOZ-26 / Инженер», «C_GOZ-26 / Инженер / Петров». */
+     «C_GOZ-26, сен», «C_GOZ-26, Инженер», «C_GOZ-26 / Инженер / Петров». */
   function parseSubject(r, subject) {
     const text = String(subject == null ? '' : subject).trim();
     const parts = text.split(/\s*[,/]\s*/).filter(Boolean);
@@ -66,19 +84,22 @@
       const who = people.find(x => x['фио'] === part || x['табельный'] === part);
       if (who) out.person = out.person || who['табельный'];
     });
-    out.labor = (r['трудоемкость'] || []).findIndex(l =>
-      text === l['договор'] + ' / ' + l['строка'] ||
-      text.indexOf(l['договор'] + ' / ' + l['строка']) === 0);
+    /* Договор и строку РКМ проверки пишут через запятую (UI-015); прежние
+       записи — через косую черту. */
+    out.labor = (r['трудоемкость'] || []).findIndex(l => [', ', ' / '].some(sep =>
+      text === l['договор'] + sep + l['строка'] ||
+      text.indexOf(l['договор'] + sep + l['строка']) === 0));
     return out;
   }
 
-  /* Раздел плюс разобранный объект — в адрес строки. */
-  function place(r, section, subject, month) {
+  /* Раздел плюс разобранный объект — в адрес строки. table — таблица
+     раздела 9, в которой искать строку («п2556» или «п4»). */
+  function place(r, section, subject, month, table) {
     const f = parseSubject(r, subject);
     const m = month || f.month || null;
     let row = null;
     if (section === 2 && f.contract) row = f.contract;
-    else if (section === 4 && f.contract) row = 'cash:' + f.contract + ':конец';
+    else if (section === 4 && f.contract) row = 'cum:' + f.contract + ':остаток';
     else if (section === 6 && f.person) row = 'pay:' + f.person;
     else if (section === 7 && f.person) row = 'rate:' + f.person;
     else if (section === 8) {
@@ -86,9 +107,10 @@
         && (!m || b['месяц'] === m));
       if (i >= 0) row = 'bep:' + i;
     } else if (section === 9) {
-      const i = (r['п4'] || []).findIndex(x => (!f.person || x['табельный'] === f.person)
-        && (!m || x['месяц'] === m));
-      if (i >= 0) row = 'p4:' + i;
+      const key = table || 'п4';
+      const i = (r[key] || []).findIndex(x => (!f.person || x['табельный'] === f.person)
+        && (!m || x['месяц'] === m) && (!f.contract || !x['договор'] || x['договор'] === f.contract));
+      if (i >= 0) row = TABLE_KEY[key] + ':' + i;
     } else if (section === 10 && f.labor >= 0) row = 'labor:' + f.labor;
     else if (section === 11 && f.labor >= 0) row = 'who:' + f.labor;
     else if (section === 14) {
@@ -102,6 +124,17 @@
     return section ? {section, row, month:m} : null;
   }
 
+  /* Состояние строки раздела 8 или 9.2. Его считает отчёт (report.py); у
+     отчёта без него — по отклонению: доля у БЭП, рубли у П4. */
+  const bepState = b => b['состояние'] || (b['отклонение'] > .0005 ? 'Выше БЭП'
+    : b['отклонение'] < -.0005 ? 'Ниже БЭП' : 'Равно БЭП');
+  const p4Level = b => b['уровень'] != null ? b['уровень'] : b['предел'];
+  const p4State = b => {
+    if (b['состояние']) return b['состояние'];
+    const d = (b['итого'] || 0) - (p4Level(b) || 0);
+    return d > 1 ? 'Выше уровня П4' : d < -1 ? 'Ниже уровня П4' : 'Равно уровню П4';
+  };
+
   function collect(report, rules, result, runId) {
     const r = report || {}, out = [];
     function add(rule,category,severity,subject,title,metrics,target,detail) {
@@ -111,52 +144,78 @@
         period:target.period || (target.month ? months[target.month-1] : target.section===15 ? 'Проверка версии' : 'За год'),
         source:rule.startsWith('check.')?'rules':rule.startsWith('message.')?'result':'report'});
     }
+    /* Графы раздела 2.2: 5 — выплаты по плану за год, 6 — нераспределённый
+       ФОТ на 31.12. */
     (r['договоры'] || []).forEach(c=>{
       if (c['остаток'] > .5) add('budget.remaining','contracts','warning',c['код'],'Нераспределённый ФОТ',
-        values(c['выплачено'],c['ФОТ'],'₽'),{section:2,row:c['код'],column:7},c['название']);
-      if (c['выплачено'] > c['ФОТ'] + .5) add('budget.exceeded','contracts','error',c['код'],'Превышен лимит ФОТ',
-        values(c['выплачено'],c['ФОТ'],'₽'),{section:2,row:c['код'],column:6});
+        values(c['выплачено'],c['ФОТ'],'₽'),{section:2,row:c['код'],column:6},c['название']);
+      if (c['выплачено'] > c['ФОТ'] + .5) add('budget.exceeded','contracts','error',c['код'],'Выплаты превышают ФОТ договора',
+        values(c['выплачено'],c['ФОТ'],'₽'),{section:2,row:c['код'],column:5});
     });
-    (r['дефицит'] || []).forEach((d,i)=>{if(!(d['дефицит'] > .5)) return; add('pay.deficit','employees','warning',d['фио'] || d['табельный'],'Недоплата сотруднику',
+    (r['дефицит'] || []).forEach((d,i)=>{if(!(d['дефицит'] > .5)) return; add('pay.deficit','employees','warning',d['фио'] || d['табельный'],'Недоплата заработной платы',
       values(d['выплачено'],d['положено'],'₽'),{section:14,row:'deficit:'+i,column:6,month:d['месяц']},d['причина']);});
-    [['бэп','bep',8,'БЭП'],['п4','p4',9,'П4']].forEach(([field,id,section,name])=>{
-      (r[field] || []).forEach((b,i)=>{
-        if (!(b['отклонение'] > .0005)) return;
-        add(id+'.exceeded','limits','error',b['фио'] || b['договор'], 'Превышен '+name,
-          values(b[id==='bep'?'средняя':'итого'],b[id==='bep'?'БЭП':'предел'],'₽',-b['запас']),
-          {section,row:id+':'+i,column:id==='bep'?8:11,month:b['месяц']});
-      });
+    /* Раздел 8: выше БЭП — нарушение, ниже — замечание: цель расчёта —
+       ровно БЭП, недобор допустим, но нежелателен (владелец продукта
+       30.09.2026). Графа 7 — отклонение средней от БЭП, ₽. */
+    /* Месяц факта (правило 26) — «Факт»: показан, но не судится; замечания
+       по нему нет ни здесь, ни в 9.2 и 9.3. */
+    (r['бэп'] || []).forEach((b,i)=>{
+      const st = bepState(b);
+      if (st === 'Равно БЭП' || st === 'Факт') return;
+      const above = st === 'Выше БЭП';
+      add(above ? 'bep.exceeded' : 'bep.below','limits',above ? 'error' : 'warning',b['договор'],
+        above ? 'Средняя выше БЭП' : 'Средняя ниже БЭП',
+        values(b['средняя'],b['БЭП'],'₽',b['состояние'] ? b['отклонение'] : null),
+        {section:8,row:'bep:'+i,column:7,month:b['месяц']});
     });
-    (r['касса'] || []).forEach(c=>((c['строки'] || {})['конец'] || []).forEach((v,i)=>{
-      if (typeof v === 'number' && v < -.5) add('cash.negative','contracts','error',c['код'],'Кассовый разрыв',
-        values(v,0,'₽'),{section:4,row:'cash:'+c['код']+':конец',month:i+1,column:3});
-    }));
+    /* Раздел 9.2: уровень П4 — норма (правило 5), отклонение в любую
+       сторону сверх рубля — нарушение. Графа 12 — отклонение, ₽. */
+    (r['п4'] || []).forEach((b,i)=>{
+      const st = p4State(b);
+      if (st === 'Равно уровню П4' || st === 'Факт') return;
+      add('p4.deviation','limits','error',b['фио'] || b['табельный'],'Штатная часть не равна уровню П4',
+        values(b['итого'],p4Level(b),'₽'),{section:9,row:'p4:'+i,column:12,month:b['месяц']});
+    });
+    /* Раздел 9.3: выплата приказом выше П2556 на штатную ставку. Проверки
+       в rules.py у неё нет — замечание даёт сам отчёт. Графа 10 — запас. */
+    (r['п2556 приказ'] || []).forEach((b,i)=>{
+      if (b['состояние'] !== 'Выше предела') return;
+      add('order2556.exceeded','limits','error',b['фио'] || b['табельный'],'Выплата приказом выше предела П2556',
+        values(b['приказ'],b['предел'],'₽'),{section:9,row:'p2556o:'+i,column:10,month:b['месяц']});
+    });
+    /* Раздел 10: графы 5 — отклонение трудоёмкости, 9 — стоимости, 13 —
+       средней стоимости, 16 — наибольшее число исполнителей, 17 — состояние. */
     (r['трудоемкость'] || []).forEach((l,i)=>{
       const flags=l['вне допуска'] || {}, row='labor:'+i;
-      [['чел-мес','план чел-мес','факт чел-мес','чел.-мес.',5,'Объём трудоёмкости'],['сумма','план сумма','факт сумма','₽',8,'Стоимость трудоёмкости'],['средняя','средняя план','средняя факт','₽',11,'Средняя стоимость']].forEach(([key,p,f,u,col,title])=>{
+      [['чел-мес','план чел-мес','факт чел-мес','чел.-мес.',5,'Трудоёмкость'],['сумма','план сумма','факт сумма','₽',9,'Стоимость трудоёмкости'],['средняя','средняя план','средняя факт','₽',13,'Средняя стоимость 1 чел.-мес.']].forEach(([key,p,f,u,col,title])=>{
         if (!flags[key]) return;
-        add('labor.'+key,'labor','warning',l['договор']+' · '+l['строка'],title+' вне допуска',
+        add('labor.'+key,'labor','warning',l['договор']+', '+l['строка'],title+' вне допуска',
           values(l[f],l[p],u),{section:10,row,column:col});
       });
-      if (flags['этап']) add('labor.stage','labor','error',l['договор']+' · '+l['строка'],'Работа вне сроков этапа',
-        note(l['статус']),{section:10,row,column:14});
-      if (l['людей предел'] != null && l['людей макс'] > l['людей предел']) add('labor.headcount','labor','error',l['договор']+' · '+l['строка'],'Превышено число исполнителей',
-        values(l['людей макс'],l['людей предел'],'чел.'),{section:10,row,column:13});
+      if (flags['этап']) add('labor.stage','labor','error',l['договор']+', '+l['строка'],'Трудоёмкость вне месяцев этапа',
+        note(l['статус']),{section:10,row,column:17});
+      /* Предел числа исполнителей судится по месяцам плана: месяцы факта —
+         история (правило 26). */
+      const heads = l['людей макс план'] != null ? l['людей макс план'] : l['людей макс'];
+      if (l['людей предел'] != null && heads > l['людей предел']) add('labor.headcount','labor','error',l['договор']+', '+l['строка'],'Превышено число исполнителей',
+        values(heads,l['людей предел'],'чел.'),{section:10,row,column:16});
     });
     // Legacy independent checks remain visible. Their target is the exact check row,
     // not a guessed employee/month extracted from a human-readable description.
     (rules || []).forEach((rule,ri)=>{
       if (!['нарушено','внимание'].includes(rule['состояние'])) return;
       if (rule['правило']==='ФОТ договоров освоен' && out.some(x=>x.rule==='budget.remaining')) return;
+      const covered = REPORT_COVERED[rule['правило']];
+      if (covered && out.some(x=>x.rule.startsWith(covered))) return;
       const rows=rule['строки'] || [];
       const bad=rows.map((s,i)=>({s,i})).filter(x=>rule['состояние']==='внимание' || x.s['нарушено'] || x.s['что']);
       const chosen=bad.length ? bad : [{s:{'объект':rule['где'],'что':rule['факт']},i:-1}];
       chosen.forEach(({s,i})=>{
         const metrics=s['предел'] != null ? values(s['факт'],s['предел'],rule['единица'])
                                           : note(s['что'] || rule['факт']);
-        const at = place(r, RULE_SECTION[rule['правило']], s['объект'], s['месяц'] || null)
+        const at = place(r, RULE_SECTION[rule['правило']], s['объект'], s['месяц'] || null, RULE_TABLE[rule['правило']])
                 || {section:15,row:'rule:'+ri+':'+i,column:i<0?null:1,month:s['месяц'] || null};
-        add('check.'+ri,'limits',rule['состояние']==='нарушено' && rule['тип']==='нарушать нельзя'?'error':'warning',s['объект'] || rule['раздел'],rule['правило'],metrics,at,rule['смысл']);
+        add('check.'+ri,'limits',rule['состояние']==='нарушено' && rule['тип']==='нарушать нельзя'?'error':'warning',s['объект'] || rule['раздел'],rule['название'] || rule['правило'],metrics,at,rule['смысл']);
       });
     });
     /* Одно сообщение решателя на каждый месяц — это одна проблема, а не
@@ -182,7 +241,7 @@
       const w=g.w, list=g.months.sort((a,b)=>a-b);
       const period = !list.length ? null
         : list.length<=3 ? list.map(m=>months[m-1]).join(', ')
-        : months[list[0]-1]+'–'+months[list[list.length-1]-1]+' · '+list.length+' мес.';
+        : months[list[0]-1]+'–'+months[list[list.length-1]-1]+', '+list.length+' мес.';
       const num = typeof w[5]==='number' ? w[5] : parseFloat(String(w[5]||'').replace(/\s/g,'').replace(',','.'));
       const kind=payKind(w[4]);
       const person=(r['помесячно'] || {})['сотрудники'] || [];
@@ -204,18 +263,20 @@
   // Замечаний у расчёта единицы, и все они нужны сразу: фильтры «Все /
   // Ошибки / Внимание» и «Область» прятали ровно то, ради чего экономист
   // открыл страницу. Ошибки идут первыми, порядок задаёт collect.
+  // Графы названы формально (владелец продукта 30.09.2026): значение, предел
+  // или норма и отклонение — у каждой строки своя единица при числе.
   function render(issues) {
     const rows=issues;
     return '<section class="issue-list" aria-label="Замечания к расчёту"><div class="review-section-title"><h3>Замечания к расчёту</h3><span class="review-count">'+issues.length+'</span></div>'+
-      (rows.length ? '<div class="review-block"><table class="review-table issue-table"><thead><tr><th scope="col">Объект и период</th><th scope="col">Проверка</th><th scope="col" class="num">Факт</th><th scope="col" class="num">Предел</th><th scope="col" class="num">Разница</th><th scope="col">Действие</th></tr></thead><tbody>'+rows.map(x=>{
+      (rows.length ? '<div class="review-block"><table class="review-table issue-table"><thead><tr><th scope="col">Объект и период</th><th scope="col">Условие</th><th scope="col" class="num">Значение</th><th scope="col" class="num">Предел или норма</th><th scope="col" class="num">Отклонение</th><th scope="col">Действие</th></tr></thead><tbody>'+rows.map(x=>{
         const v=x.metrics;
-        return '<tr data-issue-id="'+esc(x.id)+'"><td><strong>'+esc(x.subject)+'</strong><small>'+esc(categories[x.category])+' · '+esc(x.period)+'</small></td>'+
+        return '<tr data-issue-id="'+esc(x.id)+'"><td><strong'+(x.category==='contracts'?' class="code"':'')+'>'+esc(x.subject)+'</strong><small>'+esc(categories[x.category])+', '+esc(x.period)+'</small></td>'+
           '<td><span class="issue-severity '+x.severity+'">'+(x.severity==='error'?'Ошибка':'Внимание')+'</span><div class="issue-title">'+esc(x.title)+'</div></td>'+
           '<td class="num">'+esc(format(v.fact))+'</td><td class="num">'+esc(format(v.limit))+'</td>'+
           '<td class="num'+(typeof v.diff.value==='number'&&v.diff.value>0?' over':'')+'">'+esc(format(v.diff))+'</td>'+
-          '<td><button type="button" class="review-open" data-issue-open="'+esc(x.id)+'" title="Открыть место замечания" aria-label="Перейти к замечанию: '+esc(x.subject)+' — '+esc(x.title)+'">Перейти</button></td></tr>';
-      }).join('')+'</tbody></table></div>' : '<div class="issue-empty">Замечаний по доступным проверкам нет.</div>')+'</section>';
+          '<td><button type="button" class="review-open" data-issue-open="'+esc(x.id)+'" title="Открыть место замечания" aria-label="Перейти к замечанию: '+esc(x.subject)+', '+esc(x.title)+'">Перейти</button></td></tr>';
+      }).join('')+'</tbody></table></div>' : '<div class="issue-empty">Замечаний нет</div>')+'</section>';
   }
-  const api={collect,render,format,categories,esc};
+  const api={collect,render,format,categories,esc,ruleSection};
   if(typeof module!=='undefined'&&module.exports) module.exports=api; else root.PlanIssues=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

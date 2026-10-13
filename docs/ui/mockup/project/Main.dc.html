@@ -1,0 +1,1047 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #FFFFFF; color: #17191C; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 13px; -webkit-font-smoothing: antialiased; }
+    sc-for, sc-if { display: contents; }
+    a { color: #1F4FA8; text-decoration: none; }
+    a:hover { color: #163A78; text-decoration: underline; }
+    h1 { margin: 0; font-weight: 600; }
+    .btn { height: 32px; padding: 0 13px; border: 1px solid #CBD0D6; border-radius: 3px; background: #FFFFFF; color: #17191C; font: 500 13px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; white-space: nowrap; text-decoration: none; }
+    .btn:hover { background: #F1F3F5; color: #17191C; text-decoration: none; }
+    .btn:active { background: #E4E8EC; }
+    .btn:disabled { color: #A8AEB4; cursor: default; background: #FFFFFF; }
+    .btn-pri { background: #1F4FA8; border-color: #1F4FA8; color: #FFFFFF; }
+    .btn-pri:hover { background: #163A78; border-color: #163A78; color: #FFFFFF; }
+    .btn-pri:active { background: #12306B; border-color: #12306B; }
+    .btn-sm { height: 26px; padding: 0 8px; font-size: 12.5px; }
+    .btn-ic { width: 26px; padding: 0; }
+    .lnk { border: 0; background: none; padding: 0; margin: 0; color: #1F4FA8; font: 400 12.5px/1.45 "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; text-align: left; }
+    .lnk:hover { text-decoration: underline; }
+    .inp { height: 32px; width: 100%; border: 1px solid #CBD0D6; border-radius: 3px; padding: 0 9px; background: #FFFFFF; color: #17191C; font: 400 12.5px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+    .inp:focus-visible { outline: 2px solid #A9C0E6; outline-offset: -1px; border-color: #1F4FA8; }
+    .tbl { border: 1px solid #E1E4E7; border-radius: 3px; background: #FFFFFF; }
+    .scroll { overflow-x: auto; overflow-y: hidden; border-radius: 3px 3px 0 0; }
+    .r { display: grid; align-items: center; column-gap: 8px; padding: 0 10px; min-height: 44px; border-top: 1px solid #EDEFF1; }
+    .thead .r { min-height: 32px; border-top: 0; background: #F5F6F8; padding: 0 10px; }
+    .tbody .r:first-child { border-top: 0; }
+    .tbody .r:hover { background: #F7F9FC; }
+    .thb { width: 100%; height: 30px; padding: 0; border: 0; border-radius: 3px; background: none; color: #5C636B; font: 600 11px/1.25 "Segoe UI", "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 4px; }
+    .thb:hover { background: #E8EBEE; color: #17191C; }
+    .thb .ar { color: #7A828A; font-size: 11px; }
+    .thc { position: relative; display: flex; align-items: center; gap: 1px; min-width: 0; }
+    .thc .thb { flex-grow: 1; min-width: 0; }
+    .thm { width: 18px; height: 22px; border: 0; border-radius: 3px; background: none; color: #7A828A; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .thm:hover { background: #E8EBEE; color: #17191C; }
+    .thm-on { color: #1F4FA8; }
+    .btn-on { border-color: #1F4FA8; color: #1F4FA8; }
+    .celn { height: 26px; width: 100%; border: 1px solid transparent; border-radius: 2px; background: none; color: #17191C; font: 400 12.5px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-variant-numeric: tabular-nums; text-align: right; padding: 0 5px; cursor: cell; }
+    .celn:hover { border-color: #BFCBDD; }
+    .celn-on { background: #E9EFF9; border-color: #1F4FA8; }
+    .menu { position: absolute; top: 28px; left: 0; z-index: 6; width: 236px; background: #FFFFFF; border: 1px solid #C2C8CE; box-shadow: 0 6px 18px rgba(16, 20, 26, .18); padding: 3px; text-align: left; }
+    .mi { display: block; width: 100%; height: 26px; padding: 0 8px; border: 0; background: none; text-align: left; font: 400 12.5px/26px "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; cursor: pointer; }
+    .mi:hover { background: #E9EFF9; }
+    .msep { height: 1px; background: #E1E4E7; margin: 3px 0; }
+    .mvs { max-height: 184px; overflow-y: auto; }
+    .mcap { font: 600 11px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; padding: 6px 8px 4px; }
+    .mv { display: flex; align-items: center; gap: 7px; height: 24px; padding: 0 8px; cursor: pointer; font-size: 12.5px; }
+    .mv:hover { background: #F1F3F5; }
+    .mv span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .thb-on .ar { color: #1F4FA8; }
+    .thb-n { justify-content: flex-end; text-align: right; }
+    .thb-on { color: #17191C; }
+    .td { font: 400 12.5px/1.3 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cell { height: 26px; width: 100%; border: 1px solid transparent; border-radius: 3px; padding: 0 5px; background: transparent; color: #17191C; font: 400 12.5px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-variant-numeric: tabular-nums; text-align: right; }
+    .cell:hover { border-color: #DDE0E3; background: #FFFFFF; }
+    .cell:focus-visible { outline: 2px solid #A9C0E6; outline-offset: -1px; border-color: #1F4FA8; background: #FFFFFF; }
+    .del { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 3px; background: none; color: #7A828A; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .del:hover { background: #F1F3F5; color: #A4382C; }
+    .num { font-variant-numeric: tabular-nums; text-align: right; }
+    .lft { text-align: left; }
+    .sub { font: 400 11px/1.35 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; }
+    .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .warn { color: #8A5A00; }
+    .bad { color: #A4382C; }
+    .mut { color: #5C636B; }
+    .cap { font: 600 11px/1.2 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; letter-spacing: 0; }
+    .ed { border-bottom: 1px dashed transparent; cursor: text; }
+    .ed:hover { border-bottom-color: #A79C80; }
+    .stick { position: sticky; left: 0; background: inherit; z-index: 1; }
+    .grp { display: flex; align-items: center; gap: 10px; padding: 0 10px; height: 34px; background: #EEF1F4; border-top: 1px solid #DDE1E5; position: sticky; left: 0; }
+    .nav { display: block; height: 32px; padding: 0 9px; border: 0; border-radius: 3px; background: none; color: #3B424A; font: 400 12.5px/32px "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; width: 100%; text-align: left; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav:hover { background: #E3E6E9; color: #17191C; text-decoration: none; }
+    .nav-on { background: #D9DFE7; color: #17191C; font-weight: 500; }
+    .tab { height: 40px; padding: 0 1px; margin-right: 20px; border: 0; border-bottom: 2px solid transparent; background: none; color: #5A6169; font: 400 13px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; }
+    .tab:hover { color: #17191C; text-decoration: none; }
+    .tab-on { color: #17191C; font-weight: 500; border-bottom-color: #1F4FA8; }
+    .pag { display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 42px; border-top: 1px solid #E1E4E7; background: #FBFBFC; border-radius: 0 0 3px 3px; }
+    .t-c { width: max-content; min-width: 100%; }
+    .t-c .r { display: flex; }
+    .t-c .thead .r { padding: 0 10px; }
+    .t1 { font-size: 13px; font-weight: 500; color: #17191C; }
+    .t3 { font-size: 11px; color: #5C636B; }
+    .w-code { flex: 0 0 90px; }
+    .w-name { flex: 1 1 220px; min-width: 0; }
+    .w-fot { flex: 0 0 116px; }
+    .w-num { flex: 0 0 112px; }
+    .w-kind { flex: 0 0 132px; }
+    .w-dep { flex: 0 0 126px; }
+    .w-acc { flex: 0 0 100px; }
+    .w-fund { flex: 0 0 126px; }
+    .w-start { flex: 0 0 92px; }
+    .w-end { flex: 0 0 92px; }
+    .w-pay { flex: 0 0 176px; }
+    .w-prio { flex: 0 0 132px; }
+    .w-main { flex: 0 0 104px; }
+    .w-part { flex: 0 0 120px; }
+    .w-sd { flex: 0 0 100px; }
+    .w-ad { flex: 0 0 100px; }
+    .w-docs { flex: 0 0 62px; }
+    .t-cat { min-width: 1180px; }
+    .t-cat .r { grid-template-columns: 168px 150px 152px 200px minmax(0, 1fr) 118px 96px 46px; }
+    .t-l { width: max-content; min-width: 100%; }
+    .t-l .r { display: flex; background: #FFFFFF; }
+    .t-l .thead .r { background: #F5F6F8; }
+    .t-l .l-code, .t-l .l-pos { position: sticky; z-index: 2; background: inherit; }
+    .t-l .l-code { left: 0; }
+    .t-l .l-pos { left: 92px; box-shadow: 1px 0 0 #DDE1E5; }
+    .l-code { flex: 0 0 84px; }
+    .l-year { flex: 0 0 52px; }
+    .l-pos { flex: 0 0 200px; }
+    .l-eg { flex: 0 0 122px; }
+    .l-lvl { flex: 0 0 66px; }
+    .l-n { flex: 0 0 94px; }
+    .l-mm { flex: 0 0 96px; }
+    .l-dist { flex: 0 0 108px; }
+    .l-cost { flex: 0 0 186px; }
+    .l-bep { flex: 0 0 122px; }
+    .l-sum { flex: 0 0 134px; }
+    .l-m { flex: 0 0 50px; }
+    .l-doc { flex: 0 0 122px; }
+    .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn {
+      transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn { transition: none; }
+    }
+  </style>
+</helmet>
+
+<div style="width: 1440px; height: 1020px; display: flex; background: #FFFFFF; overflow: hidden;">
+
+  <aside style="width: 240px; flex-shrink: 0; height: 1020px; background: #EFF0F1; border-right: 1px solid #E1E4E7; display: flex; flex-direction: column; padding: 13px 11px 11px;">
+    <div style="display: flex; align-items: center; gap: 9px; padding: 0 6px 13px;">
+      <div style="width: 23px; height: 23px; border-radius: 3px; background: #1F4FA8; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;">Ф</div>
+      <div style="font-size: 12.5px; font-weight: 600;">Планирование ФОТ</div>
+    </div>
+    <a class="btn btn-pri" href="Plan.dc.html" style="width: 100%; justify-content: flex-start; padding: 0 9px;">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3 8h10"></path></svg>
+      Новый план
+    </a>
+    <div class="cap" style="padding: 16px 8px 6px;">Планы</div>
+    <a class="nav" href="Plan.dc.html">План 2027 — базовый</a>
+    <a class="nav" href="Plan.dc.html">План 2027 — индексация</a>
+    <a class="nav" href="Plan.dc.html">Проверка лимита ПЭО</a>
+    <a class="nav" href="Plan.dc.html">I квартал 2027 — черновик</a>
+    <div style="height: 1px; background: #DDE0E3; margin: 13px 4px;"></div>
+    <div class="nav nav-on">Реестр</div>
+    <div style="flex-grow: 1;"></div>
+    <a class="nav" href="Help.dc.html">Инструкция</a>
+    <div style="display: flex; align-items: center; gap: 9px; padding: 10px 8px 2px; border-top: 1px solid #DDE0E3; margin-top: 8px;">
+      <div style="width: 24px; height: 24px; border-radius: 50%; background: #D2D8DF; color: #3B424A; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;">ИП</div>
+      <div style="min-width: 0;">
+        <div style="font-size: 12.5px; font-weight: 500;">Петрова И. С.</div>
+        <div class="sub ell">Планово-экономический отдел</div>
+      </div>
+    </div>
+  </aside>
+
+  <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 18px 22px 18px;">
+
+    <h1 style="font-size: 20px;">Реестр</h1>
+
+    <div style="display: flex; align-items: center; margin-top: 11px; border-bottom: 1px solid #E1E4E7;">
+      <button class="tab {{ ctrCls }}" type="button" onClick="{{ h.ctr }}">Договоры</button>
+      <a class="tab" href="Employees.dc.html">Штатное расписание</a>
+      <a class="tab" href="Employees.dc.html">Заработная плата по месяцам</a>
+      <button class="tab {{ labCls }}" type="button" onClick="{{ h.lab }}">Трудоёмкость</button>
+      <button class="tab {{ catCls }}" type="button" onClick="{{ h.cat }}">Категории договоров</button>
+      <a class="tab" href="Employees.dc.html">120 надбавка</a>
+      <a class="tab" href="Employees.dc.html">Справочник должностей</a>
+      <a class="tab" href="Employees.dc.html">Правила замещения</a>
+    </div>
+
+    <sc-if value="{{ isCtr }}" hint-placeholder-val="{{ yes }}">
+      <div style="padding-top: 12px;">
+
+        <div style="display: flex; align-items: center; gap: 8px; padding: 2px 0 10px;">
+          <a class="btn btn-pri btn-sm" href="NewContract.dc.html">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3 8h10"></path></svg>
+            Создать договор
+          </a>
+          <div style="flex-grow: 1;"></div>
+          <div style="position: relative; width: 236px;">
+            <span style="position: absolute; left: 9px; top: 7px; color: #7A828A; pointer-events: none;">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.6 10.6 14 14"></path></svg>
+            </span>
+            <label class="sub" for="q" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Поиск</label>
+            <input class="inp" id="q" type="text" placeholder="Шифр или наименование…" style="height: 28px; padding-left: 30px;" value="{{ q }}" onChange="{{ h.q }}">
+          </div>
+          <div style="position: relative;">
+            <button class="btn btn-sm {{ colsCls }}" type="button" onClick="{{ h.colsOpen }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.6 3h10.8M2.6 8h10.8M2.6 13h10.8"></path></svg>
+              Графы
+            </button>
+            <sc-if value="{{ colsOpen }}" hint-placeholder-val="{{ no }}">
+              <div class="menu" style="right: 0; left: auto; width: 268px; max-height: 340px; overflow-y: auto;">
+                <div class="mcap">Показывать графы</div>
+                <sc-for list="{{ colPick }}" as="c" hint-placeholder-count="19">
+                  <label class="mv"><input type="checkbox" checked="{{ c.on }}" disabled="{{ c.fixed }}" onChange="{{ c.toggle }}"><span>{{ c.label }}</span></label>
+                </sc-for>
+                <div class="msep"></div>
+                <button class="mi" type="button" onClick="{{ h.colsReset }}">Вернуть набор по умолчанию</button>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+
+        <div class="tbl">
+          <div class="scroll">
+            <div class="t-c">
+              <div class="thead">
+                <div class="r">
+                  <sc-for list="{{ cols }}" as="c" hint-placeholder-count="9">
+                    <div class="thc {{ c.w }}">
+                      <button class="thb {{ c.cls }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                      <button class="thm {{ c.mcls }}" type="button" aria-label="Меню графы" aria-haspopup="true" aria-expanded="{{ c.aexp }}" onClick="{{ c.menu }}">
+                        <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.micon }}"></path></svg>
+                      </button>
+                      <sc-if value="{{ c.open }}" hint-placeholder-val="{{ no }}">
+                        <div class="menu" role="group" aria-label="Меню графы">
+                          <button class="mi" type="button" onClick="{{ c.asc }}">Сортировка по возрастанию</button>
+                          <button class="mi" type="button" onClick="{{ c.desc }}">Сортировка по убыванию</button>
+                          <div class="msep"></div>
+                          <button class="mi" type="button" onClick="{{ c.grp }}">{{ c.grpLabel }}</button>
+                          <button class="mi" type="button" onClick="{{ c.clear }}">Снять отбор с графы</button>
+                          <div class="msep"></div>
+                          <div class="mcap">Значения</div>
+                          <div class="mvs">
+                            <sc-for list="{{ c.vals }}" as="v" hint-placeholder-count="5">
+                              <label class="mv"><input type="checkbox" checked="{{ v.on }}" onChange="{{ v.toggle }}"><span>{{ v.t }}</span></label>
+                            </sc-for>
+                          </div>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              <div class="tbody">
+                <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+                  <div>
+                    <sc-if value="{{ g.show }}" hint-placeholder-val="{{ no }}">
+                      <div class="grp">
+                        <button class="lnk" type="button" style="color: #17191C; font-weight: 600; font-size: 12.5px;" onClick="{{ g.toggle }}">{{ g.mark }} {{ g.label }}</button>
+                        <span class="sub num">{{ g.count }}</span>
+                        <div style="flex-grow: 1;"></div>
+                        <span class="sub num">ФОТ группы {{ g.total }}</span>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ g.open }}" hint-placeholder-val="{{ yes }}">
+                      <sc-for list="{{ g.rows }}" as="c" hint-placeholder-count="6">
+                        <div class="r" style="background: #FFFFFF;">
+                          <div class="stick w-code" style="background: inherit;">
+                            <a class="td num lft t1" style="color: #1F4FA8;" href="Contract.dc.html">{{ c.code }}</a>
+                          </div>
+                          <sc-for list="{{ c.cells }}" as="x" hint-placeholder-count="8">
+                            <sc-if value="{{ x.plain }}" hint-placeholder-val="{{ yes }}">
+                              <div class="td ed {{ x.cls }}" title="{{ x.src }}">{{ x.v }}</div>
+                            </sc-if>
+                            <sc-if value="{{ x.pickable }}" hint-placeholder-val="{{ no }}">
+                              <button class="celn {{ x.cls }}" type="button" title="{{ x.src }}" aria-label="Выделить клетку" onClick="{{ x.pick }}">{{ x.v }}</button>
+                            </sc-if>
+                          </sc-for>
+                        </div>
+                      </sc-for>
+                    </sc-if>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ noRows }}" hint-placeholder-val="{{ no }}">
+                  <div class="r" style="background: #FFFFFF;">
+                    <div class="td mut">Ничего не найдено: снимите отбор в графах</div>
+                  </div>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+          <div class="pag">
+            <label class="sub" for="ps">Строк на странице</label>
+            <select class="inp" id="ps" style="width: 74px; height: 28px;" value="{{ size }}" onChange="{{ h.size }}">
+              <option>10</option>
+              <option>25</option>
+              <option>50</option>
+              <option>100</option>
+            </select>
+            <div class="sub num">{{ pageInfo }}</div>
+            <div style="flex-grow: 1;"></div>
+            <sc-if value="{{ ctrSelOn }}" hint-placeholder-val="{{ no }}">
+              <div class="sub num">{{ ctrTotal }}</div>
+              <button class="btn btn-sm" type="button" onClick="{{ h.ctrSelClear }}">Снять выделение</button>
+            </sc-if>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Предыдущая страница" onClick="{{ h.prev }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 4 6 8l4 4"></path></svg>
+            </button>
+            <div class="sub num">{{ pageOf }}</div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Следующая страница" onClick="{{ h.next }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 4 4 4-4 4"></path></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isLab }}" hint-placeholder-val="{{ no }}">
+      <div style="padding-top: 12px;">
+
+        <div style="display: flex; align-items: center; gap: 8px; padding: 12px 0 10px;">
+          <select class="inp" style="width: 110px;" aria-label="Год">
+            <option>2027</option>
+            <option>2026</option>
+          </select>
+          <div style="flex-grow: 1;"></div>
+          <div style="position: relative;">
+            <button class="btn btn-sm {{ lcolsCls }}" type="button" onClick="{{ h.lcolsOpen }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.6 3h10.8M2.6 8h10.8M2.6 13h10.8"></path></svg>
+              Графы
+            </button>
+            <sc-if value="{{ lcolsOpen }}" hint-placeholder-val="{{ no }}">
+              <div class="menu" style="right: 0; left: auto; width: 268px; max-height: 340px; overflow-y: auto;">
+                <div class="mcap">Показывать графы</div>
+                <sc-for list="{{ lcolPick }}" as="c" hint-placeholder-count="24">
+                  <label class="mv"><input type="checkbox" checked="{{ c.on }}" onChange="{{ c.toggle }}"><span>{{ c.label }}</span></label>
+                </sc-for>
+                <div class="msep"></div>
+                <button class="mi" type="button" onClick="{{ h.lcolsReset }}">Вернуть набор по умолчанию</button>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+
+        <div class="tbl">
+          <div class="scroll">
+            <div class="t-l">
+              <div class="thead">
+                <div class="r">
+                  <sc-for list="{{ lcols }}" as="c" hint-placeholder-count="19">
+                    <div class="thc {{ c.w }}">
+                      <button class="thb {{ c.cls }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                      <button class="thm {{ c.mcls }}" type="button" aria-label="Меню графы" aria-haspopup="true" aria-expanded="{{ c.aexp }}" onClick="{{ c.menu }}">
+                        <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.micon }}"></path></svg>
+                      </button>
+                      <sc-if value="{{ c.open }}" hint-placeholder-val="{{ no }}">
+                        <div class="menu" role="group" aria-label="Меню графы">
+                          <button class="mi" type="button" onClick="{{ c.asc }}">Сортировка по возрастанию</button>
+                          <button class="mi" type="button" onClick="{{ c.desc }}">Сортировка по убыванию</button>
+                          <div class="msep"></div>
+                          <button class="mi" type="button" onClick="{{ c.grp }}">{{ c.grpLabel }}</button>
+                          <button class="mi" type="button" onClick="{{ c.clear }}">Снять отбор с графы</button>
+                          <div class="msep"></div>
+                          <div class="mcap">Значения</div>
+                          <div class="mvs">
+                            <sc-for list="{{ c.vals }}" as="v" hint-placeholder-count="5">
+                              <label class="mv"><input type="checkbox" checked="{{ v.on }}" onChange="{{ v.toggle }}"><span>{{ v.t }}</span></label>
+                            </sc-for>
+                          </div>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              <div class="tbody">
+                <sc-for list="{{ lgroups }}" as="g" hint-placeholder-count="4">
+                  <div>
+                    <sc-if value="{{ g.show }}" hint-placeholder-val="{{ yes }}">
+                      <div class="grp">
+                        <button class="lnk" type="button" style="color: #17191C; font-weight: 600; font-size: 12.5px;" onClick="{{ g.toggle }}">{{ g.mark }} {{ g.label }}</button>
+                        <span class="sub num">{{ g.count }}</span>
+                        <div style="flex-grow: 1;"></div>
+                        <span class="sub num">{{ g.total }}</span>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ g.open }}" hint-placeholder-val="{{ yes }}">
+                      <sc-for list="{{ g.rows }}" as="l" hint-placeholder-count="3">
+                        <div class="r" style="min-height: 38px;">
+                          <sc-for list="{{ l.cells }}" as="x" hint-placeholder-count="19">
+                            <sc-if value="{{ x.plain }}" hint-placeholder-val="{{ yes }}">
+                              <div class="td {{ x.cls }}">{{ x.v }}</div>
+                            </sc-if>
+                            <sc-if value="{{ x.pickable }}" hint-placeholder-val="{{ no }}">
+                              <button class="celn {{ x.cls }}" type="button" aria-label="Выделить клетку" onClick="{{ x.pick }}">{{ x.v }}</button>
+                            </sc-if>
+                          </sc-for>
+                        </div>
+                      </sc-for>
+                    </sc-if>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ noLab }}" hint-placeholder-val="{{ no }}">
+                  <div class="r">
+                    <div class="td mut">Ничего не найдено: снимите отбор в графах</div>
+                  </div>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+          <div class="pag">
+            <label class="sub" for="ps2">Строк на странице</label>
+            <select class="inp" id="ps2" style="width: 74px; height: 28px;" aria-label="Строк на странице">
+              <option>25</option>
+              <option>50</option>
+              <option>100</option>
+            </select>
+            <div class="sub num">Строки 1—8 из 8</div>
+            <div style="flex-grow: 1;"></div>
+            <div class="sub num">{{ labTotal }}</div>
+            <sc-if value="{{ selOn }}" hint-placeholder-val="{{ no }}">
+              <button class="btn btn-sm" type="button" onClick="{{ h.selClear }}">Снять выделение</button>
+            </sc-if>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Предыдущая страница" disabled="{{ yes }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 4 6 8l4 4"></path></svg>
+            </button>
+            <div class="sub num">1 / 1</div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Следующая страница" disabled="{{ yes }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 4 4 4-4 4"></path></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+
+    <sc-if value="{{ isCat }}" hint-placeholder-val="{{ no }}">
+      <div style="padding-top: 12px;">
+
+        <div style="display: flex; align-items: center; gap: 8px; padding: 12px 0 10px;">
+          <button class="btn btn-sm btn-pri" type="button" onClick="{{ h.catAdd }}">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3 8h10"></path></svg>
+            Добавить категорию
+          </button>
+        </div>
+
+        <div class="tbl">
+          <div class="scroll">
+            <div class="t-cat">
+              <div class="thead">
+                <div class="r">
+                  <div class="th">Категория договора</div>
+                  <div class="th">Приоритет 2030</div>
+                  <div class="th num">Допуск трудоёмкости, %</div>
+                  <div class="th num">Предел средней штатной части, руб.</div>
+                  <div class="th">Разрешённые виды начислений</div>
+                  <div class="th">Раздельный учёт</div>
+                  <div class="th num">Договоров</div>
+                  <div class="th"></div>
+                </div>
+              </div>
+              <div class="tbody">
+                <sc-for list="{{ cats }}" as="c" hint-placeholder-count="4">
+                  <div class="r" style="min-height: 38px;">
+                    <div><input class="cell lft" type="text" aria-label="Категория договора" value="{{ c.k }}" onChange="{{ c.set }}"></div>
+                    <div>
+                      <select class="inp" style="height: 26px;" aria-label="Приоритет 2030" value="{{ c.prio }}" onChange="{{ c.setPrio }}">
+                        <option>да</option>
+                        <option>нет</option>
+                      </select>
+                    </div>
+                    <div><input class="cell num" type="text" aria-label="Допуск трудоёмкости, процент" value="{{ c.tol }}" onChange="{{ c.set }}"></div>
+                    <div><input class="cell num" type="text" aria-label="Предел средней штатной части, рублей" value="{{ c.bep }}" onChange="{{ c.set }}"></div>
+                    <div><input class="cell lft" type="text" aria-label="Разрешённые виды начислений" value="{{ c.pay }}" onChange="{{ c.set }}"></div>
+                    <div>
+                      <select class="inp" style="height: 26px;" aria-label="Раздельный учёт" value="{{ c.sep }}" onChange="{{ c.set }}">
+                        <option>да</option>
+                        <option>нет</option>
+                      </select>
+                    </div>
+                    <div class="td num">{{ c.n }}</div>
+                    <div style="display: flex; justify-content: flex-end;">
+                      <button class="del" type="button" aria-label="Удалить категорию" onClick="{{ c.drop }}">
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.2 4.4h9.6"></path><path d="M6.4 4.4V2.8h3.2v1.6"></path><path d="M4.4 4.4v8.8h7.2V4.4"></path></svg>
+                      </button>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+          <div class="pag">
+            <div class="sub num">{{ catInfo }}</div>
+          </div>
+        </div>
+
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1440,"height":1020}}'>
+// Значения в меню графы — по возрастанию, как отбор в Excel: числа по
+// величине, остальное по алфавиту; «не найдено» и «не заполнено» уходят вниз.
+function sortVals(list, isNum) {
+  function n(v) { return Number(String(v).replace(/[\s\u00A0]/g, '').replace(',', '.')); }
+  // Дата в списке — строка: 31.12.2027 или 12.2027. Сравнивать её как строку
+  // нельзя, иначе порядок пойдёт по дню. Переставляю в год-месяц-день.
+  function d(v) {
+    var m = String(v).match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+    if (m) { return m[3] + m[2] + m[1]; }
+    m = String(v).match(/^(\d{2})\.(\d{4})$/);
+    if (m) { return m[2] + m[1]; }
+    return '';
+  }
+  return list.slice().sort(function (a, b) {
+    var da = d(a), db = d(b);
+    if (da && db) { return da < db ? -1 : (da > db ? 1 : 0); }
+    if (da) { return -1; }
+    if (db) { return 1; }
+    var x = n(a), y = n(b);
+    if (isNum && isFinite(x) && isFinite(y)) { return x - y; }
+    if (isNum && isFinite(x)) { return -1; }
+    if (isNum && isFinite(y)) { return 1; }
+    return String(a).localeCompare(String(b), 'ru');
+  });
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      tab: 'ctr', q: '', menu: '', hidden: {}, lmenu: '', lhidden: {},
+      prioFix: {}, catDrop: [], catAdd: 0,
+      colsOn: [], colsOpen: false,
+      sort: 'code', dir: 1, group: '', page: 1, size: 10, closed: [], cpick: [],
+      lsort: 'code', ldir: 1, lgroup: 'code', lclosed: [], lpick: [],
+      lcolsOn: [], lcolsOpen: false
+    };
+  }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+
+    // Уровень 1 — опознание договора, 2 — числа, 3 — признаки.
+    var COLS = [
+      { key: 'code', label: 'Шифр', tier: 1, always: true },
+      { key: 'name', label: 'Наименование', tier: 1, def: true },
+      { key: 'fot', label: 'ФОТ 2027, руб.', tier: 2, num: true, def: true },
+      { key: 'kind', label: 'Категория договора', tier: 3, def: true },
+      { key: 'dep', label: 'Структурное подразделение', tier: 3, def: true },
+      { key: 'start', label: 'Дата начала', tier: 2, def: true },
+      { key: 'end', label: 'Дата окончания', tier: 2, def: true },
+      { key: 'num', label: 'Номер договора', tier: 3 },
+      { key: 'acc', label: 'Лицевой счёт', tier: 3 },
+      { key: 'fund', label: 'Источник финансирования', tier: 3 },
+      { key: 'pay', label: 'Разрешённые виды начислений', tier: 3 },
+      { key: 'prio', label: 'Приоритет 2030', tier: 3, def: true },
+      { key: 'main', label: 'Основное место работы', tier: 3 },
+      { key: 'part', label: 'Внутреннее совместительство', tier: 3 },
+      { key: 'sd', label: 'Выплата оклада до', tier: 2 },
+      { key: 'ad', label: 'Выплата надбавок до', tier: 2 },
+      { key: 'docs', label: 'Документов', tier: 2, num: true }
+    ];
+    var TIER = { 1: 't1', 2: '', 3: 't3' };
+    function colShown(c) {
+      return c.always || (st.colsOn.length ? st.colsOn.indexOf(c.key) >= 0 : !!c.def);
+    }
+    var COLS_VIS = COLS.filter(colShown);
+
+    // Правила категории. Допуск трудоёмкости и предел средней штатной части
+    // сейчас живут в программе как общие настройки с именами по ГОЗ; здесь они
+    // показаны там, где им место, — у категории.
+    var CATS = [
+      { k: 'ГОЗ', prio: 'да', tol: '5,0', bep: '112 261',
+        pay: 'оклад, 120, 122, 124, 152, приказ', sep: 'да' },
+      { k: 'Коммерческий', prio: 'нет', tol: '—', bep: '—',
+        pay: 'оклад, 120, 122, 124, 152, приказ', sep: 'нет' },
+      { k: 'Грант', prio: 'нет', tol: '—', bep: '—',
+        pay: 'оклад, 122', sep: 'да' },
+      { k: 'Кооперация МПТ', prio: 'нет', tol: '5,0', bep: '112 261',
+        pay: 'оклад, 120, 122, приказ', sep: 'да' }
+    ];
+    var CATBY = {};
+    CATS.forEach(function (c) { CATBY[c.k] = c; });
+    var all = [
+      { code: '41-2026', name: 'Комплекс бортовой аппаратуры «Сфера»', num: '41/26-ГОЗ', kind: 'ГОЗ', dep: 'Отдел 7', acc: '21-04-117', fund: 'ОКР', start: '01.02.2026', end: '31.12.2027', pay: 'оклад·120·122·приказ', main: 'да', part: 'да', sd: '31.12.2027', ad: '31.12.2027', docs: '5', fot: 64255800 },
+      { code: '44-2026', name: 'ОКР «Гранит-2М»', num: '44/26-К', kind: 'Коммерческий', dep: 'Отдел 12', acc: '21-04-208', fund: 'ОКР', start: '01.06.2026', end: '31.05.2028', pay: 'оклад·120·122·124·приказ', main: 'да', part: 'да', sd: '30.11.2027', ad: '30.11.2027', docs: '8', fot: 112704000 },
+      { code: '38-2026', name: 'Модернизация испытательного стенда СИ-4', num: '38/26-К', kind: 'Коммерческий', dep: 'Цех 3', acc: '21-04-133', fund: 'НИОКР', start: '15.03.2026', end: '30.06.2027', pay: 'оклад·122·приказ', main: 'да', part: 'нет', sd: '30.06.2027', ad: '30.06.2027', docs: '5', fot: 29109600 },
+      { code: '45-2026', name: 'Технический проект «Купол»', num: '45/26-ГОЗ', kind: 'ГОЗ', dep: 'Отдел 7', acc: 'не заполнено', fund: 'ОКР', start: '01.10.2026', end: '31.03.2028', pay: 'не заполнено', main: 'да', part: 'да', sd: '31.03.2028', ad: '31.03.2028', docs: '3', fot: 47918700 },
+      { code: '50-2026', name: 'Подготовка серийного производства «Сфера»', num: '50/26-ГОЗ', kind: 'ГОЗ', dep: 'Цех 3', acc: 'не заполнено', fund: 'ОКР', start: '01.12.2026', end: '31.12.2028', pay: 'оклад·120·приказ', main: 'да', part: 'нет', sd: '31.10.2028', ad: '31.12.2028', docs: '7', fot: 94120000 },
+      { code: '47-2026', name: 'Доработка изделия 17К', num: '47/26-МПТ', kind: 'Кооперация МПТ', dep: 'Отдел 12', acc: '21-04-190', fund: 'НИОКР', start: '01.11.2026', end: '30.04.2027', pay: 'оклад·120·122·124·приказ', main: 'да', part: 'да', sd: '30.04.2027', ad: '30.04.2027', docs: '6', fot: 19812000 },
+      { code: 'ГР-19', name: 'НИР «Материалы-24»', num: '19-ГР/26', kind: 'Грант', dep: 'Отдел 7', acc: '23-01-044', fund: 'Грант', start: 'не найдено', end: 'не найдено', pay: 'оклад·120·122', main: 'да', part: 'да', sd: 'не найдено', ad: 'не найдено', docs: '2', fot: 8613000 },
+      { code: 'К-2214', name: 'Сопровождение ПО АСУ ТП', num: '2214/25', kind: 'Коммерческий', dep: 'Отдел 12', acc: '21-04-071', fund: 'НИОКР', start: '01.09.2025', end: '31.08.2026', pay: 'оклад·122·124·приказ', main: 'да', part: 'да', sd: '31.08.2026', ad: '31.08.2026', docs: '4', fot: 14208000 },
+      { code: '21-2025', name: 'САУ изделия 9М', num: '21/25-ГОЗ', kind: 'ГОЗ', dep: 'Отдел 7', acc: '21-04-102', fund: 'ОКР', start: '01.05.2025', end: '30.11.2026', pay: 'оклад·120·122·приказ', main: 'да', part: 'да', sd: '31.10.2026', ad: '30.11.2026', docs: '6', fot: 26880000 },
+      { code: '33-2026', name: 'Сервисное обслуживание стендов', num: '33/26-К', kind: 'Коммерческий', dep: 'Цех 3', acc: '21-04-166', fund: 'НИОКР', start: '01.07.2026', end: '30.06.2028', pay: 'не заполнено', main: 'да', part: 'нет', sd: '30.06.2028', ad: '30.06.2028', docs: '1', fot: 10368000 },
+      { code: '07-2026', name: 'Испытания опытных образцов', num: '07/26-К', kind: 'Коммерческий', dep: 'Цех 3', acc: '21-04-155', fund: 'НИОКР', start: '01.03.2026', end: '31.08.2027', pay: 'оклад·122·приказ', main: 'да', part: 'да', sd: '31.08.2027', ad: '31.08.2027', docs: '5', fot: 13104000 },
+      { code: '03-2026', name: 'Метрологическое обеспечение', num: '03/26-К', kind: 'Коммерческий', dep: 'ОТК', acc: '21-04-119', fund: 'НИОКР', start: '01.02.2026', end: '31.01.2027', pay: 'оклад·122', main: 'да', part: 'нет', sd: '31.01.2027', ad: '31.01.2027', docs: '4', fot: 5400000 }
+    ];
+
+    function money(n) {
+      var s = String(n), out = '', c = 0;
+      for (var i = s.length - 1; i >= 0; i--) { out = s.charAt(i) + out; c++; if (c % 3 === 0 && i > 0) { out = ' ' + out; } }
+      return out;
+    }
+    function dnum(v) {
+      if (v.indexOf('.') < 0) { return ''; }
+      var p = v.split('.');
+      return p[2] + p[1] + p[0];
+    }
+
+    var q = (st.q || '').toLowerCase();
+    var rows = all.filter(function (c) {
+      var skip = false;
+      COLS.forEach(function (col) {
+        var hid = st.hidden[col.key] || [];
+        if (hid.indexOf(c[col.key]) >= 0) { skip = true; }
+      });
+      if (skip) { return false; }
+      if (!q) { return true; }
+      return (c.code + ' ' + c.name).toLowerCase().indexOf(q) >= 0;
+    });
+
+    var key = st.sort, dir = st.dir;
+    rows = rows.slice().sort(function (a, b) {
+      var x = a[key], y = b[key];
+      if (key === 'start' || key === 'end' || key === 'sd' || key === 'ad') { x = dnum(x) || x; y = dnum(y) || y; }
+      if (key === 'docs' || key === 'fot') { return (Number(x) - Number(y)) * dir; }
+      return (x < y ? -1 : (x > y ? 1 : 0)) * dir;
+    });
+
+    var GNAME = { kind: 'Категория договора', dep: 'Структурное подразделение', fund: 'Источник финансирования' };
+    function setHidden(key, val) {
+      var h = {};
+      for (var k in st.hidden) { h[k] = st.hidden[k].slice(); }
+      var arr = h[key] || [];
+      var i = arr.indexOf(val);
+      if (i >= 0) { arr.splice(i, 1); } else { arr.push(val); }
+      h[key] = arr;
+      self.setState({ hidden: h, page: 1 });
+    }
+    var cols = COLS_VIS.map(function (c) {
+      var on = st.sort === c.key;
+      var hid = st.hidden[c.key] || [];
+      var uniq = [];
+      all.forEach(function (r) { if (uniq.indexOf(r[c.key]) < 0) { uniq.push(r[c.key]); } });
+      uniq = sortVals(uniq, c.num);
+      return {
+        label: c.label,
+        w: 'w-' + c.key,
+        arr: on ? (st.dir > 0 ? '▲' : '▼') : '',
+        hasArr: !!(on ? (st.dir > 0 ? '▲' : '▼') : ''),
+        cls: (c.num ? 'thb-n ' : '') + (on ? 'thb-on' : ''),
+        mcls: hid.length ? 'thm-on' : '',
+        micon: 'M2 3h12l-5 6v4l-2 1V9z',
+        open: st.menu === c.key,
+        aexp: (st.menu === c.key) ? 'true' : 'false',
+        grpLabel: st.group === GNAME[c.key] ? 'Отменить группировку' : 'Группировать по этой графе',
+        vals: uniq.map(function (v) {
+          return { t: c.key === 'fot' ? money(v) : String(v), on: hid.indexOf(v) < 0,
+                   toggle: function () { setHidden(c.key, v); } };
+        }),
+        sort: function () { self.setState({ sort: c.key, dir: on ? -st.dir : 1, page: 1 }); },
+        menu: function () { self.setState({ menu: st.menu === c.key ? '' : c.key }); },
+        asc: function () { self.setState({ sort: c.key, dir: 1, menu: '', page: 1 }); },
+        desc: function () { self.setState({ sort: c.key, dir: -1, menu: '', page: 1 }); },
+        grp: function () { self.setState({ group: st.group === GNAME[c.key] ? '' : (GNAME[c.key] || ''), menu: '', page: 1 }); },
+        clear: function () {
+          var h = {};
+          for (var k in st.hidden) { h[k] = st.hidden[k].slice(); }
+          h[c.key] = [];
+          self.setState({ hidden: h, menu: '', page: 1 });
+        }
+      };
+    });
+
+    // Значения числовых клеток договоров: ключ шифр|графа -> число.
+    var CPICK = ['fot', 'docs'];
+    var CPICKV = {};
+    all.forEach(function (c) {
+      CPICKV[c.code + '|fot'] = c.fot;
+      CPICKV[c.code + '|docs'] = Number(c.docs);
+    });
+    function mkRow(c) {
+      var e = 'не заполнено';
+      var nf = 'не найдено';
+      var V = {
+        name: [c.name, ''],
+        fot: [money(c.fot), 'num'],
+        num: [c.num, ''],
+        kind: [c.kind, ''],
+        dep: [c.dep, ''],
+        acc: [c.acc, c.acc === e ? 'warn num lft' : 'num lft'],
+        goz: [c.goz, ''],
+        fund: [c.fund, ''],
+        start: [c.start, c.start === nf ? 'warn num lft' : 'num lft', 'из шапки РКМ'],
+        end: [c.end, c.end === nf ? 'warn num lft' : 'num lft', 'из документа'],
+        pay: [c.pay, c.pay === e ? 'warn' : ''],
+        prio: [c.prio, ''],
+        main: [c.main, ''],
+        part: [c.part, ''],
+        sd: [c.sd, c.sd === nf ? 'warn num lft' : 'num lft'],
+        ad: [c.ad, c.ad === nf ? 'warn num lft' : 'num lft'],
+        docs: [c.docs, 'num']
+      };
+      return {
+        code: c.code,
+        cells: COLS_VIS.filter(function (x) { return !x.always; }).map(function (x) {
+          var v = V[x.key] || ['', ''];
+          var key = c.code + '|' + x.key;
+          var pickable = CPICK.indexOf(x.key) >= 0 && isFinite(CPICKV[key]);
+          var on = st.cpick.indexOf(key) >= 0;
+          return {
+            v: v[0], src: v[2] || '',
+            plain: !pickable, pickable: pickable,
+            cls: 'w-' + x.key + ' ' + TIER[x.tier] + ' ' + v[1] + (on ? ' celn-on' : ''),
+            pick: function () {
+              var a = st.cpick.slice();
+              var i = a.indexOf(key);
+              if (i >= 0) { a.splice(i, 1); } else { a.push(key); }
+              self.setState({ cpick: a });
+            }
+          };
+        })
+      };
+    }
+
+    var GKEY = { 'Категория договора': 'kind', 'Структурное подразделение': 'dep', 'Источник финансирования': 'fund' };
+    var gk = GKEY[st.group] || '';
+    var size = Number(st.size) || 10;
+    var groups = [];
+    var pageInfo = '';
+    var pageOf = '';
+
+    if (gk) {
+      var seen = [];
+      rows.forEach(function (c) { if (seen.indexOf(c[gk]) < 0) { seen.push(c[gk]); } });
+      groups = seen.map(function (label) {
+        var part = rows.filter(function (c) { return c[gk] === label; });
+        var sum = 0;
+        part.forEach(function (c) { sum += c.fot; });
+        var open = st.closed.indexOf(label) < 0;
+        return {
+          show: true, open: open, label: label, mark: open ? '▾' : '▸',
+          count: 'строк ' + part.length, total: money(sum) + ' руб.',
+          rows: part.map(mkRow),
+          toggle: function () {
+            var s = st.closed.slice();
+            var i = s.indexOf(label);
+            if (i >= 0) { s.splice(i, 1); } else { s.push(label); }
+            self.setState({ closed: s });
+          }
+        };
+      });
+      pageInfo = 'Групп ' + groups.length + ' · строк ' + rows.length;
+      pageOf = '1 / 1';
+    } else {
+      var pages = Math.max(1, Math.ceil(rows.length / size));
+      var page = Math.min(st.page, pages);
+      var from = (page - 1) * size;
+      var slice = rows.slice(from, from + size);
+      groups = [{ show: false, open: true, label: '', mark: '', count: '', total: '', rows: slice.map(mkRow), toggle: function () {} }];
+      pageInfo = rows.length ? ('Строки ' + (from + 1) + '—' + (from + slice.length) + ' из ' + rows.length) : 'Строк нет';
+      pageOf = page + ' / ' + pages;
+    }
+
+    var LMON = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+    var LCOLS = [
+      { key: 'code', label: 'Договор', w: 'l-code', def: true },
+      { key: 'year', label: 'Год', w: 'l-year', num: true },
+      { key: 'pos', label: 'Должность', w: 'l-pos', def: true },
+      { key: 'eg', label: 'Окладная группа', w: 'l-eg' },
+      { key: 'lvl', label: 'Уровень должности', w: 'l-lvl', num: true },
+      { key: 'n', label: 'Привлекаемых специалистов', w: 'l-n', num: true, pick: true, def: true },
+      { key: 'mm', label: 'Трудоёмкость, чел.-мес.', w: 'l-mm', num: true, pick: true, def: true },
+      { key: 'dist', label: 'Распределение по месяцам', w: 'l-dist', def: true },
+      { key: 'cost', label: 'Средняя стоимость выполнения работ в месяц, руб.', w: 'l-cost', num: true, pick: true },
+      { key: 'bep', label: 'БЭП должности, руб.', w: 'l-bep', num: true, pick: true },
+      { key: 'sum', label: 'Основная заработная плата, руб.', w: 'l-sum', num: true, pick: true, def: true }
+    ].concat(LMON.map(function (m, i) {
+      return { key: 'm' + (i + 1), label: m, w: 'l-m', num: true, pick: true, def: true };
+    })).concat([
+      { key: 'doc', label: 'Документ', w: 'l-doc', def: true }
+    ]);
+    function lShown(c) {
+      return st.lcolsOn.length ? st.lcolsOn.indexOf(c.key) >= 0 : !!c.def;
+    }
+    // mon — план чел.-мес. по месяцам года; null значит, что помесячного
+    // распределения в документе нет и трудоёмкость задана на год целиком.
+    var labor = [
+      { code: '41-2026', pos: 'Ведущий инженер-конструктор', eg: 'ОГ-12', lvl: '3', n: '4', mm: '96,0', cost: '182 400', bep: '178 200', sum: '17 510 400', mon: [8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8], doc: 'РКМ, ред. 3', bepCls: 'bad' },
+      { code: '41-2026', pos: 'Инженер-конструктор 1 категории', eg: 'ОГ-10', lvl: '2', n: '6', mm: '132,0', cost: '146 300', bep: '146 300', sum: '19 311 600', mon: [11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11], doc: 'РКМ, ред. 3', bepCls: '' },
+      { code: '41-2026', pos: 'Начальник сектора', eg: 'ОГ-14', lvl: '4', n: '1', mm: '24,0', cost: '214 000', bep: '208 000', sum: '5 136 000', mon: null, doc: 'РКМ, ред. 3', bepCls: 'bad' },
+      { code: '44-2026', pos: 'Ведущий инженер-конструктор', eg: 'ОГ-12', lvl: '3', n: '3', mm: '84,0', cost: '182 400', bep: '178 200', sum: '15 321 600', mon: [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], doc: 'РКМ, ред. 2', bepCls: '' },
+      { code: '44-2026', pos: 'Инженер-программист', eg: 'ОГ-11', lvl: '3', n: '4', mm: '120,0', cost: '168 900', bep: '168 900', sum: '20 268 000', mon: [0, 0, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12], doc: 'РКМ, ред. 2', bepCls: '' },
+      { code: '44-2026', pos: 'Инженер по качеству', eg: 'ОГ-9', lvl: '2', n: '2', mm: '84,0', cost: '132 000', bep: '132 000', sum: '11 088 000', mon: [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7], doc: 'РКМ, ред. 2', bepCls: '' },
+      { code: '47-2026', pos: 'Инженер-конструктор 1 категории', eg: 'ОГ-10', lvl: '2', n: '2', mm: '48,0', cost: '146 300', bep: '146 300', sum: '7 022 400', mon: [12, 12, 12, 12, 0, 0, 0, 0, 0, 0, 0, 0], doc: 'Структура цены', bepCls: '' },
+      { code: 'ГР-19', pos: 'Инженер-исследователь', eg: 'ОГ-9', lvl: '1', n: '1', mm: '24,0', cost: '130 000', bep: '124 600', sum: '3 120 000', mon: null, doc: 'Смета гранта', bepCls: '' }
+    ];
+    labor.forEach(function (r) {
+      r.year = '2027';
+      r.dist = r.mon ? 'по месяцам' : 'не найдено';
+      r.distCls = r.mon ? '' : 'warn';
+      for (var i = 0; i < 12; i++) {
+        r['m' + (i + 1)] = r.mon && r.mon[i]
+          ? r.mon[i].toLocaleString('ru-RU', { minimumFractionDigits: 1 })
+          : '—';
+      }
+    });
+    function lnum(v) { return Number(String(v).replace(/[\s\u00A0]/g, '').replace(',', '.')); }
+    var LNUM = {};
+    LCOLS.forEach(function (c) { if (c.num) { LNUM[c.key] = true; } });
+    var LCOLS_VIS = LCOLS.filter(lShown);
+    all.forEach(function (c) {
+      var cat = CATBY[c.kind] || {};
+      c.prio = st.prioFix[c.code] === undefined ? (cat.prio || 'нет') : st.prioFix[c.code];
+    });
+    var lk = st.lsort, ld = st.ldir;
+    var lrows = labor.filter(function (r) {
+      for (var k in st.lhidden) {
+        if (st.lhidden[k].length && st.lhidden[k].indexOf(r[k]) >= 0) { return false; }
+      }
+      return true;
+    }).slice().sort(function (a, b) {
+      var x = a[lk], y = b[lk];
+      if (LNUM[lk]) {
+        var nx = lnum(x), ny = lnum(y);
+        if (isFinite(nx) && isFinite(ny)) { return (nx - ny) * ld; }
+        if (isFinite(nx)) { return -ld; }
+        if (isFinite(ny)) { return ld; }
+        return 0;
+      }
+      return (x < y ? -1 : (x > y ? 1 : 0)) * ld;
+    });
+    var lcols = LCOLS_VIS.map(function (c) {
+      var on = st.lsort === c.key;
+      var lhid = st.lhidden[c.key] || [];
+      var luniq = [];
+      labor.forEach(function (r) { if (luniq.indexOf(r[c.key]) < 0) { luniq.push(r[c.key]); } });
+      luniq = sortVals(luniq, c.num);
+      return {
+        label: c.label, w: c.w,
+        arr: on ? (st.ldir > 0 ? '▲' : '▼') : '',
+        hasArr: !!(on ? (st.ldir > 0 ? '▲' : '▼') : ''),
+        cls: (c.num ? 'thb-n ' : '') + (on ? 'thb-on' : ''),
+        mcls: lhid.length ? 'thm-on' : '',
+        micon: 'M2 3h12l-5 6v4l-2 1V9z',
+        open: st.lmenu === c.key,
+        aexp: (st.lmenu === c.key) ? 'true' : 'false',
+        grpLabel: st.lgroup === c.key ? 'Отменить группировку' : 'Группировать по этой графе',
+        vals: luniq.map(function (v) {
+          return { t: String(v), on: lhid.indexOf(v) < 0, toggle: function () {
+            var h = {};
+            for (var k in st.lhidden) { h[k] = st.lhidden[k].slice(); }
+            var cur = (h[c.key] || []).slice(), i = cur.indexOf(v);
+            if (i >= 0) { cur.splice(i, 1); } else { cur.push(v); }
+            h[c.key] = cur;
+            self.setState({ lhidden: h });
+          } };
+        }),
+        menu: function () { self.setState({ lmenu: st.lmenu === c.key ? '' : c.key }); },
+        asc: function () { self.setState({ lsort: c.key, ldir: 1, lmenu: '' }); },
+        desc: function () { self.setState({ lsort: c.key, ldir: -1, lmenu: '' }); },
+        grp: function () { self.setState({ lgroup: st.lgroup === c.key ? '' : c.key, lmenu: '', lclosed: [] }); },
+        clear: function () {
+          var h = {};
+          for (var k in st.lhidden) { h[k] = st.lhidden[k].slice(); }
+          h[c.key] = [];
+          self.setState({ lhidden: h, lmenu: '' });
+        },
+        sort: function () { self.setState({ lsort: c.key, ldir: on ? -st.ldir : 1 }); }
+      };
+    });
+    // Значения клеток, пригодных к выделению: ключ строка|графа -> число.
+    var LPICKV = {};
+    function fmt(v) {
+      var d = Math.abs(v - Math.round(v)) > 0.001 ? 1 : 0;
+      return v.toLocaleString('ru-RU', { minimumFractionDigits: d, maximumFractionDigits: d });
+    }
+    lrows.forEach(function (l, ri) {
+      LCOLS.forEach(function (c) {
+        if (!c.pick) { return; }
+        var n = lnum(l[c.key]);
+        if (isFinite(n)) { LPICKV[ri + '|' + c.key] = n; }
+      });
+    });
+    function mkLab(l) {
+      var ri = lrows.indexOf(l);
+      return {
+        cells: LCOLS_VIS.map(function (c) {
+          var key = ri + '|' + c.key;
+          var pickable = LPICKV[key] !== undefined;
+          var on = st.lpick.indexOf(key) >= 0;
+          var cls = c.w
+            + (c.num ? ' num' : '')
+            + (c.key === 'bep' ? ' ' + l.bepCls : '')
+            + (c.key === 'dist' ? ' ' + l.distCls : '')
+            + (c.key === 'doc' ? ' mut ell' : '')
+            + (on ? ' celn-on' : '');
+          return {
+            v: l[c.key], plain: !pickable, pickable: pickable, cls: cls,
+            pick: function () {
+              var a = st.lpick.slice();
+              var i = a.indexOf(key);
+              if (i >= 0) { a.splice(i, 1); } else { a.push(key); }
+              self.setState({ lpick: a });
+            }
+          };
+        })
+      };
+    }
+    var lgk = st.lgroup;
+    var lgroups;
+    if (lgk) {
+      var lseen = [];
+      lrows.forEach(function (l) { if (lseen.indexOf(l[lgk]) < 0) { lseen.push(l[lgk]); } });
+      lgroups = lseen.map(function (label) {
+        var part = lrows.filter(function (l) { return l[lgk] === label; });
+        var mm = 0;
+        part.forEach(function (l) { mm += Number(l.mm.replace(',', '.')); });
+        var open = st.lclosed.indexOf(label) < 0;
+        part = part.map(mkLab);
+        return {
+          show: true, open: open, label: label, mark: open ? '▾' : '▸',
+          count: 'строк ' + part.length,
+          total: 'итого ' + String(mm.toFixed(1)).replace('.', ',') + ' чел.-мес.',
+          rows: part,
+          toggle: function () {
+            var s = st.lclosed.slice();
+            var i = s.indexOf(label);
+            if (i >= 0) { s.splice(i, 1); } else { s.push(label); }
+            self.setState({ lclosed: s });
+          }
+        };
+      });
+    } else {
+      lgroups = [{ show: false, open: true, label: '', mark: '', count: '', total: '', rows: lrows.map(mkLab), toggle: function () {} }];
+    }
+
+    var catRows = CATS.concat(
+      (function () {
+        var extra = [];
+        for (var i = 0; i < st.catAdd; i++) {
+          extra.push({ k: 'Новая категория', prio: 'нет', tol: '—', bep: '—', pay: '', sep: 'нет' });
+        }
+        return extra;
+      })()
+    ).filter(function (c, i) { return st.catDrop.indexOf(i) < 0; })
+      .map(function (c, i) {
+        return {
+          k: c.k, prio: c.prio, tol: c.tol, bep: c.bep, pay: c.pay, sep: c.sep,
+          n: String(all.filter(function (x) { return x.kind === c.k; }).length),
+          set: function () {},
+          setPrio: function () {},
+          drop: function () { self.setState({ catDrop: st.catDrop.concat([i]) }); }
+        };
+      });
+
+    return {
+      yes: true, no: false,
+      isCtr: st.tab === 'ctr', isLab: st.tab === 'lab', isCat: st.tab === 'cat',
+      ctrCls: st.tab === 'ctr' ? 'tab-on' : '',
+      labCls: st.tab === 'lab' ? 'tab-on' : '',
+      catCls: st.tab === 'cat' ? 'tab-on' : '',
+      cats: catRows, catInfo: 'Категорий ' + catRows.length,
+      q: st.q, size: String(st.size),
+      cols: cols, groups: groups, pageInfo: pageInfo, pageOf: pageOf,
+      noRows: rows.length === 0, noLab: lrows.length === 0,
+      ctrSelOn: st.cpick.length > 0,
+      ctrTotal: (function () {
+        if (st.cpick.length) {
+          var vals = st.cpick.map(function (k) { return CPICKV[k]; })
+            .filter(function (v) { return isFinite(v); });
+          var sum = 0;
+          vals.forEach(function (v) { sum += v; });
+          return 'Выделено ' + vals.length
+            + ' · Сумма ' + money(sum)
+            + ' · Среднее ' + money(vals.length ? Math.round(sum / vals.length) : 0);
+        }
+        return '';
+      })(),
+      colsOpen: st.colsOpen,
+      colsCls: COLS_VIS.length === COLS.filter(function (c) { return c.always || c.def; }).length ? '' : 'btn-on',
+      colPick: COLS.map(function (c) {
+        return {
+          label: c.label, on: colShown(c), fixed: !!c.always,
+          toggle: function () {
+            var cur = st.colsOn.length ? st.colsOn.slice()
+              : COLS.filter(function (x) { return x.always || x.def; }).map(function (x) { return x.key; });
+            var i = cur.indexOf(c.key);
+            if (i >= 0) { cur.splice(i, 1); } else { cur.push(c.key); }
+            self.setState({ colsOn: cur });
+          }
+        };
+      }),
+      lcols: lcols, lgroups: lgroups,
+      selOn: st.lpick.length > 0,
+      lcolsOpen: st.lcolsOpen,
+      lcolsCls: LCOLS_VIS.length === LCOLS.filter(function (c) { return c.def; }).length ? '' : 'btn-on',
+      lcolPick: LCOLS.map(function (c) {
+        return {
+          label: c.label, on: lShown(c),
+          toggle: function () {
+            var cur = st.lcolsOn.length ? st.lcolsOn.slice()
+              : LCOLS.filter(function (x) { return x.def; }).map(function (x) { return x.key; });
+            var i = cur.indexOf(c.key);
+            if (i >= 0) { cur.splice(i, 1); } else { cur.push(c.key); }
+            self.setState({ lcolsOn: cur });
+          }
+        };
+      }),
+      labTotal: (function () {
+        if (st.lpick.length) {
+          var vals = st.lpick.map(function (k) { return LPICKV[k]; })
+            .filter(function (v) { return typeof v === 'number'; });
+          var s2 = 0;
+          vals.forEach(function (v) { s2 += v; });
+          var avg = vals.length ? s2 / vals.length : 0;
+          return 'Выделено ' + vals.length
+            + ' · Сумма ' + fmt(s2)
+            + ' · Среднее ' + fmt(avg);
+        }
+        var mm = 0, sum = 0;
+        lrows.forEach(function (l) {
+          mm += Number(String(l.mm).replace(',', '.')) || 0;
+          sum += Number(String(l.sum).replace(/\s/g, '')) || 0;
+        });
+        return 'Итого ' + String(mm.toFixed(1)).replace('.', ',') + ' чел.-мес. · '
+          + sum.toLocaleString('ru-RU') + ' руб.';
+      })(),
+      h: {
+        q: function (e) { self.setState({ q: e.target.value, page: 1 }); },
+        ctrSelClear: function () { self.setState({ cpick: [] }); },
+        colsOpen: function () { self.setState({ colsOpen: !st.colsOpen }); },
+        colsReset: function () { self.setState({ colsOn: [], colsOpen: false }); },
+        ctr: function () { self.setState({ tab: 'ctr' }); },
+        lab: function () { self.setState({ tab: 'lab' }); },
+        cat: function () { self.setState({ tab: 'cat' }); },
+        catAdd: function () { self.setState({ catAdd: st.catAdd + 1 }); },
+        grp: function (e) { self.setState({ group: e.target.value === 'Без группировки' ? '' : e.target.value, page: 1 }); },
+        size: function (e) { self.setState({ size: Number(e.target.value), page: 1 }); },
+        selClear: function () { self.setState({ lpick: [] }); },
+        lcolsOpen: function () { self.setState({ lcolsOpen: !st.lcolsOpen }); },
+        lcolsReset: function () { self.setState({ lcolsOn: [], lcolsOpen: false }); },
+        prev: function () { self.setState({ page: Math.max(1, st.page - 1) }); },
+        next: function () { self.setState({ page: st.page + 1 }); }
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

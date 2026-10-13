@@ -1,27 +1,54 @@
+/* Таблица замечаний. Цвета, размеры и радиусы — токенами дизайн-системы:
+   свои значения здесь не заводятся. */
 .issue-controls{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:12px 0}
-.issue-controls button{font:500 12px/1.5 var(--f);background:#fff;border:1px solid #d5dfe8;border-radius:6px;padding:7px 12px;cursor:pointer;color:#526174}
-.issue-controls button[aria-pressed=true]{background:#e8f4fa;border-color:#1687b8;color:#176b91}
+.issue-controls button{font:500 12px/1.5 var(--f);background:var(--s0);
+  border:1px solid var(--line3);border-radius:var(--r2);padding:7px 12px;
+  cursor:pointer;color:var(--ink2)}
+.issue-controls button[aria-pressed=true]{background:var(--accbg);
+  border-color:var(--acc);color:var(--accink)}
 .issue-controls button span{margin-left:6px;font-variant-numeric:tabular-nums}
-.issue-controls label{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:12px;color:#526174}
-.issue-controls select{font:13px var(--f);padding:7px 10px;border:1px solid #d5dfe8;border-radius:6px;background:#fff;color:#243344}
+.issue-controls label{display:flex;align-items:center;gap:8px;margin-left:auto;
+  font-size:12px;color:var(--ink2)}
+.issue-controls select{font:13px var(--f);padding:7px 10px;border:1px solid var(--line3);
+  border-radius:var(--r2);background:var(--s0);color:var(--ink)}
 /* Ширины: объект и проверка тянутся, числовые графы держат свою ширину. */
 .issue-table th:nth-child(1){width:26%}.issue-table th:nth-child(2){width:26%}
-.issue-title{margin-top:6px;line-height:1.5}
-.issue-severity{display:inline-block;font-size:11px;padding:2px 7px;border-radius:4px}
-.issue-severity.error{background:#fff0ef;color:#9f2e27}.issue-severity.warning{background:#fff8e8;color:#805509}
-.issue-empty{font:13px/1.5 var(--f);padding:18px;background:#f5f7fa;border-radius:6px;color:#526174}
-.issue-context{display:flex;align-items:center;gap:8px;padding:2px 0 7px;border-bottom:1px solid var(--line2);font:12px/1.5 var(--f);color:var(--ink3)}
-.view .rtool .issue-context button[data-issue-back]{min-height:24px;padding:0;border:0;background:transparent;color:var(--acc2);font-weight:600}
+.issue-title{margin-top:6px;line-height:18px}
+/* Объект замечания — либо шифр договора, либо ФИО. Шифр набирается тем же
+   моноширинным, что в реестре: один договор не должен выглядеть на двух
+   экранах по-разному. ФИО моноширинным не набирают — оно не сверяется
+   посимвольно, поэтому графа помечается разметкой, а не правилом на ячейку. */
+.issue-table td strong{font:600 13px/18px var(--f);color:var(--ink)}
+.issue-table td strong.code{font:400 12px/16px var(--m)}
+.issue-table td small{display:block;margin-top:2px;font-size:12px;color:var(--ink2)}
+/* Уровень замечания — слово цветом статуса с вертикальной чертой, без
+   заливки: семь залитых плашек в одной таблице перетягивают внимание с
+   чисел, ради которых её и открывают, и пропадают при печати. Черта даёт
+   метке предмет, слово — смысл. */
+.issue-severity{display:inline-flex;align-items:center;gap:8px;
+  font-size:13px;font-weight:500;line-height:18px}
+.issue-severity::before{content:"";flex:0 0 auto;width:2px;height:13px;
+  border-radius:var(--r3);background:currentColor}
+.issue-severity.error{color:var(--bad)}
+.issue-severity.warning{color:var(--warn)}
+.issue-empty{font:13px/1.5 var(--f);padding:18px;background:var(--s1);
+  border-radius:var(--r);color:var(--ink2)}
+.issue-context{display:flex;align-items:center;gap:8px;padding:2px 0 7px;
+  border-bottom:1px solid var(--line2);font:12px/1.5 var(--f);color:var(--ink3)}
+.view .rtool .issue-context button[data-issue-back]{min-height:24px;padding:0;border:0;
+  background:transparent;color:var(--acc2);font-weight:600}
 .view .rtool .issue-context button[data-issue-back]:hover{border:0;text-decoration:underline}
 .issue-context-actions{display:flex;align-items:center;gap:6px;margin-left:auto}
-.issue-target-cell{outline:3px solid #158bb9!important;outline-offset:-3px}
-.issue-controls button:focus-visible,.issue-controls select:focus-visible{outline:3px solid #1687b8;outline-offset:2px}
+.issue-target-cell{outline:2px solid var(--accring)!important;outline-offset:-2px}
+.issue-controls button:focus-visible,.issue-controls select:focus-visible{
+  outline:2px solid var(--accring);outline-offset:1px}
 @media(max-width:900px){.issue-table{min-width:740px}.issue-controls label{margin-left:0}}
 
-/* Три постоянные графы величин: числа в колонку, превышение — красным. */
+/* Три постоянные графы величин: числа в колонку, превышение — цветом и
+   знаком сразу, потому что цвет пропадает при печати, а знак остаётся. */
 .issue-table th.num,.issue-table td.num{text-align:right;white-space:nowrap;
   font-variant-numeric:tabular-nums;padding-left:18px;width:auto;min-width:110px}
-.issue-table td.num.over{color:#bd3434;font-weight:600}
+.issue-table td.num.over{color:var(--bad);font-weight:600}
 /* Кнопка не должна прилипать к последнему числу и краю таблицы: отступ
    слева больше обычного, плюс волосяная линия — графа действия читается как
    отдельная колонка, а не как часть суммы. */
@@ -34,4 +61,4 @@
 .issue-table th.num,.issue-table td.num{min-width:126px;white-space:nowrap;
   padding-left:12px;padding-right:12px}
 .issue-table td:first-child,.issue-table th:first-child{min-width:150px}
-.issue-table .review-open{width:auto;padding:7px 10px;font-size:12px;line-height:1.5}
+.issue-table .review-open{width:auto;padding:7px 10px;font-size:12px;line-height:16px}

@@ -12,8 +12,10 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import re
 import uuid
 import socket
 import logging
@@ -24,9 +26,11 @@ import subprocess
 import sys
 import threading
 import time
+import types
+from urllib.parse import quote
 
 from fastapi import Body, BackgroundTasks, FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,21 +40,40 @@ sys.path.insert(0, os.path.join(ROOT, "docs", "ui"))
 
 import actuality         # noqa: E402
 import agents            # noqa: E402
+import basis             # noqa: E402
 import build_input       # noqa: E402
 import chat              # noqa: E402
 import docread           # noqa: E402
+import facts             # noqa: E402
 import intake            # noqa: E402
 import llm               # noqa: E402
+import order             # noqa: E402
+import workgroup         # noqa: E402
 import reference         # noqa: E402
+import salary            # noqa: E402
 from db import (
     Decision, record_decision,         # noqa: E402
     claim_operation, finish_operation,
-    Activity, Case, Contract, Correction, Document, Employee, Inflow, LaborRow,
-    Message, Proposal, Question, Run, SecretAllowance, Substitution, Verdict,
-    RESULT_DIR, UPLOAD_DIR, init_db, now, session,
+    Activity, Case, Contract, ContractValue, Correction, Document, Employee, Inflow, LaborRow,
+    Message, MgmtDepartment, Proposal, Question, Run, SalaryMonth, SalaryRow, SecretAllowance,
+    Substitution,
+    Verdict, WorkOrder, WorkOrderMember,
+    DATA_DIR, RESULT_DIR, UPLOAD_DIR, init_db, now, session,
 )
 
-EXE = os.path.join(ROOT, ".venv", "Scripts", "fot-planner.exe")
+def _solver_exe():
+    """Решатель из окружения проекта: .venv на Windows или Linux, иначе рядом
+    с интерпретатором — в докере пакет ставится в системный Python."""
+    for path in (os.path.join(ROOT, ".venv", "Scripts", "fot-planner.exe"),
+                 os.path.join(ROOT, ".venv", "bin", "fot-planner"),
+                 os.path.join(os.path.dirname(sys.executable),
+                              "fot-planner.exe" if os.name == "nt" else "fot-planner")):
+        if os.path.isfile(path):
+            return path
+    return path
+
+
+EXE = _solver_exe()
 STATIC = os.path.join(HERE, "static")
 
 
@@ -78,7 +101,15 @@ def _load_env():
 
 ENV_SOURCE, ENV_LOADED = _load_env()
 
-app = FastAPI(title="Планирование ФОТ")
+@contextlib.asynccontextmanager
+async def _lifespan(_app):
+    # Начальная загрузка из папки (SOURCE-015) — только при старте сервера:
+    # стенды и скрипты импортируют модуль ради путей и сборщика входа.
+    threading.Thread(target=_load_seed, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Планирование ФОТ", lifespan=_lifespan)
 init_db()
 
 
@@ -149,7 +180,11 @@ def _manifest_draft(run, src, settings, sources, command, limit, attempt_of=None
     файл перезапишет следующий прогон того же плана.
     """
     from fot_planner.harness_local import manifest as mf
+    from fot_planner.harness_local.catalogue import default_catalogue
     store = _artifacts()
+    catalogue = default_catalogue()
+    required = [{**c, "descriptor_sha256": catalogue.descriptor_digest(c["id"], c["version"])}
+                for c in catalogue.required_checks("fot.local")]
     draft = mf.build_manifest(
         run_id=run.id, case_id=run.case_id, executor=run.executor or EXECUTOR,
         input_sha256=store.put_file(src),
@@ -157,24 +192,28 @@ def _manifest_draft(run, src, settings, sources, command, limit, attempt_of=None
         settings=settings or {}, sources=sources,
         code=mf.code_version(mf.default_src_root()),
         command=[os.path.basename(command[0])] + list(command[1:]), time_limit_sec=limit,
-        attempt_of=attempt_of)
+        attempt_of=attempt_of, required_checks=required)
     run.manifest_sha256 = mf.store_manifest(store, draft)
     return draft
 
 
-def _manifest_final(run, draft, out, solver_status, audit_status, audit_lines, seconds):
+def _manifest_final(run, draft, out, solver_status, audit_status, audit_lines, seconds, audit_checks=None,
+                    independent_audit=None):
     """Итог после всех преобразований результата — хеш с конечного файла."""
     from fot_planner.harness_local import manifest as mf
     store = _artifacts()
     done = mf.finalize_manifest(
         draft, output_sha256=store.put_file(out) if out and os.path.isfile(out) else None,
         solver_status=solver_status, audit_status=audit_status, audit_lines=audit_lines,
-        seconds=seconds)
+        seconds=seconds, audit_checks=audit_checks, execution_status=run.status)
+    if independent_audit is not None:
+        done['independent_audit'] = independent_audit
     run.manifest_sha256 = mf.store_manifest(store, done)
     return done
 
 
-def _manifest_close(db, run_id, draft, draft_digest, out, audit_status, audit_lines, seconds):
+def _manifest_close(db, run_id, draft, draft_digest, out, audit_status, audit_lines, seconds,
+                    audit_checks=None, solver_status=None):
     """Закрыть снимок прогона, чем бы тот ни кончился.
 
     Удачный расчёт закрывает снимок сам, после дозаписи результата. Отказ,
@@ -188,7 +227,11 @@ def _manifest_close(db, run_id, draft, draft_digest, out, audit_status, audit_li
     run = db.get(Run, run_id)
     if run is None or run.manifest_sha256 != draft_digest:
         return None
-    done = _manifest_final(run, draft, out, run.status, audit_status, audit_lines, seconds)
+    # None — прежний вызывающий код; пустая строка — новый протокол,
+    # в котором solver не сообщил статус. Не подменять его состоянием задачи.
+    final_solver_status = run.status if solver_status is None else (solver_status or "UNKNOWN")
+    done = _manifest_final(run, draft, out, final_solver_status,
+                           audit_status, audit_lines, seconds, audit_checks=audit_checks)
     db.commit()
     return done
 
@@ -241,6 +284,10 @@ def case_state(db, case):
         "case": {"id": case.id, "title": case.title, "year": case.year,
                  "stage": case.stage, "updated": _dt(case.updated),
                  "has_data": bool(case.passport) or _registry_ready(db),
+                 # Факт начислений (30.09.2026): по какой месяц расчёт его
+                 # берёт и по каким месяцам года он есть.
+                 "fact_through": _fact_through(db, case),
+                 "fact_months": facts.months_available(db, case.year),
                  "counts": {
                      "employees": db.query(Employee).count(),
                      "contracts": db.query(Contract).count(),
@@ -435,7 +482,7 @@ def _process(case_id: int, doc_id: int):
                     doc.summary = "в песочнице плана: строк для реестра нет"
                     db.commit()
             _prerender_first_sheet(doc)
-            threading.Thread(target=_warm_pdf, args=(doc.id,), daemon=True).start()
+            _warm_once(("pdf", doc.id), _warm_pdf, doc.id)
         elif case and doc:
             intake.handle_document(db, case, doc)
             _prerender_first_sheet(doc)
@@ -443,9 +490,114 @@ def _process(case_id: int, doc_id: int):
             # потоком: у книги РКМ тридцать листов, Excel печатает их минуты,
             # и всё это время следующие документы стояли в очереди
             # неразобранными, а расчёт запускался без трудоёмкости.
-            threading.Thread(target=_warm_pdf, args=(doc.id,), daemon=True).start()
+            _warm_once(("pdf", doc.id), _warm_pdf, doc.id)
     finally:
         db.close()
+
+
+#: Папка начальной загрузки (SOURCE-015): документы организации, которые
+#: сервер разбирает сам при старте — без плана и без подтверждений.
+SEED_DIR = os.path.abspath(os.environ.get("FOT_SEED_DIR") or os.path.join(DATA_DIR, "seed"))
+
+
+def _seed_files(folder):
+    """Файлы папки в порядке разбора: сначала перечни должностей — приказ
+    правит величины только у заведённых должностей, — затем остальные по
+    пути: зарплата и факт ищут людей в реестре, их папки нумеруются после
+    штатного и договоров."""
+    files = []
+    for root, dirs, names in os.walk(folder):
+        dirs.sort()
+        for name in sorted(names):
+            # Служебные файлы Office и скрытые — не документы.
+            if not name.startswith(("~$", ".")):
+                files.append(os.path.join(root, name))
+    first = [f for f in files if intake.positions_layout(f) is not None]
+    return first + [f for f in files if f not in first]
+
+
+def _load_seed(folder=None):
+    """Разобрать документы папки, которых ещё нет в базе. Возвращает id
+    добавленных документов.
+
+    Плана нет: лента и журнал работ уходят в лог сервера. Расхождения
+    нормативных документов записываются в справочник сразу — за содержимое
+    папки отвечает тот, кто её положил.
+    """
+    folder = folder or SEED_DIR
+    log = logging.getLogger("fot.seed")
+    if not os.path.isdir(folder):
+        return []
+    org = types.SimpleNamespace(id=None, year=time.localtime().tm_year, passport=None,
+                                stage=None)
+    added = []
+    db = session()
+    try:
+        known = {sha for (sha,) in db.query(Document.sha256).all() if sha}
+        for path in _seed_files(folder):
+            with open(path, "rb") as f:
+                data = f.read()
+            digest = hashlib.sha256(data).hexdigest()
+            if digest in known:
+                continue
+            known.add(digest)
+            name = os.path.basename(path)
+            stored = os.path.join(UPLOAD_DIR, "seed_%d_%s" % (int(time.time() * 1000), name))
+            with open(stored, "wb") as out:
+                out.write(data)
+            doc = Document(case_id=None, name=name, path=stored, size=len(data),
+                           sha256=digest, scope="реестр")
+            # Изменённый файл с тем же именем — новая версия, как при загрузке.
+            prev = _previous_version(db, name, None)
+            if prev is not None:
+                _retire_document(db, prev, new_version=(prev.version or 1) + 1)
+                doc.version = (prev.version or 1) + 1
+                doc.supersedes_id = prev.id
+            db.add(doc)
+            db.commit()
+            added.append(doc.id)
+            log.info("начальная загрузка: %s", os.path.relpath(path, folder))
+            try:
+                intake.handle_document(db, org, doc)
+                db.refresh(doc)
+                gave = json.loads(doc.gave) if doc.gave else {}
+                if doc.kind == "нормативный документ" and gave.get("расхождения"):
+                    res = _write_document_reference(db, doc, gave["расхождения"],
+                                                    grounds="начальная загрузка")
+                    log.info("«%s»: записано в справочник %d", name, len(res["applied"]))
+                _prerender_first_sheet(doc)
+            except Exception:  # noqa: BLE001 — один файл не останавливает папку
+                log.exception("начальная загрузка: «%s» не разобран", name)
+                db.rollback()
+            db.refresh(doc)
+            log.info("«%s»: %s — %s", name, doc.state, doc.summary or doc.kind or "")
+    finally:
+        db.close()
+    return added
+
+
+#: Грелки, которые уже идут: ключ → поток. Карточку документа опрашивают
+#: раз в несколько секунд, и раньше каждый опрос заводил новый поток печати
+#: через COM и новый разбор книги. 12.10.2026 прогон пятидесяти документов
+#: опрашивал карточки — сотни таких потоков, и сервер падал с 0xC0000005.
+_WARMING = set()
+_WARMING_LOCK = threading.Lock()
+
+
+def _warm_once(key, target, *args):
+    """Запустить грелку, если такая же ещё не идёт."""
+    with _WARMING_LOCK:
+        if key in _WARMING:
+            return
+        _WARMING.add(key)
+
+    def run():
+        try:
+            target(*args)
+        finally:
+            with _WARMING_LOCK:
+                _WARMING.discard(key)
+    threading.Thread(target=run, daemon=True).start()
 
 
 def _warm_pdf(doc_id):
@@ -556,12 +708,1695 @@ async def mute_document(case_id: int, doc_id: int, request: Request):
         db.close()
 
 
+def _previous_version(db, name, contract=None):
+    """Действующая версия документа с этим именем; None — документ новый.
+
+    Без договора — любой документ с тем же именем, как и прежде. При загрузке
+    в договор «РКМ.xlsx» соседнего договора — другой документ, а не прежняя
+    версия: ищем среди документов этого договора — загруженных в него или
+    давших ему строки.
+    """
+    q = (db.query(Document).filter_by(name=name)
+         .filter(Document.state != "заменен").order_by(Document.id.desc()))
+    if not contract:
+        return q.first()
+    for d in q.all():
+        if d.contract_code == contract or (not d.contract_code
+                                           and contract in basis.links_of(db, d)):
+            return d
+    return None
+
+
+@app.post("/api/contracts")
+async def create_contract(request: Request):
+    """Новый договор реестра: шифр и наименование (UI-006).
+
+    Договор заводится раньше документов: дальше в него загружается пакет, и
+    данные документов ложатся на этот договор, а не на шифр из их шапок
+    (SOURCE-004).
+    """
+    body = await request.json()
+    code = str(body.get("code") or "").strip()[:60]
+    name = str(body.get("name") or "").strip()[:300] or None
+    if not code:
+        raise HTTPException(400, "нужен шифр договора")
+    db = session()
+    try:
+        if db.query(Contract).filter_by(code=code).first() is not None:
+            raise HTTPException(409, "договор %s уже есть в реестре" % code)
+        db.add(Contract(code=code, name=name, source="создан в реестре"))
+        from fot_planner.harness_local import decisions as D
+        record_decision(db, kind="данные", subject_kind="договор", subject_id=code,
+                        subject_digest=D.digest(code, name), scope="реестр",
+                        action={"создан договор": code, "наименование": name},
+                        grounds="«Новый договор» в реестре")
+        db.commit()
+        return {"ok": True, "code": code}
+    finally:
+        db.close()
+
+
+def _contract_docs(db, code):
+    """Документы, из которых в реестр попало хоть что-то по этому договору."""
+    ids = set()
+    for model in (Contract, LaborRow, Inflow, ContractValue):
+        for (doc_id,) in db.query(model.document_id).filter_by(contract_code=code).all() \
+                if model is not Contract else \
+                db.query(model.document_id).filter_by(code=code).all():
+            if doc_id:
+                ids.add(doc_id)
+    for (doc_id,) in db.query(SecretAllowance.document_id) \
+            .filter_by(secret_contract_code=code).all():
+        if doc_id:
+            ids.add(doc_id)
+    return [d for d in (db.get(Document, i) for i in sorted(ids)) if d is not None]
+
+
+def _contract_impact(db, code):
+    """Что исчезнет вместе с договором — числами, до удаления."""
+    docs = _contract_docs(db, code)
+    plans = 0
+    for case in db.query(Case).all():
+        if code not in basis.read(case)["вне расчёта"]:
+            plans += 1
+    return {
+        "документов": len(docs),
+        "редакций": sum(1 for d in docs if (d.version or 1) > 1),
+        "строк трудоёмкости": db.query(LaborRow).filter_by(contract_code=code).count(),
+        "поступлений": db.query(Inflow).filter_by(contract_code=code).count(),
+        "величин": db.query(ContractValue).filter_by(contract_code=code).count(),
+        "надбавок 120": db.query(SecretAllowance)
+                          .filter_by(secret_contract_code=code).count(),
+        "планов в расчёте": plans,
+        "файлы": [d.name for d in docs],
+    }
+
+
+def _forget_contract_rows(db, code):
+    """Стереть всё, что помнит этот шифр, кроме самих документов."""
+    return {
+        "договоров": db.query(Contract).filter_by(code=code).delete(),
+        "строк трудоёмкости": db.query(LaborRow).filter_by(contract_code=code).delete(),
+        "поступлений": db.query(Inflow).filter_by(contract_code=code).delete(),
+        "величин": db.query(ContractValue).filter_by(contract_code=code).delete(),
+        "надбавок 120": db.query(SecretAllowance)
+                          .filter_by(secret_contract_code=code).delete(),
+    }
+
+
+def _drop_from_plans(db, code):
+    """Убрать шифр из выбора планов: ссылки на несуществующий договор — мусор."""
+    touched = 0
+    for case in db.query(Case).all():
+        chosen = basis.read(case)
+        off, overrides = chosen["вне расчёта"], chosen["договоры"]
+        if code not in off and code not in overrides:
+            continue
+        off.discard(code)
+        overrides.pop(code, None)
+        chosen["условия реестра"].pop(code, None)
+        basis._write(case, chosen)
+        touched += 1
+    return touched
+
+
+@app.get("/api/contracts/{code}/impact")
+def contract_impact(code: str):
+    """Последствия удаления договора — до того, как экономист решит."""
+    db = session()
+    try:
+        if db.query(Contract).filter_by(code=code).first() is None:
+            raise HTTPException(404, "договор %s не найден" % code)
+        return _contract_impact(db, code)
+    finally:
+        db.close()
+
+
+@app.delete("/api/contracts/{code}")
+async def delete_contract(code: str, request: Request):
+    """Удалить договор. Два намерения, а не одно «удалить».
+
+    `с документами` — договор завели по ошибке: файлы и всё извлечённое уходят.
+    `без документов` — договор лишний, файлы нужны: документы остаются и
+    попадают в «Документы без договора», их можно перечитать под другим шифром
+    (SOURCE-005). Планы, посчитанные на этих данных, помечаются к пересмотру:
+    основание изменилось, а прежний ответ остаётся историей (VER-003).
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — тело может не прийти вовсе
+        body = {}
+    mode = str((body or {}).get("документы") or "с документами")
+    if mode not in ("с документами", "без документов"):
+        raise HTTPException(400, "документы: «с документами» или «без документов»")
+    db = session()
+    try:
+        row = db.query(Contract).filter_by(code=code).first()
+        if row is None:
+            raise HTTPException(404, "договор %s не найден" % code)
+        name = row.name or code
+        docs = _contract_docs(db, code)
+        before = _contract_impact(db, code)
+        for doc in docs:
+            actuality.mark_review(db, actuality.runs_using_document(db, doc.id),
+                                  "договор «%s» удалён" % code)
+        if mode == "с документами":
+            for doc in docs:
+                _forget_document(db, doc)
+        gone = _forget_contract_rows(db, code)
+        gone["планов поправлено"] = _drop_from_plans(db, code)
+        if mode == "с документами":
+            gone["документов"] = len(docs)
+        from fot_planner.harness_local import decisions as D
+        record_decision(db, kind="данные", subject_kind="договор", subject_id=code,
+                        subject_digest=D.digest(code, mode), scope="реестр",
+                        action={"удалён договор": code, "документы": mode,
+                                "было": before},
+                        grounds="«Удалить договор» на экране договора")
+        db.commit()
+        return {"ok": True, "code": code, "name": name, "removed": gone}
+    finally:
+        db.close()
+
+
+@app.post("/api/contracts/{code}")
+async def rename_contract(code: str, request: Request):
+    """Наименование договора (UI-009). Шифр не меняется: он опознаёт договор.
+
+    Наименование подтягивается из шапки документа (SOURCE-005), но формулировка
+    темы в форме и рабочее название договора совпадают не всегда — поэтому его
+    правят на месте, как название плана.
+    """
+    body = await request.json()
+    db = session()
+    try:
+        found = db.query(Contract).filter_by(code=code).first()
+        if found is None:
+            raise HTTPException(404, "договор %s не найден" % code)
+        from fot_planner.harness_local import decisions as D
+        # Графы, которых нет в документах, экономист вводит в ячейке списка
+        # (SOURCE-007): {"fields": {"account": "…", "goz": "да"}}.
+        if isinstance(body.get("fields"), dict):
+            changed = basis.set_manual(db, found, body["fields"])
+            if changed:
+                record_decision(db, kind="данные", subject_kind="договор", subject_id=code,
+                                subject_digest=D.digest(code, sorted(changed)), scope="реестр",
+                                action={"договор": code, "графы": changed},
+                                grounds="введено экономистом в списке договоров")
+                # Значение договора общее: пересмотра ждут расчёты всех планов,
+                # где договор в расчёте.
+                for case in db.query(Case).all():
+                    if code not in basis.read(case)["вне расчёта"]:
+                        actuality.mark_review(db, actuality.runs_of_case(db, case.id),
+                                              "у договора %s изменены графы: %s"
+                                              % (code, ", ".join(sorted(changed))))
+                db.commit()
+                # Экономист вписал договору л/с или номер — приказы, которые
+                # ждали такого договора, прикрепляются к нему сами.
+                intake.rebind_workorders(db)
+            return {"ok": True, "code": code, "changed": changed}
+        name = str(body.get("name") or "").strip()[:300] or None
+        if found.name == name:
+            return {"ok": True, "code": code, "name": name}
+        was, found.name = found.name, name
+        record_decision(db, kind="данные", subject_kind="договор", subject_id=code,
+                        subject_digest=D.digest(code, name), scope="реестр",
+                        action={"договор": code, "наименование": name, "было": was},
+                        grounds="переименование на экране договора")
+        db.commit()
+        return {"ok": True, "code": code, "name": name}
+    finally:
+        db.close()
+
+
+#: Источник правила замещения, введённого на вкладке реестра (SOURCE-010).
+SUBST_MANUAL = "введено вручную"
+
+
+def _subst_set(value):
+    """Набор должностей правила строкой графы «может быть замещена».
+
+    Приходит списком из окна правки или строкой через запятую; порядок и
+    повторы не значат ничего — решатель читает набор, поэтому храним его
+    отсортированным и без повторов."""
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    return ", ".join(sorted({str(x).strip() for x in items if str(x).strip()}))
+
+
+def _subst_changed(db, sid, position, action, grounds):
+    """Журнал решений и пересмотр планов после правки правила.
+
+    Правила общие для организации и уходят листом «правила_замещения» в расчёт
+    каждого плана, поэтому к пересмотру помечаются посчитанные планы всех
+    дел, а не одного."""
+    from fot_planner.harness_local import decisions as D
+    record_decision(db, kind="данные", subject_kind="правило замещения",
+                    subject_id=str(sid), subject_digest=D.digest(position, action),
+                    scope="реестр", action=action, grounds=grounds)
+    actuality.mark_review(db, actuality.results(db),
+                          "изменены правила замещения: %s" % position)
+
+
+def contract_choice(checked, codes):
+    """Отмеченные договоры → пара (разрешены, запрещены) строки штатного.
+
+    Хранится одно из двух — то, что короче: отмечено не меньше половины —
+    запрещены неотмеченные, иначе разрешены отмеченные; отмечены все — без
+    ограничений. Так договор, добавленный в реестр позже, попадает к
+    сотруднику, у которого запрещены единицы, и не попадает к тому, у кого
+    разрешены единицы (решение пользователя 30.09.2026)."""
+    codes = list(dict.fromkeys(codes))
+    on = [c for c in codes if c in set(checked)]
+    off = [c for c in codes if c not in set(on)]
+    if not off:
+        return None, None
+    if not on:
+        raise HTTPException(400, "отметьте хотя бы один договор")
+    if len(on) * 2 >= len(codes):
+        return None, "; ".join(off)
+    return "; ".join(on), None
+
+
+@app.post("/api/employees/{code}/contracts")
+async def employee_contracts(code: str, request: Request):
+    """Договоры, на которых сотрудник может получать выплаты: {"checked":
+    [шифры]}. Правка ручная — следующий разбор того же штатного расписания
+    вернёт значения документа."""
+    body = await request.json()
+    db = session()
+    try:
+        row = db.query(Employee).filter_by(code=code).first()
+        if row is None:
+            raise HTTPException(404, "сотрудник не найден")
+        codes = [c.code for c in db.query(Contract).order_by(Contract.code).all()]
+        allowed, forbidden = contract_choice(body.get("checked") or [], codes)
+        was = {"разрешены": row.allowed_contracts, "запрещены": row.forbidden_contracts}
+        row.allowed_contracts, row.forbidden_contracts = allowed, forbidden
+        from fot_planner.harness_local import decisions as D
+        action = {"договоры сотрудника": code, "разрешены": allowed, "запрещены": forbidden,
+                  "было": was}
+        record_decision(db, kind="данные", subject_kind="сотрудник", subject_id=code,
+                        subject_digest=D.digest(code, action), scope="реестр", action=action,
+                        grounds="правка на вкладке «Штатное расписание»")
+        actuality.mark_review(db, actuality.results(db), "изменены договоры сотрудника %s" % code)
+        db.commit()
+        return {"ok": True, "allowed": allowed, "forbidden": forbidden}
+    finally:
+        db.close()
+
+
+@app.post("/api/substitutions")
+async def add_substitution(request: Request):
+    """Добавить правило замещения вручную (SOURCE-010).
+
+    {"position": должность, "replaced_by": [должности]}. Правило — строка без
+    документа: его не заменит и не сотрёт следующий файл правил."""
+    body = await request.json()
+    position = str(body.get("position") or "").strip()
+    if not position:
+        raise HTTPException(400, "нужна должность")
+    db = session()
+    try:
+        if db.query(Substitution).filter_by(position=position).first() is not None:
+            raise HTTPException(409, "правило для «%s» уже есть — измените его" % position)
+        row = Substitution(position=position, replaced_by=_subst_set(body.get("replaced_by")),
+                           source=SUBST_MANUAL, document_id=None)
+        db.add(row)
+        db.flush()
+        _subst_changed(db, row.id, position,
+                       {"добавлено правило": position, "набор": row.replaced_by},
+                       "«Добавить правило» на вкладке «Правила замещения»")
+        db.commit()
+        return {"ok": True, "id": row.id}
+    finally:
+        db.close()
+
+
+@app.patch("/api/substitutions/{sid}")
+async def edit_substitution(sid: int, request: Request):
+    """Изменить правило: должность или набор. Правило из документа после
+    правки становится ручным — иначе следующий разбор того же файла молча
+    вернул бы прежний набор (SOURCE-010)."""
+    body = await request.json()
+    db = session()
+    try:
+        row = db.get(Substitution, sid)
+        if row is None:
+            raise HTTPException(404, "правило не найдено")
+        was = {"должность": row.position, "набор": row.replaced_by, "источник": row.source}
+        if "position" in body:
+            position = str(body.get("position") or "").strip()
+            if not position:
+                raise HTTPException(400, "нужна должность")
+            other = db.query(Substitution).filter(Substitution.position == position,
+                                                  Substitution.id != sid).first()
+            if other is not None:
+                raise HTTPException(409, "правило для «%s» уже есть" % position)
+            row.position = position
+        if "replaced_by" in body:
+            row.replaced_by = _subst_set(body.get("replaced_by"))
+        row.source, row.document_id = SUBST_MANUAL, None
+        _subst_changed(db, sid, row.position,
+                       {"изменено правило": row.position, "набор": row.replaced_by, "было": was},
+                       "правка на вкладке «Правила замещения»")
+        db.commit()
+        return {"ok": True, "id": sid}
+    finally:
+        db.close()
+
+
+@app.delete("/api/substitutions/{sid}")
+def delete_substitution(sid: int):
+    """Удалить правило. Правило из документа вернётся, если файл разобрать
+    снова: это новый источник, а не отмена удаления (SOURCE-010)."""
+    db = session()
+    try:
+        row = db.get(Substitution, sid)
+        if row is None:
+            raise HTTPException(404, "правило не найдено")
+        was = {"удалено правило": row.position, "набор": row.replaced_by, "источник": row.source}
+        position = row.position
+        db.delete(row)
+        _subst_changed(db, sid, position, was, "«Удалить правило» на вкладке «Правила замещения»")
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+#: Источник строки трудоёмкости, введённой на вкладке договора.
+LABOR_MANUAL = "введено вручную"
+
+
+def _labor_fields(body, row):
+    """Поля ручной строки трудоёмкости — только переданные, с проверкой."""
+    if "year" in body:
+        raw = str(body.get("year") or "").strip()
+        if raw and not raw.isdigit():
+            raise HTTPException(400, "год — число, например 2026")
+        row.year = int(raw) if raw else None
+    if "position" in body:
+        row.position = str(body.get("position") or "").strip() or None
+    for key, attr in (("person_months", "person_months"), ("avg_cost", "avg_cost"),
+                      ("headcount", "headcount")):
+        if key in body:
+            raw = str(body.get(key) or "").replace(" ", "").replace("\u00a0", "")
+            raw = raw.replace(",", ".").replace("₽", "")
+            if not raw:
+                setattr(row, attr, None)
+                continue
+            try:
+                value = float(raw)
+            except ValueError:
+                raise HTTPException(400, "нужно число")
+            if value < 0:
+                raise HTTPException(400, "число не может быть отрицательным")
+            setattr(row, attr, value)
+
+
+def _labor_changed(db, rid, code, action, grounds):
+    """Журнал решений и пересмотр планов: трудоёмкость уходит в расчёт."""
+    from fot_planner.harness_local import decisions as D
+    record_decision(db, kind="данные", subject_kind="трудоёмкость",
+                    subject_id=str(rid), subject_digest=D.digest(code, action),
+                    scope="реестр", action=action, grounds=grounds)
+    actuality.mark_review(db, actuality.results(db),
+                          "изменена трудоёмкость договора %s" % code)
+
+
+def _labor_row(r):
+    return {"id": r.id, "contract": r.contract_code, "year": r.year,
+            "position": r.position, "person_months": r.person_months,
+            "avg_cost": r.avg_cost, "headcount": r.headcount, "source": r.source}
+
+
+@app.post("/api/labor")
+async def add_labor(request: Request):
+    """Строка трудоёмкости вручную: договор, год, должность, чел.-мес.,
+    стоимость единицы, специалистов. Строка без документа: следующий разбор
+    файла её не сотрёт."""
+    body = await request.json()
+    db = session()
+    try:
+        code = str(body.get("contract") or "").strip()
+        if db.query(Contract).filter_by(code=code).first() is None:
+            raise HTTPException(400, "нет договора «%s» в реестре" % code)
+        row = LaborRow(contract_code=code, source=LABOR_MANUAL, document_id=None)
+        _labor_fields(body, row)
+        db.add(row)
+        db.flush()
+        _labor_changed(db, row.id, code, {"добавлена строка": _labor_row(row)},
+                       "«Добавить строку» на вкладке «Трудоёмкость» договора")
+        db.commit()
+        return {"ok": True, "id": row.id}
+    finally:
+        db.close()
+
+
+@app.patch("/api/labor/{rid}")
+async def edit_labor(rid: int, request: Request):
+    """Правка ручной строки в ячейке. Строки из документа правят документом:
+    у них за агрегатом стоит расшифровка по этапам, и правка агрегата её бы
+    разорвала."""
+    body = await request.json()
+    db = session()
+    try:
+        row = db.get(LaborRow, rid)
+        if row is None:
+            raise HTTPException(404, "строка не найдена")
+        if row.document_id is not None:
+            raise HTTPException(409, "строка из документа — поправьте документ")
+        was = _labor_row(row)
+        _labor_fields(body, row)
+        _labor_changed(db, rid, row.contract_code,
+                       {"изменена строка": _labor_row(row), "было": was},
+                       "правка на вкладке «Трудоёмкость» договора")
+        db.commit()
+        return {"ok": True, "id": rid}
+    finally:
+        db.close()
+
+
+@app.delete("/api/labor/{rid}")
+def delete_labor(rid: int):
+    db = session()
+    try:
+        row = db.get(LaborRow, rid)
+        if row is None:
+            raise HTTPException(404, "строка не найдена")
+        if row.document_id is not None:
+            raise HTTPException(409, "строка из документа — удалите или замените документ")
+        was = _labor_row(row)
+        db.delete(row)
+        _labor_changed(db, rid, was["contract"], {"удалена строка": was},
+                       "«Удалить строку» на вкладке «Трудоёмкость» договора")
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+#: Источник строки надбавки 120, введённой на вкладке реестра (правило 10).
+SECRET_MANUAL = "введено вручную"
+_DMY = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
+
+
+def _secret_fields(db, body, row):
+    """Поля строки 120 из тела запроса — только переданные, с проверкой.
+
+    Сотрудник — код строки штатного расписания, договоры — шифры реестра,
+    ставка — доля (5 % приходит как 5 или 0,05), даты — ДД.ММ.ГГГГ или пусто."""
+    def text_of(key):
+        return str(body.get(key) or "").strip()
+    if "employee" in body:
+        code = text_of("employee")
+        if not code or db.query(Employee).filter_by(code=code).first() is None:
+            raise HTTPException(400, "нет сотрудника «%s» в штатном расписании" % code)
+        row.employee_code = code
+    for key, attr, need in (("contract", "secret_contract_code", True),
+                            ("pay_contract", "pay_contract_code", False)):
+        if key in body:
+            code = text_of(key)
+            if not code and not need:
+                setattr(row, attr, None)
+                continue
+            if db.query(Contract).filter_by(code=code).first() is None:
+                raise HTTPException(400, "нет договора «%s» в реестре" % code)
+            setattr(row, attr, code)
+    if "rate" in body:
+        raw = text_of("rate").replace(",", ".").replace("%", "")
+        try:
+            rate = float(raw)
+        except ValueError:
+            raise HTTPException(400, "ставка 120 — число, например 10 или 0,1")
+        rate = rate / 100 if rate > 1 else rate
+        if not 0 < rate <= 1:
+            raise HTTPException(400, "ставка 120 — от 0 до 100 %")
+        row.rate = rate
+    for key in ("date_from", "date_to"):
+        if key in body:
+            value = text_of(key)
+            if value and not _DMY.match(value):
+                raise HTTPException(400, "дата — ДД.ММ.ГГГГ")
+            setattr(row, key, value or None)
+
+
+def _secret_changed(db, sid, employee, action, grounds):
+    """Журнал решений и пересмотр посчитанных планов: лист 120 уходит в расчёт
+    каждого плана, как правила замещения."""
+    from fot_planner.harness_local import decisions as D
+    record_decision(db, kind="данные", subject_kind="надбавка 120",
+                    subject_id=str(sid), subject_digest=D.digest(employee, action),
+                    scope="реестр", action=action, grounds=grounds)
+    actuality.mark_review(db, actuality.results(db),
+                          "изменена надбавка 120: %s" % employee)
+
+
+def _secret_row(r):
+    return {"id": r.id, "employee": r.employee_code, "contract": r.secret_contract_code,
+            "rate": r.rate, "from": r.date_from, "to": r.date_to,
+            "pay_contract": r.pay_contract_code, "source": r.source}
+
+
+@app.post("/api/secret_allowances")
+async def add_secret_allowance(request: Request):
+    """Строка надбавки 120 вручную: сотрудник, договор секретности, ставка,
+    окно и закреплённый договор выплаты. У сотрудника строк может быть
+    несколько — по одной на договор секретности (правило 10, 18.09.2026)."""
+    body = await request.json()
+    db = session()
+    try:
+        row = SecretAllowance(source=SECRET_MANUAL, document_id=None, rate=0.05)
+        _secret_fields(db, body, row)
+        if not row.employee_code or not row.secret_contract_code:
+            raise HTTPException(400, "нужны сотрудник и договор секретности")
+        db.add(row)
+        db.flush()
+        _secret_changed(db, row.id, row.employee_code, {"добавлена строка": _secret_row(row)},
+                        "«Добавить» на вкладке «Надбавка 120»")
+        db.commit()
+        return {"ok": True, "id": row.id}
+    finally:
+        db.close()
+
+
+@app.patch("/api/secret_allowances/{sid}")
+async def edit_secret_allowance(sid: int, request: Request):
+    """Правка строки 120 в ячейке. Строка из документа после правки становится
+    ручной: следующий разбор файла её не перепишет."""
+    body = await request.json()
+    db = session()
+    try:
+        row = db.get(SecretAllowance, sid)
+        if row is None:
+            raise HTTPException(404, "строка не найдена")
+        was = _secret_row(row)
+        _secret_fields(db, body, row)
+        row.source, row.document_id = SECRET_MANUAL, None
+        _secret_changed(db, sid, row.employee_code,
+                        {"изменена строка": _secret_row(row), "было": was},
+                        "правка на вкладке «Надбавка 120»")
+        db.commit()
+        return {"ok": True, "id": sid}
+    finally:
+        db.close()
+
+
+@app.delete("/api/secret_allowances/{sid}")
+def delete_secret_allowance(sid: int):
+    db = session()
+    try:
+        row = db.get(SecretAllowance, sid)
+        if row is None:
+            raise HTTPException(404, "строка не найдена")
+        was = _secret_row(row)
+        db.delete(row)
+        _secret_changed(db, sid, was["employee"], {"удалена строка": was},
+                        "«Удалить» на вкладке «Надбавка 120»")
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+def _salary_amount(raw):
+    """Сумма из ячейки: «150 000,50», «150000.5» или число; пусто — None.
+
+    Ноль запрещён (решение пользователя 19.09.2026, «пока что»): месяц с
+    нулём среди оплачиваемых делает план нерешаемым — оклад держится блоком
+    не короче трёх месяцев."""
+    if raw is None or str(raw).strip() == "":
+        return None
+    text = str(raw).replace(" ", "").replace(" ", "").replace(" ", "")
+    try:
+        value = float(text.replace(",", "."))
+    except ValueError:
+        raise HTTPException(400, "нужна сумма числом")
+    if value <= 0:
+        raise HTTPException(400, "сумма должна быть больше нуля")
+    return round(value, 2)
+
+
+@app.put("/api/salary_months")
+async def set_salary_month(request: Request):
+    """Своя зарплата строки штатного расписания в месяце (решение пользователя
+    19.09.2026: зарплата меняется в течение года).
+
+    {"code": код строки, "year": год, "month": 1–12, "amount": сумма или пусто}.
+    Пусто — месяц снова берёт зарплату из штатного расписания. Зарплата общая
+    для организации и уходит в расчёт каждого плана этого года, поэтому
+    посчитанные планы помечаются к пересмотру, а правка пишется в журнал."""
+    body = await request.json()
+    code = str(body.get("code") or "").strip()
+    try:
+        year, month = int(body.get("year")), int(body.get("month"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "нужны год и месяц")
+    if not 1 <= month <= 12:
+        raise HTTPException(400, "месяц — от 1 до 12")
+    amount = _salary_amount(body.get("amount"))
+    db = session()
+    try:
+        if db.query(Employee).filter_by(code=code).first() is None:
+            raise HTTPException(404, "строка штатного расписания %s не найдена" % code)
+        was = salary.set_month(db, code, year, month, amount,
+                               row_id=int(body["row"]) if body.get("row") else None)
+        salary.changed(db, code, year, {"строка": code, "год": year, "месяц": month,
+                                        "сумма": amount, "было": was},
+                       "правка на вкладке «Заработная плата по месяцам»",
+                       "изменена зарплата строки %s за %02d.%d" % (code, month, year))
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/salary_rows")
+async def add_salary_row(request: Request):
+    """Добавить в таблицу зарплаты сотрудника, выбранного по ФИО из штатного
+    расписания. {"code": код строки, "year": год}. Сумм у новой строки нет:
+    месяцы берут зарплату штатного расписания, пока их не исправят, поэтому
+    расчёт от добавления не меняется."""
+    body = await request.json()
+    code = str(body.get("code") or "").strip()
+    try:
+        year = int(body.get("year"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "нужен год")
+    dept = int(body["dept"]) if body.get("dept") else None
+    db = session()
+    try:
+        if db.query(Employee).filter_by(code=code).first() is None:
+            raise HTTPException(404, "строка штатного расписания %s не найдена" % code)
+        if dept is not None and db.get(MgmtDepartment, dept) is None:
+            raise HTTPException(404, "управленческое подразделение не найдено")
+        # Строка человека — одна на подразделение (01.10.2026): вторая строка
+        # того же человека — в другом подразделении.
+        if db.query(SalaryRow).filter_by(employee_code=code, year=year,
+                                         mgmt_department_id=dept).first() is not None:
+            raise HTTPException(409, "строка %s в этом подразделении уже есть в таблице зарплаты"
+                                % code)
+        row = SalaryRow(employee_code=code, year=year, source=salary.MANUAL,
+                        mgmt_department_id=dept)
+        db.add(row)
+        db.flush()
+        salary.changed(db, code, year, {"добавлена строка": code, "год": year,
+                                        "подразделение": dept},
+                       "«Добавить сотрудника» на вкладке «Заработная плата по месяцам»",
+                       None)
+        db.commit()
+        return {"ok": True, "id": row.id}
+    finally:
+        db.close()
+
+
+@app.delete("/api/salary_rows/{rid}")
+def delete_salary_row(rid: int):
+    """Убрать строку из таблицы зарплаты вместе с её суммами: месяцы строки
+    остаются без зарплаты, пока их не зададут снова."""
+    db = session()
+    try:
+        row = db.get(SalaryRow, rid)
+        if row is None:
+            raise HTTPException(404, "строка не найдена")
+        code, year = row.employee_code, row.year
+        # Удаляется одна строка — строка этого подразделения (01.10.2026), а
+        # не все строки человека за год.
+        sums = db.query(SalaryMonth).filter_by(salary_row_id=row.id).all()
+        for s in sums:
+            db.delete(s)
+        db.delete(row)
+        salary.changed(db, code, year,
+                       {"удалена строка": code, "год": year,
+                        "суммы": {s.month: s.amount for s in sums}},
+                       "«Удалить» на вкладке «Заработная плата по месяцам»",
+                       "удалена строка зарплаты %s за %d" % (code, year) if sums else None)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+def _mgmt_rows(db, year):
+    """Строки зарплаты года с управленческим подразделением — во вход расчёта
+    (лист «управленческие_подразделения»): по ним раздел 16 отчёта делит
+    выплаты человека между подразделениями (01.10.2026). [(код строки,
+    подразделение или None, порядок, месяц, сумма)]."""
+    depts = {d.id: d for d in db.query(MgmtDepartment).all()}
+    rows = {r.id: r for r in db.query(SalaryRow).filter_by(year=year).all()}
+    out = []
+    for m in db.query(SalaryMonth).filter_by(year=year).order_by(SalaryMonth.id).all():
+        r = rows.get(m.salary_row_id)
+        d = depts.get(r.mgmt_department_id) if r is not None else None
+        out.append((m.employee_code, d.name if d else None, d.position if d else None,
+                    m.month, m.amount))
+    return out
+
+
+def _mgmt_list(db):
+    """Справочник управленческих подразделений: по порядку, затем по имени;
+    у каждого — число строк зарплаты."""
+    used = {}
+    for r in db.query(SalaryRow).filter(SalaryRow.mgmt_department_id.isnot(None)).all():
+        used[r.mgmt_department_id] = used.get(r.mgmt_department_id, 0) + 1
+    items = db.query(MgmtDepartment).all()
+    items.sort(key=lambda d: (d.position is None, d.position or 0, d.name.lower()))
+    return [{"id": d.id, "name": d.name, "position": d.position, "note": d.note,
+             "rows": used.get(d.id, 0)} for d in items]
+
+
+def _mgmt_name(db, raw, skip=None):
+    name = " ".join(str(raw or "").split())[:200]
+    if not name:
+        raise HTTPException(400, "нужно наименование подразделения")
+    for d in db.query(MgmtDepartment).all():
+        if d.id != skip and d.name.lower() == name.lower():
+            raise HTTPException(409, "подразделение «%s» уже есть" % d.name)
+    return name
+
+
+def _mgmt_logged(db, action, grounds):
+    from fot_planner.harness_local import decisions as D
+    record_decision(db, kind="данные", subject_kind="управленческое подразделение",
+                    subject_id=str(action.get("id") or action.get("наименование")),
+                    subject_digest=D.digest(action), scope="реестр", action=action,
+                    grounds=grounds)
+
+
+@app.post("/api/mgmt_departments")
+async def add_mgmt_department(request: Request):
+    """Завести управленческое подразделение: {"name", "position"?}. Расчёт от
+    этого не меняется — подразделения только в отчёте (раздел 16)."""
+    body = await request.json()
+    db = session()
+    try:
+        d = MgmtDepartment(name=_mgmt_name(db, body.get("name")),
+                           position=int(body["position"]) if body.get("position") else None)
+        db.add(d)
+        db.flush()
+        _mgmt_logged(db, {"заведено подразделение": d.name, "id": d.id},
+                     "вкладка «Управленческие подразделения»")
+        db.commit()
+        return {"ok": True, "id": d.id, "name": d.name}
+    finally:
+        db.close()
+
+
+@app.patch("/api/mgmt_departments/{did}")
+async def edit_mgmt_department(did: int, request: Request):
+    """Переименовать подразделение или задать порядок: строки зарплаты
+    ссылаются на него, поэтому новое имя у всех сразу."""
+    body = await request.json()
+    db = session()
+    try:
+        d = db.get(MgmtDepartment, did)
+        if d is None:
+            raise HTTPException(404, "подразделение не найдено")
+        was = {"наименование": d.name, "порядок": d.position}
+        if "name" in body:
+            d.name = _mgmt_name(db, body.get("name"), skip=did)
+        if "position" in body:
+            raw = body.get("position")
+            d.position = int(raw) if raw not in (None, "") else None
+        _mgmt_logged(db, {"изменено подразделение": d.name, "id": did, "было": was},
+                     "вкладка «Управленческие подразделения»")
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/mgmt_departments/{did}")
+def delete_mgmt_department(did: int):
+    """Удалить подразделение, на которое не ссылается ни одна строка
+    зарплаты: деньги строки не должны молча уйти в «Без подразделения»."""
+    db = session()
+    try:
+        d = db.get(MgmtDepartment, did)
+        if d is None:
+            raise HTTPException(404, "подразделение не найдено")
+        n = db.query(SalaryRow).filter_by(mgmt_department_id=did).count()
+        if n:
+            raise HTTPException(409, "у подразделения «%s» строк зарплаты: %d — сначала "
+                                "перенесите их" % (d.name, n))
+        _mgmt_logged(db, {"удалено подразделение": d.name, "id": did},
+                     "вкладка «Управленческие подразделения»")
+        db.delete(d)
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.patch("/api/salary_rows/{rid}")
+async def set_salary_row_department(rid: int, request: Request):
+    """Управленческое подразделение строки зарплаты: {"dept": id или пусто,
+    "from": месяц 1–12}. С января — исправление всей строки; с другого месяца
+    — перевод, как кадровый перевод в 1С: суммы с этого месяца уходят в
+    строку человека с новым подразделением (её нет — заводится; есть и в
+    тех же месяцах суммы — отказ с перечнем месяцев). Расчёт не меняется:
+    подразделение — только для отчёта; правка — в журнал."""
+    body = await request.json()
+    dept = int(body["dept"]) if body.get("dept") else None
+    try:
+        start = int(body.get("from") or 1)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "месяц — от 1 до 12")
+    if not 1 <= start <= 12:
+        raise HTTPException(400, "месяц — от 1 до 12")
+    db = session()
+    try:
+        row = db.get(SalaryRow, rid)
+        if row is None:
+            raise HTTPException(404, "строка не найдена")
+        if dept is not None and db.get(MgmtDepartment, dept) is None:
+            raise HTTPException(404, "управленческое подразделение не найдено")
+        if dept == row.mgmt_department_id:
+            return {"ok": True, "id": row.id}
+        moving = [m for m in db.query(SalaryMonth).filter_by(salary_row_id=row.id).all()
+                  if m.month >= start]
+        other = (db.query(SalaryRow).filter_by(employee_code=row.employee_code, year=row.year,
+                                               mgmt_department_id=dept)
+                 .filter(SalaryRow.id != row.id).first())
+        whole = start == 1 or not moving or len(moving) == db.query(SalaryMonth).filter_by(
+            salary_row_id=row.id).count()
+        if other is None and whole:
+            row.mgmt_department_id = dept
+            target = row
+        else:
+            if other is None:
+                other = SalaryRow(employee_code=row.employee_code, year=row.year,
+                                  source=salary.MANUAL, mgmt_department_id=dept)
+                db.add(other)
+                db.flush()
+            busy = sorted({m.month for m in db.query(SalaryMonth).filter_by(
+                salary_row_id=other.id).all()} & {m.month for m in moving})
+            if busy:
+                raise HTTPException(409, "у строки в этом подразделении уже есть суммы за "
+                                    "месяцы: %s" % ", ".join(str(m) for m in busy))
+            for m in moving:
+                m.salary_row_id = other.id
+            target = other
+            if whole and not db.query(SalaryMonth).filter_by(salary_row_id=row.id).count():
+                db.delete(row)
+        salary.changed(db, row.employee_code, row.year,
+                       {"подразделение строки": row.employee_code, "с месяца": start,
+                        "подразделение": dept}, "вкладка «Заработная плата по месяцам»", None)
+        db.commit()
+        return {"ok": True, "id": target.id}
+    finally:
+        db.close()
+
+
+@app.post("/api/document/{doc_id}/contract")
+async def assign_document_contract(doc_id: int, request: Request):
+    """Документ без шифра в шапке — в договор, названный экономистом (SOURCE-005).
+
+    Единственное место, где шифр вводят руками: документ, в котором его нет.
+    Договора с таким шифром может не быть — он заводится; строки документа
+    перечитываются уже под этим договором.
+    """
+    body = await request.json()
+    code = str(body.get("code") or "").strip()[:60]
+    if not code:
+        raise HTTPException(400, "нужен шифр договора")
+    db = session()
+    try:
+        doc = db.get(Document, doc_id)
+        if doc is None:
+            raise HTTPException(404, "документ не найден")
+        if db.query(Contract).filter_by(code=code).first() is None:
+            # Без document_id: договор назван экономистом, а не прочитан из
+            # документа. Строки документа при повторном разборе стираются —
+            # с привязкой стёрся бы и он.
+            db.add(Contract(code=code, source="шифр указан экономистом для «%s»" % doc.name))
+        doc.contract_code = code
+        from fot_planner.harness_local import decisions as D
+        record_decision(db, kind="данные", subject_kind="договор", subject_id=code,
+                        subject_digest=D.digest(code, doc.id), scope="реестр",
+                        action={"документ": doc.name, "в договор": code},
+                        grounds="шифр указан экономистом: в шапке документа его нет")
+        db.commit()
+        case = db.get(Case, doc.case_id) if doc.case_id else db.query(Case).first()
+        try:
+            # Приказ о рабочей группе читается своим разбором: общий искал бы в
+            # нём договоры и сотрудников заново и не нашёл бы состава группы.
+            if doc.kind == workgroup.KIND:
+                intake.run_workgroup(db, case, doc)
+            else:
+                intake.run_intake(db, case, doc)
+        except Exception as exc:  # noqa: BLE001
+            doc.state = "не распознан"
+            doc.summary = str(exc)[:300]
+            db.commit()
+        return {"ok": True, "code": code}
+    finally:
+        db.close()
+
+
+@app.get("/api/case/{case_id}/basis")
+def plan_basis(case_id: int):
+    """Каталог документов реестра по договорам и выбор плана (SOURCE-003).
+
+    План 0 — реестр открыт без плана: последние версии, все договоры в
+    расчёте, выбирать не для чего.
+    """
+    db = session()
+    try:
+        case = db.get(Case, case_id) if case_id else None
+        if case_id and case is None:
+            raise HTTPException(404, "план не найден")
+        return _basis_out(db, case)
+    finally:
+        db.close()
+
+
+def _basis_out(db, case):
+    """Основание плана для экрана: каталог документов и закрепления вместе.
+
+    Один вид у запроса и у сохранения: сохранение правки условий отдавало
+    каталог без закреплений, и таблица закреплений в панели пустела до
+    следующей загрузки страницы (пользователь 21.09.2026: «я меняю настройки
+    тут и меняются настройки в закрепить сотрудника»)."""
+    # Правки, с которыми реестр сравнялся, снимаются до показа (30.09.2026):
+    # экран не должен показывать правку, которой больше нечего править.
+    gone = basis.dissolve_caught_up(db, case)
+    out = basis.catalog(db, case)
+    out["dissolved"] = gone
+    if case is not None:
+        # Закрепления сотрудников — условия договоров этого плана: их
+        # показывают и правят в строке условий на вкладке «Договоры».
+        out["fixes"] = chat.plan_settings(case)["назначения"]
+        # Выплата членам рабочих групп в этом плане: «договор|сотрудник» →
+        # {виды, только, сумма}; нет ключа — по умолчанию «вся, по возможности».
+        out["workgroup_pay"] = chat.plan_settings(case).get("рабочие группы") or {}
+        # Месяцы факта начислений года плана и тот, по который расчёт его
+        # берёт, — из самого факта (30.09.2026).
+        out["fact_months"] = facts.months_available(db, case.year)
+        out["fact_through"] = _fact_through(db, case)
+    return out
+
+
+def _workgroup_rows(db):
+    """Состав рабочих групп для реестра: член группы вместе со своим приказом."""
+    orders = {o.id: o for o in db.query(WorkOrder).all()}
+    out = []
+    for m in db.query(WorkOrderMember).order_by(WorkOrderMember.order_id,
+                                                 WorkOrderMember.n).all():
+        o = orders.get(m.order_id)
+        if o is None:
+            continue
+        out.append({"id": m.id, "order_id": o.id, "document_id": o.document_id,
+                    "kind": o.kind, "number": o.number, "date": o.date,
+                    "base": ("№ %s от %s" % (o.base_number, o.base_date))
+                            if o.base_number else None,
+                    "contract": o.contract_code, "agreement": o.agreement,
+                    "account": o.account, "topic": o.topic,
+                    "from": o.date_from, "to": o.date_to,
+                    "action": m.action, "fio": m.fio, "person_code": m.person_code,
+                    "position": m.position, "department": m.department, "work": m.work,
+                    "leader": m.leader == "да", "employee": m.employee_code})
+    return out
+
+
+def _workgroup_current(db):
+    """Действующий состав рабочих групп — для расчёта плана (30.09.2026).
+
+    Группа складывается из приказов договора по датам: по каждой строке
+    штатного расписания решает последний приказ, где она названа, —
+    «включить» или «исключить». Строка, не сопоставленная со штатным
+    расписанием, в расчёт не идёт: платить некому. Срок — срок группы из
+    приказа, которым строка включена."""
+    def day(text):
+        p = str(text or "").strip().split(".")
+        try:
+            return (int(p[2]), int(p[1]), int(p[0])) if len(p) == 3 else (0, 0, 0)
+        except ValueError:
+            return (0, 0, 0)
+    orders = sorted(db.query(WorkOrder).filter(WorkOrder.contract_code.isnot(None)).all(),
+                    key=lambda o: (day(o.date), o.id))
+    last = {}
+    for o in orders:
+        for m in (db.query(WorkOrderMember).filter_by(order_id=o.id)
+                  .order_by(WorkOrderMember.n, WorkOrderMember.id).all()):
+            if m.employee_code:
+                last[(o.contract_code, m.employee_code)] = (o, m)
+    out = []
+    for (code, emp), (o, m) in last.items():
+        if (m.action or "").strip().lower() == "исключить":
+            continue
+        out.append({"договор": code, "сотрудник": emp, "фио": m.fio,
+                    "с": o.date_from, "по": o.date_to,
+                    "приказ": "№ %s от %s" % (o.number or "?", o.date or "?")})
+    return sorted(out, key=lambda r: (r["договор"], r["сотрудник"]))
+
+
+def _workorders(db):
+    """Приказы о рабочих группах для реестра: строка — приказ, не человек.
+
+    Людей здесь нет — они во вкладке «Рабочая группа» договора; здесь то, что
+    нужно для разбора пачки: к какому договору лёг приказ, сколько в нём
+    людей и сколько из них не нашлось в штатном расписании."""
+    docs = {d.id: d for d in db.query(Document).all()}
+    counts = {}
+    for m in db.query(WorkOrderMember).all():
+        n, lost = counts.get(m.order_id, (0, 0))
+        counts[m.order_id] = (n + 1, lost + (m.employee_code is None))
+    out = []
+    for o in db.query(WorkOrder).order_by(WorkOrder.id).all():
+        n, lost = counts.get(o.id, (0, 0))
+        d = docs.get(o.document_id)
+        out.append({"id": o.id, "document_id": o.document_id,
+                    "file": d.name if d else o.source, "kind": o.kind,
+                    "number": o.number, "date": o.date,
+                    "base": ("№ %s от %s" % (o.base_number, o.base_date))
+                            if o.base_number else None,
+                    "contract": o.contract_code, "agreement": o.agreement,
+                    "account": o.account, "topic": o.topic, "leader": o.leader,
+                    "from": o.date_from, "to": o.date_to,
+                    "people": n, "lost": lost})
+    return out
+
+
+@app.post("/api/workorder/{order_id}/contract")
+async def workorder_contract(order_id: int, request: Request):
+    """Договор приказа о рабочей группе — выбором экономиста, когда разбор его
+    не нашёл или нашёл не тот: {"code": шифр} или {"code": null}."""
+    body = await request.json()
+    db = session()
+    try:
+        o = db.get(WorkOrder, order_id)
+        if o is None:
+            raise HTTPException(404, "приказ не найден")
+        code = str(body.get("code") or "").strip() or None
+        if code and db.query(Contract).filter_by(code=code).first() is None:
+            raise HTTPException(404, "договор %s не найден" % code)
+        o.contract_code = code
+        doc = db.get(Document, o.document_id) if o.document_id else None
+        if doc is not None:
+            doc.contract_code = code
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/workorder/member/{member_id}")
+async def workorder_member(member_id: int, request: Request):
+    """Строка штатного расписания члена группы — выбором экономиста:
+    {"employee": код строки} или {"employee": null}. Строка, а не человек:
+    в группу входит связка «человек + должность» (28.09.2026)."""
+    body = await request.json()
+    db = session()
+    try:
+        m = db.get(WorkOrderMember, member_id)
+        if m is None:
+            raise HTTPException(404, "строка группы не найдена")
+        code = str(body.get("employee") or "").strip() or None
+        if code and db.query(Employee).filter_by(code=code).first() is None:
+            raise HTTPException(404, "строка %s не найдена в штатном расписании" % code)
+        m.employee_code = code
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+def _fix_key(x, code, contract, kind):
+    return x["сотрудник"] == code and x["договор"] == contract and x["вид"] == kind
+
+
+@app.post("/api/case/{case_id}/fixes/workgroup")
+async def set_workgroup_pay(case_id: int, request: Request):
+    """Выплата члену рабочей группы договора в этом плане (пользователь
+    30.09.2026: «какую выплату ему дать, решает расчёт — это можно задать,
+    только удалить нельзя, если не задано — то по возможности ВСЮ»).
+
+    {"employee", "contract", "kinds": [виды], "only": да/нет, "amount"}.
+    Пустые виды без «only» — по умолчанию: вся зарплата с договора по
+    возможности. «only» — вся зарплата: прочие договоры плана ему запрещены.
+    Названные виды — хотя бы одна выплата каждого; сумма — у одного вида.
+    Сам член группы из закреплений не снимается: состав меняется приказом."""
+    body = await request.json()
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        code = str(body.get("employee") or "").strip()
+        contract = str(body.get("contract") or "").strip()
+        members = {(g["договор"], g["сотрудник"]) for g in _workgroup_current(db)}
+        if (contract, code) not in members:
+            raise HTTPException(404, "сотрудник %s не входит в рабочую группу договора %s"
+                                % (code, contract))
+        kinds = []
+        for k in body.get("kinds") or []:
+            k = str(k or "").strip().lower()
+            if not k or k == "любой" or k in kinds:
+                continue
+            if k not in chat.KINDS:
+                raise HTTPException(400, "неизвестный вид выплаты «%s»" % k)
+            kinds.append(k)
+        only = bool(body.get("only"))
+        if only and kinds:
+            raise HTTPException(400, "«вся зарплата» задаётся без названных видов выплат")
+        amount = None
+        if body.get("amount") not in (None, ""):
+            if len(kinds) != 1:
+                raise HTTPException(400, "сумма задаётся, когда назван один вид выплаты")
+            amount = _salary_amount(body.get("amount"))
+        if only:
+            # Вся зарплата отсюда и работа по другому договору — спор двух
+            # условий, а не выбор расчёта (как у закреплений, 21.09.2026).
+            others = sorted({c for c, e in members if e == code and c != contract}
+                            | {x["договор"] for x in chat.plan_settings(case)["назначения"]
+                               if x["сотрудник"] == code and x["договор"] != contract})
+            if others:
+                raise HTTPException(409, "сотрудник закреплён и на договоре %s: «вся "
+                                    "зарплата» с %s невыполнима" % (", ".join(others), contract))
+        d = chat.plan_settings(case)
+        pay = dict(d.get("рабочие группы") or {})
+        key = "%s|%s" % (contract, code)
+        if kinds or only:
+            pay[key] = {"виды": kinds, "только": only, "сумма": amount}
+        else:
+            pay.pop(key, None)
+        d["рабочие группы"] = pay
+        chat._save_plan_settings(db, case, d, "выплата члену рабочей группы договора %s: %s — %s"
+                                 % (contract, code, "вся зарплата" if only
+                                    else ", ".join(kinds) if kinds else "вся, по возможности"))
+        db.commit()
+        return {"ok": True, "choice": pay.get(key)}
+    finally:
+        db.close()
+
+
+@app.post("/api/case/{case_id}/fixes")
+async def add_fix(case_id: int, request: Request):
+    """Закрепить сотрудника за договором плана на срок (решение пользователя
+    19.09.2026) — тот же список, что заполняет чат (plan_settings).
+
+    {"employee": код строки, "contract": шифр, "from": 1–12, "to": 1–12,
+    "kind": вид выплаты или пусто, "amount": сумма в месяц — только у вида,
+    "replaces": вид правимой строки, если его сменили}.
+    Вид не задан — «любой»: в каждом месяце срока сотрудник получает с этого
+    договора хотя бы одну выплату, какую — решает расчёт."""
+    body = await request.json()
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        code = str(body.get("employee") or "").strip()
+        emp = db.query(Employee).filter_by(code=code).first()
+        if emp is None:
+            raise HTTPException(404, "сотрудник %s не найден в штатном расписании" % code)
+        contract = str(body.get("contract") or "").strip()
+        if db.query(Contract).filter_by(code=contract).first() is None:
+            raise HTTPException(404, "договор %s не найден" % contract)
+        try:
+            a, b = int(body.get("from")), int(body.get("to"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "нужен срок: месяц «с» и месяц «по»")
+        if not 1 <= a <= b <= 12:
+            raise HTTPException(400, "срок — месяцы от 1 до 12, «с» не позже «по»")
+        # Строка таблицы — пара «сотрудник — договор»: названные виды
+        # приходят списком и заменяют все прежние записи пары (решение
+        # пользователя 21.09.2026: «множественный выбор»). Одиночный «kind»
+        # остаётся для чата и правки одной ячейки.
+        pair = isinstance(body.get("kinds"), list)
+        if pair:
+            kinds = []
+            for k in body["kinds"]:
+                k = str(k or "").strip().lower()
+                if not k or k == "любой" or k in kinds:
+                    continue
+                if k not in chat.KINDS:
+                    raise HTTPException(400, "неизвестный вид выплаты «%s»" % k)
+                kinds.append(k)
+            kinds = kinds or ["любой"]
+        else:
+            kind = str(body.get("kind") or "").strip().lower() or "любой"
+            if kind != "любой" and kind not in chat.KINDS:
+                raise HTTPException(400, "неизвестный вид выплаты «%s»" % kind)
+            kinds = [kind]
+        # «Вся зарплата с этого договора» — то же закрепление любым видом,
+        # плюс запрет платить этому человеку с прочих договоров плана
+        # (решение пользователя 21.09.2026). Запреты не хранятся: они
+        # выводятся из признака перед расчётом (_apply_plan_settings).
+        only = bool(body.get("only"))
+        if only and kinds != ["любой"]:
+            raise HTTPException(400, "«вся зарплата» задаётся без названных видов выплат")
+        amount = None
+        if body.get("amount") not in (None, ""):
+            if kinds == ["любой"]:
+                raise HTTPException(400, "сумма задаётся только вместе с видом выплаты")
+            if len(kinds) > 1:
+                raise HTTPException(400, "сумма задаётся, когда назван один вид выплаты")
+            amount = _salary_amount(body.get("amount"))
+        d = chat.plan_settings(case)
+        if only:
+            # Человек не может получать всю зарплату отсюда и быть закреплён
+            # на другом договоре: это спор двух условий, а не выбор расчёта.
+            others = sorted({x["договор"] for x in d["назначения"]
+                             if x["сотрудник"] == emp.code and x["договор"] != contract})
+            if others:
+                raise HTTPException(409, "у сотрудника есть закрепление на договоре %s: "
+                                    "снимите его или выберите другой вид выплаты"
+                                    % ", ".join(others))
+        recs = [{"сотрудник": emp.code, "фио": emp.fio, "договор": contract, "с": a, "по": b,
+                 "вид": k, "сумма": amount if len(kinds) == 1 else None}
+                for k in kinds]
+        if only:
+            for r in recs:
+                r["только"] = True
+        # Правка строки в таблице может сменить вид: прежняя запись той же
+        # пары снимается этим же сохранением, а не отдельным запросом.
+        was = str(body.get("replaces") or "").strip().lower()
+        drop = set(kinds) | ({was} - {""})
+        same_pair = lambda x: x["сотрудник"] == emp.code and x["договор"] == contract
+        # Закрепление и запрет той же пары и вида взаимоисключают друг друга —
+        # как в чате (chat.apply_fixes). «Любой» снимает запреты пары целиком.
+        d["запреты"] = [x for x in d["запреты"]
+                        if not (same_pair(x) and (kinds == ["любой"] or x["вид"] in drop))]
+        d["назначения"] = [x for x in d["назначения"]
+                           if not (same_pair(x) and (pair or x["вид"] in drop))] + recs
+        chat._save_plan_settings(db, case, d,
+                                 "закрепление в условиях договора %s: %s, месяцы %d–%d, %s"
+                                 % (contract, emp.fio or emp.code, a, b,
+                                    "вся зарплата" if only else ", ".join(kinds)))
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/case/{case_id}/fixes")
+async def delete_fix(case_id: int, request: Request):
+    """Снять закрепление: {"employee", "contract", "kind"}; {"all": true} —
+    все виды пары, потому что строка таблицы — пара «сотрудник — договор»."""
+    body = await request.json()
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        code = str(body.get("employee") or "").strip()
+        contract = str(body.get("contract") or "").strip()
+        kind = str(body.get("kind") or "").strip().lower() or "любой"
+        whole = bool(body.get("all"))
+        d = chat.plan_settings(case)
+        kept = [x for x in d["назначения"]
+                if not (x["сотрудник"] == code and x["договор"] == contract
+                        and (whole or x["вид"] == kind))]
+        if len(kept) == len(d["назначения"]):
+            raise HTTPException(404, "закрепление не найдено")
+        d["назначения"] = kept
+        chat._save_plan_settings(db, case, d, "снято закрепление в условиях договора %s: %s, %s"
+                                 % (contract, code, "все виды" if whole else kind))
+        db.commit()
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+# ── проекты приказов из расчёта плана (30.09.2026) ─────────────────────
+#: Виды выплат, переход которых между договорами — смена источника.
+_ORDER_MOVABLE = ("оклад", "120", "122", "124", "152")
+_ORDER_KIND_RANK = {k: i for i, k in enumerate(("оклад", "120", "122", "124", "152", "приказ"))}
+_ORDER_RANK = {"стимулирующая": 0, "надбавка": 1, "источник": 2, "состав группы": 3}
+
+
+def _order_run(db, case, run_id=None):
+    """Расчёт, по которому собираются приказы: выбранный в шапке плана или
+    последний удачный; None — удачного расчёта нет. Расчёт без файлов —
+    ошибка, а не молчаливая подмена другим расчётом или закреплениями."""
+    if run_id:
+        run = db.get(Run, run_id)
+        if run is None or run.case_id != case.id or run.status != "OPTIMAL":
+            raise HTTPException(404, "расчёт не найден")
+    else:
+        run = (db.query(Run).filter_by(case_id=case.id, status="OPTIMAL")
+               .order_by(Run.id.desc()).first())
+        if run is None:
+            return None
+    if not (run.result_path and os.path.exists(run.result_path)):
+        raise HTTPException(409, "Проекты приказов недоступны: файлы прогона не сохранены")
+    return run
+
+
+def _order_changes(plan, frozen=0):
+    """Что меняется у сотрудников по месяцам — строки приказов: одно
+    изменение — одна строка одного приказа (спецификация дизайнера
+    30.09.2026).
+
+    Стимулирующая — выплата «приказ» договора в месяце. Вид выплаты (оклад,
+    120–152) у одного договора убыл, у другого прибыл — это смена источника:
+    приказ у договора с наибольшим приростом (решение 30.09.2026: приказ
+    издают в связи с новым источником), строки — все договоры, где вид
+    изменился, и в «надбавки» этого месяца вид не идёт. Иначе надбавка
+    договора появилась, изменилась или прекратилась — «надбавка». Оклад без
+    перехода (смена ставки) приказом этих видов не оформляется. Январь
+    сравнивать не с чем: надбавки в нём — «установить» (решение 30.09.2026:
+    план года начинается своими приказами). Месяцы факта (по frozen) уже
+    прошли — строк нет, но с последним из них сравнивается первый месяц
+    плана."""
+    amt = {}
+    for p in plan:
+        key = (p["emp"], p["month"], p["contract"], p["kind"])
+        amt[key] = amt.get(key, 0.0) + float(p["amount"] or 0)
+    emps = sorted({p["emp"] for p in plan})
+    contracts = sorted({p["contract"] for p in plan})
+
+    def line(order_kind, owner, m, emp, kind, where, was, now_, act=None):
+        return {"приказ": order_kind, "договор": owner, "месяц": m, "сотрудник": emp,
+                "вид": kind, "договор строки": where, "действие": act,
+                "было": round(was, 2) if was > 0.5 else None,
+                "стало": round(now_, 2) if now_ > 0.5 else None}
+
+    out = []
+    for emp in emps:
+        for m in range(int(frozen or 0) + 1, 13):
+            for c in contracts:
+                v = amt.get((emp, m, c, "приказ"), 0.0)
+                if v > 0.5:
+                    out.append(line("стимулирующая", c, m, emp, "приказ", c, 0.0, v))
+            for k in _ORDER_MOVABLE:
+                was = {c: amt.get((emp, m - 1, c, k), 0.0) if m > 1 else 0.0 for c in contracts}
+                now_ = {c: amt.get((emp, m, c, k), 0.0) for c in contracts}
+                moved = [c for c in contracts if abs(now_[c] - was[c]) > 0.5]
+                up = [c for c in moved if now_[c] > was[c]]
+                down = [c for c in moved if now_[c] < was[c]]
+                if up and down:
+                    owner = sorted(up, key=lambda c: (-(now_[c] - was[c]), c))[0]
+                    for c in moved:
+                        out.append(line("источник", owner, m, emp, k, c, was[c], now_[c]))
+                elif k != "оклад":
+                    for c in moved:
+                        act = ("установить" if was[c] <= 0.5 else "прекратить" if now_[c] <= 0.5
+                               else "изменить")
+                        out.append(line("надбавка", c, m, emp, k, c, was[c], now_[c], act))
+    return out
+
+
+def _ru_date(text):
+    """«28.07.2022» или «28.07.22» → (год, месяц, день); не дата — None."""
+    p = str(text or "").strip().split(".")
+    try:
+        y, m, d = int(p[2]), int(p[1]), int(p[0])
+    except (IndexError, ValueError):
+        return None
+    return (y + 2000 if y < 100 else y, m, d)
+
+
+def _group_base(db, code):
+    """Приказ, в который вносятся изменения: последний приказ о создании
+    группы договора (нет такого — последний любой); None — группы нет."""
+    orders = sorted(db.query(WorkOrder).filter_by(contract_code=code).all(),
+                    key=lambda o: (_ru_date(o.date) or (0, 0, 0), o.id))
+    made = [o for o in orders if o.kind == "создание"]
+    return (made or orders or [None])[-1]
+
+
+def _group_changes(db, plan, frozen, year):
+    """Изменения состава рабочих групп по расчёту — строки приказа о внесении
+    изменений (UI-023, решения пользователя 12.10.2026). «Включить» — того,
+    кому расчёт платит с договора выплату любого вида и кого нет в
+    действующем составе группы, с 1-го числа месяца первой выплаты.
+    «Исключить» — члена группы, которому с договора ничего не платят, с
+    1-го числа месяца, с которого выплаты прекратились (в пределах срока
+    группы). Только договоры, у которых группа уже есть: приказ о создании
+    сервис не формирует. Месяцы факта приказов не дают."""
+    first = int(frozen or 0) + 1
+    paid = {}
+    for p in plan:
+        if float(p["amount"] or 0) > 0.5:
+            paid.setdefault((p["contract"], p["emp"]), set()).add(int(p["month"]))
+    with_group = {o.contract_code for o in db.query(WorkOrder)
+                  .filter(WorkOrder.contract_code.isnot(None)).all()}
+    members = {}
+    for r in _workgroup_current(db):
+        members.setdefault(r["договор"], {})[r["сотрудник"]] = r
+
+    def months(r):
+        """Месяцы года, в которые строка состоит в группе по сроку приказа."""
+        start, end = _ru_date(r.get("с")), _ru_date(r.get("по"))
+        lo = 1 if not start or start[0] < year else 13 if start[0] > year else start[1]
+        hi = 12 if not end or end[0] > year else 0 if end[0] < year else end[1]
+        return range(lo, hi + 1)
+
+    def line(code, m, emp, act):
+        return {"приказ": "состав группы", "договор": code, "месяц": m, "сотрудник": emp,
+                "вид": "", "договор строки": code, "действие": act, "было": None,
+                "стало": None}
+
+    out = []
+    for code in sorted({c for c, _ in paid} & with_group):
+        group = members.get(code, {})
+        for (c, emp), got in sorted(paid.items()):
+            if c != code or emp in group:
+                continue
+            later = [m for m in got if m >= first]
+            if later:
+                out.append(line(code, min(later), emp, "включить"))
+        for emp, r in sorted(group.items()):
+            term = months(r)
+            if not term:
+                continue
+            inside = [m for m in paid.get((code, emp), ()) if m in term]
+            start = max(max(inside) + 1 if inside else term[0], first)
+            if start <= term[-1]:
+                out.append(line(code, start, emp, "исключить"))
+    return out
+
+
+def _order_lines(db, case, plan, frozen):
+    """Все строки проектов приказов расчёта: выплаты и состав рабочих групп."""
+    return (_order_changes(plan, frozen)
+            + _group_changes(db, plan, frozen, case.year or time.localtime().tm_year))
+
+
+def _order_source(db, case, run_id=None):
+    """(план выплат, ставки, расчёт, месяцы факта) расчёта для приказов;
+    None — удачного расчёта нет."""
+    import rules as rules_mod
+    run = _order_run(db, case, run_id)
+    if run is None:
+        return None
+    res = rules_mod._read_result(run.result_path)
+    return res["plan"], res.get("rates") or [], run, int(res.get("frozen") or 0)
+
+
+def _order_sorted(lines, staff):
+    """Строки приказа: сотрудники по ФИО, внутри — вид выплаты, договор."""
+    fio = lambda code: str((staff.get(code).fio if staff.get(code) else None) or code)  # noqa: E731
+    return sorted(lines, key=lambda r: (fio(r["сотрудник"]), _ORDER_KIND_RANK.get(r["вид"], 9),
+                                        r["договор строки"]))
+
+
+def _orders(db, lines):
+    """Приказы: вид × договор × месяц, строки — изменения по сотрудникам."""
+    staff = {e.code: e for e in db.query(Employee).all()}
+    names = {c.code: c.name for c in db.query(Contract).all()}
+    groups = {}
+    for ln in lines:
+        groups.setdefault((ln["приказ"], ln["договор"], ln["месяц"]), []).append(ln)
+    out = []
+    for (kind, contract, month), rows in groups.items():
+        rows = _order_sorted(rows, staff)
+        before = [r["было"] for r in rows if r["было"] is not None]
+        after = [r["стало"] for r in rows if r["стало"] is not None]
+        out.append({
+            "key": "%s|%s|%d" % (kind, contract, month), "kind": kind,
+            "title": order.ORDER_TYPES[kind]["name"], "contract": contract,
+            "contract_name": names.get(contract), "month": month,
+            "kinds": sorted({r["вид"] for r in rows if r["вид"]},
+                            key=lambda k: _ORDER_KIND_RANK.get(k, 9)),
+            "people": len({r["сотрудник"] for r in rows}),
+            "before": round(sum(before), 2) if before else None,
+            "after": round(sum(after), 2) if after else None,
+            "lines": [{"employee": r["сотрудник"],
+                       "fio": (staff[r["сотрудник"]].fio if r["сотрудник"] in staff else None)
+                       or r["сотрудник"],
+                       "person_code": (staff[r["сотрудник"]].person_code
+                                       if r["сотрудник"] in staff else None) or r["сотрудник"],
+                       "position": (staff[r["сотрудник"]].position
+                                    if r["сотрудник"] in staff else None),
+                       "kind": r["вид"], "contract": r["договор строки"], "action": r["действие"],
+                       "before": r["было"], "after": r["стало"]} for r in rows]})
+    out.sort(key=lambda o: (o["month"], o["contract"], _ORDER_RANK.get(o["kind"], 9)))
+    return out
+
+
+@app.get("/api/case/{case_id}/orders")
+def plan_orders(case_id: int, run: int | None = None):
+    """Проекты приказов плана — по расчёту, выбранному в шапке, иначе по
+    последнему удачному (решение пользователя 28.09.2026: «отдельная вкладка
+    приказы»; 30.09.2026: «по конкретному договору выбрать тип — приказ, в
+    выбранный месяц для выбранного сотрудника, чтоб в шаблон подставилось и
+    выгрузилось»; о каскаде выборов: «форма выбора приказа на сотрудника не
+    продуманная»). Строка — приказ вида × договора × месяца со списком
+    сотрудников (Т-11а), строки сотрудников — для приказа на одного (Т-11).
+    Закрепление с выплатой «приказ» расчёт исполняет — оно приходит сюда
+    стимулирующей выплатой с той суммой, что расчёт платит."""
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        src = _order_source(db, case, run)
+        if src is None:
+            return {"run": None, "frozen": 0, "orders": []}
+        plan, _rates, used, frozen = src
+        return {"run": used.id, "frozen": frozen,
+                "orders": _orders(db, _order_lines(db, case, plan, frozen))}
+    finally:
+        db.close()
+
+
+@app.get("/api/case/{case_id}/orders/file")
+def plan_order_file(case_id: int, kind: str, contract: str, month: int,
+                    run: int | None = None, employee: str | None = None):
+    """Приказ файлом Word: весь (все сотрудники, Т-11а) или на одного
+    сотрудника (employee, Т-11). Бланк — шаблон организации
+    data/templates/<вид>.docx, если он есть, иначе бланк сервиса."""
+    from db import DATA_DIR
+    if kind not in order.ORDER_TYPES:
+        raise HTTPException(400, "неизвестный вид приказа «%s»" % kind)
+    if not 1 <= month <= 12:
+        raise HTTPException(400, "месяц — от 1 до 12")
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        src = _order_source(db, case, run)
+        if src is None:
+            raise HTTPException(404, "расчёта плана нет: приказы собираются по нему")
+        plan, rates, _used, frozen = src
+        lines = [ln for ln in _order_lines(db, case, plan, frozen)
+                 if ln["приказ"] == kind and ln["договор"] == contract and ln["месяц"] == month
+                 and (not employee or ln["сотрудник"] == employee)]
+        if not lines:
+            raise HTTPException(404, "такого приказа в расчёте нет")
+        staff = {e.code: e for e in db.query(Employee).all()}
+        ctrs = {c.code: c for c in db.query(Contract).all()}
+        rate_of = {(r["emp"], r["contract"], r["month"]): r["rate"] for r in rates}
+        c = ctrs.get(contract)
+        rows = []
+        for ln in _order_sorted(lines, staff):
+            e = staff.get(ln["сотрудник"])
+            rows.append({"фио": (e.fio if e else None) or ln["сотрудник"],
+                         "табельный": (e.person_code if e else None) or ln["сотрудник"],
+                         "должность": e.position if e else None,
+                         "подразделение": e.department if e else None,
+                         "ставка": rate_of.get((ln["сотрудник"], ln["договор строки"], month)),
+                         "вид": ln["вид"], "действие": ln["действие"],
+                         "было": ln["было"], "стало": ln["стало"],
+                         "договор": ln["договор строки"],
+                         "счёт": ctrs[ln["договор строки"]].account
+                         if ln["договор строки"] in ctrs else None})
+        data = {"тип": kind, "организация": None, "договор": contract,
+                "наименование": c.name if c else None, "номер договора": c.number if c else None,
+                "счёт": c.account if c else None, "месяц": month, "год": case.year,
+                "строки": rows}
+        if kind == "состав группы":
+            # Поля — те, что разбор приказа-входа читает обратно (app/workgroup.py):
+            # подписанный приказ, загруженный в договор, меняет группу без правки.
+            base = _group_base(db, contract)
+            year = case.year or time.localtime().tm_year
+            data["группа"] = {
+                "основание номер": base.number if base else None,
+                "основание дата": base.date if base else None,
+                "соглашение": base.agreement if base else None,
+                "соглашение дата": base.agreement_date if base else None,
+                "тема": base.topic if base else None,
+                "с": "01.%02d.%d" % (month, year),
+                "по": (base.date_to if base and _ru_date(base.date_to) else "31.12.%d" % year)}
+            if base and base.account and not data["счёт"]:
+                data["счёт"] = base.account
+        name = order.file_name(data, one=bool(employee))
+        return Response(
+            order.build_order(data, os.path.join(DATA_DIR, "templates")),
+            media_type=("application/vnd.openxmlformats-officedocument"
+                        ".wordprocessingml.document"),
+            headers={"Content-Disposition": "attachment; filename*=UTF-8''%s" % quote(name)})
+    finally:
+        db.close()
+
+
+@app.get("/api/order/templates")
+def order_templates():
+    """Заготовки бланков приказов одним архивом — для того, кто делает бланк
+    организации: поля {Имя} и их перечень. Бланк кладут в
+    data/templates/<вид>.docx под тем же именем. На экране этой кнопки нет:
+    экономисту она не нужна (пользователь 30.09.2026 о ней: «зачем эта
+    кнопка?»)."""
+    name = "Заготовки бланков приказов.zip"
+    return Response(order.templates_zip(), media_type="application/zip",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''%s"
+                             % quote(name)})
+
+
+@app.post("/api/case/{case_id}/basis")
+async def change_plan_basis(case_id: int, request: Request):
+    """Флажок договоров или версия документа — для этого плана.
+
+    {"contracts": [шифры], "included": да/нет} или {"document": первая версия,
+    "version": выбранная}. Ответ — каталог после изменения.
+    """
+    body = await request.json()
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        if isinstance(body.get("contracts"), list):
+            basis.set_included(db, case, body["contracts"], bool(body.get("included")),
+                               grounds="флажок договора в реестре")
+        elif isinstance(body.get("employees"), list):
+            # Строки штатного расписания в расчёте этого плана (30.09.2026).
+            basis.set_staff_included(db, case, body["employees"], bool(body.get("included")),
+                                     grounds="флажок на вкладке «Штатное расписание» плана")
+        elif body.get("contract") and isinstance(body.get("fields"), dict):
+            # Условия договора для этого плана (SOURCE-006): пустое значение
+            # снимает переопределение и возвращает реестровое.
+            basis.set_overrides(db, case, body["contract"], body["fields"],
+                                grounds="условия договора на экране договора")
+        elif body.get("employee") and isinstance(body.get("fields"), dict):
+            # Строка штатного расписания в этом плане (30.09.2026): ставка,
+            # срок, зарплата по месяцам; пустое значение снимает правку.
+            try:
+                basis.set_employee_overrides(db, case, body["employee"], body["fields"],
+                                             grounds="строка на вкладке «Штатное расписание» "
+                                                    "или «Заработная плата по месяцам» плана")
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        elif body.get("document") is not None and body.get("version") is not None:
+            try:
+                basis.set_version(db, case, int(body["document"]), int(body["version"]),
+                                  grounds="версия документа в реестре")
+            except LookupError as e:
+                raise HTTPException(404, str(e))
+            except ValueError as e:
+                raise HTTPException(409, str(e))
+        else:
+            raise HTTPException(400, "нужны contracts или employees с included "
+                                     "либо document и version")
+        return _basis_out(db, case)
+    finally:
+        db.close()
+
+
 @app.post("/api/case/{case_id}/upload")
 async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFile],
-                 scope: str = fastapi.Form("реестр")):
+                 scope: str = fastapi.Form("реестр"), contract: str = fastapi.Form(""),
+                 version_of: str = fastapi.Form("")):
     # «план» — песочница: документ виден чату этого плана, разбор дает только
     # предложения, строки в реестр не идут.
     scope = "план" if str(scope).strip().lower() == "план" else "реестр"
+    # Загрузка в договор: файл встаёт в каталог этого договора (SOURCE-003).
+    contract = str(contract or "").strip()[:60] or None
     db = session()
     try:
         case = db.get(Case, case_id)
@@ -575,9 +2410,20 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
             # Тот же файл уже есть — это новая версия, а не сосед. Прежняя
             # остается для истории, но ее строки уходят из реестра: кормить
             # расчет двумя редакциями одного документа нельзя.
-            prev = (db.query(Document).filter_by(name=name)
-                    .filter(Document.state != "заменен")
-                    .order_by(Document.id.desc()).first())
+            prev = _previous_version(db, name, contract)
+            # Новая версия в выбранный документ (как в Confluence): файл встаёт
+            # в его цепочку, как бы он ни назывался (решение пользователя
+            # 18.09.2026). Цепочку продолжает её действующая версия.
+            if str(version_of or "").strip().isdigit():
+                chosen = db.get(Document, int(version_of))
+                while chosen is not None and chosen.state == "заменен":
+                    nxt = db.query(Document).filter_by(supersedes_id=chosen.id).first()
+                    if nxt is None:
+                        break
+                    chosen = nxt
+                if chosen is None:
+                    raise HTTPException(404, "документ не найден")
+                prev = chosen
             if prev is not None and prev.sha256 == digest:
                 # Байт в байт тот же файл: версии не будет, разбора тоже —
                 # иначе случайный повтор загрузки стирал бы принятые строки
@@ -591,11 +2437,12 @@ async def upload(case_id: int, background: BackgroundTasks, files: list[UploadFi
             with open(path, "wb") as out:
                 out.write(data)
             doc = Document(case_id=case_id, name=name, path=path, size=len(data),
-                           sha256=digest, scope=scope)
+                           sha256=digest, scope=scope, contract_code=contract)
             if prev is not None:
                 _retire_document(db, prev, new_version=(prev.version or 1) + 1)
                 doc.version = (prev.version or 1) + 1
                 doc.supersedes_id = prev.id
+                doc.contract_code = contract or prev.contract_code
             db.add(doc)
             db.commit()
             added.append(doc.id)
@@ -765,16 +2612,39 @@ def _preflight(db, case):
     """
     import tempfile
 
-    data = _registry_data(db, case)
     warn = []
-    try:
-        tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
-        tmp.close()
-        build_input.build(reference.TEMPLATE, tmp.name, data, warn)
-        os.remove(tmp.name)
-    except Exception as e:  # noqa: BLE001 — сборка не должна ронять сводку
-        warn.append("Сборка входного файла не удалась: %s" % str(e)[:200])
-    ps = _apply_plan_settings(data, case)
+    data = _registry_data(db, case, warn)
+    # Без зарплаты месяца считать нечего: сборка входа откажет с тем же
+    # перечнем, поэтому здесь он — причина, а не допущение.
+    gaps = build_input.salary_gaps(data["employees"], data.get("salary_months"), case.year)
+    if not gaps:
+        try:
+            tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+            tmp.close()
+            build_input.build(reference.TEMPLATE, tmp.name, data, warn)
+            os.remove(tmp.name)
+        except Exception as e:  # noqa: BLE001 — сборка не должна ронять сводку
+            warn.append("Сборка входного файла не удалась: %s" % str(e)[:200])
+    ps = _apply_plan_settings(data, case, warn)
+    through = int(data.get("fact_through") or 0)
+    if through:
+        # Кто работает в месяцах факта, но в факте не встретился: его месяцы
+        # расчёт оставит пустыми — это признак неполной выгрузки, а не план.
+        seen = {(f.employee_code, f.month) for f in data["facts"]}
+        lost = [e for e in data["employees"]
+                if any((e.code, m) not in seen
+                       for m in build_input.active_months(e.date_from, e.date_to, case.year)
+                       if m <= through)]
+        if not data["facts"]:
+            warn.append("Факт начислений по %s не загружен: месяцы по %s включительно "
+                        "останутся без выплат." % (facts.MONTH_WORDS[through - 1],
+                                                   facts.MONTH_WORDS[through - 1]))
+        elif lost:
+            warn.append("В факте начислений по %s нет строк у сотрудников: %s — их месяцы "
+                        "факта останутся без выплат."
+                        % (facts.MONTH_WORDS[through - 1],
+                           ", ".join((e.fio or e.code) for e in lost[:8])
+                           + (" и ещё %d" % (len(lost) - 8) if len(lost) > 8 else "")))
     counts = [("сотрудников", len(data["employees"])), ("договоров", len(data["contracts"])),
               ("поступлений", len(data["inflows"])), ("строк трудоемкости", len(data["labor"])),
               ("надбавок 120", len(data["secret"])),
@@ -785,15 +2655,22 @@ def _preflight(db, case):
     settings = ps.get("настройки") or {}
     constraints = [
         ("Период", "%s год" % case.year),
+        ("Факт начислений", "по %s включительно, строк %d" % (facts.MONTH_WORDS[through - 1],
+                                                                len(data["facts"]))
+         if through else "не учитывается"),
         ("Трудоёмкость", "в пределах допуска %s" % settings.get("допуск трудоёмкости", "5%")),
         ("Виды выплат", "только разрешённые договором"),
         ("Основная ставка", "обязательна для основного сотрудника"),
         ("Дефицит выплат", "разрешён" if str(settings.get("разрешить дефицит", "нет")).lower() in ("да", "true", "1") else "не разрешён"),
         ("Правила замещения", "%d загружено" % len(data["substitutions"])),
     ]
+    why = []
+    if not data["employees"] or not data["contracts"]:
+        why.append("Нет сотрудников или договоров. Загрузите документы в реестр.")
+    if gaps:
+        why.append(build_input.gaps_text(gaps))
     return {"строки": counts, "ограничения": constraints, "допущения": warn,
-            "стоит": not data["employees"] or not data["contracts"],
-            "год": case.year}
+            "стоит": bool(why), "почему": why, "год": case.year}
 
 
 @app.get("/api/case/{case_id}/preflight")
@@ -982,6 +2859,8 @@ def all_documents():
                                       .filter_by(document_id=d.id).count(),
                     "правил замещения": db.query(Substitution)
                                           .filter_by(document_id=d.id).count(),
+                    "величин пакета": db.query(ContractValue)
+                                        .filter_by(document_id=d.id).count(),
                 }})
         return out
     finally:
@@ -1007,11 +2886,11 @@ def one_document(doc_id: int):
         sub = (db.query(Substitution).filter_by(document_id=d.id)
                .order_by(Substitution.id).all())
         if os.path.splitext(d.path)[1].lower() in WORKBOOK_TYPES and os.path.exists(d.path):
-            threading.Thread(target=_warm_workbook, args=(d.path,),
-                             daemon=True).start()
+            _warm_once(("книга", d.path), _warm_workbook, d.path)
         # Печать в PDF нужна и книге, и Word: карточка открывается на
         # вкладке «Документ», а печать идёт секунды.
-        threading.Thread(target=_warm_pdf, args=(d.id,), daemon=True).start()
+        if not _pdf_ready(d):
+            _warm_once(("pdf", d.id), _warm_pdf, d.id)
         return {
             "id": d.id, "name": d.name, "kind": d.kind, "state": d.state,
             "by": d.parsed_by, "summary": d.summary, "size": d.size,
@@ -1193,6 +3072,7 @@ def _decide_do(db, doc_id, take, drop, expected):
                     employment_category=f.get("category"),
                     allowed_contracts=f.get("allowed"),
                     forbidden_contracts=f.get("forbidden"),
+                    account=f.get("account"),
                     date_from=f.get("from"), date_to=f.get("to"),
                     source=doc.name, document_id=doc.id))
             elif pr.entity == "договор":
@@ -1377,102 +3257,29 @@ def _sheet_html(doc, sheet):
     return html
 
 
-def _unclip_columns(ws):
-    """Раздвинуть столбцы и строки, где текст обрезан.
+def _office_child(src, out, html=False):
+    """Office (COM) — только в дочернем процессе (app/office_pdf.py).
 
-    Excel печатает лист как есть: «Наименование должности» в узком столбце
-    обрывается на «Наименов», если справа тоже что-то написано, а строка с
-    фиксированной высотой режет текст по верху. Читать такое нельзя.
-
-    Каждое обращение к ячейке через COM — отдельный вызов в Excel, и на
-    книге в тысячу ячеек это секунды. Поэтому значения читаем разом
-    (``UsedRange.Value``), свойства спрашиваем у столбцов, а не у ячеек, а
-    высоту строк подбираем одним вызовом на весь лист. Файл не меняется:
-    книга открыта только для чтения.
+    COM в процессе сервера ронял его целиком: печать в PDF (0x80010001,
+    затем 0xC0000005) и предпросмотр Word в HTML (0x800706ba), 12.10.2026.
+    Упавший дочерний процесс значит только, что вида нет.
     """
     try:
-        ur = ws.UsedRange
-        if ur.Cells.Count > 20000:
-            return                      # огромный лист: печатаем как есть
-        rows, cols = ur.Rows.Count, ur.Columns.Count
-        vals = ur.Value
-        if rows == 1 and cols == 1:
-            return
-        if rows == 1:
-            vals = (vals,)
-        if cols == 1:
-            vals = tuple((v,) for v in vals)
-        # Свойства столбца целиком: None — в столбце они разные, тогда
-        # столбец не трогаем, чтобы не разъехалась авторская вёрстка.
-        widths, wrap, merged = [], [], []
-        for c in range(cols):
-            col = ur.Columns(c + 1)
-            widths.append(float(col.ColumnWidth or 0))
-            wrap.append(col.WrapText)
-            merged.append(col.MergeCells)
-        need = {}
-        for r in range(rows):
-            row = vals[r]
-            for c in range(cols - 1):
-                v, nxt = row[c], row[c + 1]
-                if not (isinstance(v, str) and v.strip()) or nxt in (None, ""):
-                    continue
-                if wrap[c] is not False or merged[c] is not False:
-                    continue
-                if len(v) > widths[c]:
-                    need[c] = max(need.get(c, 0), len(v))
-        # Ширина — по обрезанным ячейкам, а не по всему столбцу: длинный
-        # заголовок в A1 раздвинул бы первый столбец на полстраницы.
-        for c, chars in need.items():
-            ur.Columns(c + 1).ColumnWidth = min(60, max(widths[c], chars + 2))
-        # Высота — одним вызовом на весь лист: строка с фиксированной
-        # высотой 13 pt и шрифтом 11 pt печаталась с обрезанным текстом.
-        ur.Rows.AutoFit()
-    except Exception:  # noqa: BLE001 — не вышло раздвинуть: печатаем как есть
-        pass
-
-
-#: В PDF печатаем тем, что стоит на машине: сначала Office (он рисует ровно
-#: так, как документ выглядит у экономиста), потом LibreOffice.
-def _office_to_pdf(src, out):
-    try:
-        import pythoncom
-        import win32com.client as win32
+        import win32com  # noqa: F401 — без pywin32 Office не позвать
     except ImportError:
         return False
-    ext = os.path.splitext(src)[1].lower()
-    excel = ext in WORKBOOK_TYPES
-    pythoncom.CoInitialize()
-    app = None
     try:
-        app = win32.Dispatch("Excel.Application" if excel else "Word.Application")
-        app.Visible = False
-        app.DisplayAlerts = 0
-        if excel:
-            book = app.Workbooks.Open(src, ReadOnly=True, UpdateLinks=0)
-            try:
-                for ws in book.Worksheets:
-                    _unclip_columns(ws)
-                book.ExportAsFixedFormat(0, out)      # xlTypePDF
-            finally:
-                book.Close(False)
-        else:
-            d = app.Documents.Open(src, ReadOnly=True, AddToRecentFiles=False,
-                                   Visible=False, ConfirmConversions=False)
-            try:
-                d.SaveAs2(out, FileFormat=17)         # wdFormatPDF
-            finally:
-                d.Close(False)
-        return os.path.exists(out)
-    except Exception:  # noqa: BLE001 — офиса нет или файл не открылся
+        subprocess.run([sys.executable, os.path.join(HERE, "office_pdf.py")]
+                       + (["--html"] if html else []) + [src, out],
+                       timeout=300, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001 — завис или не запустился
         return False
-    finally:
-        try:
-            if app is not None:
-                app.Quit()
-        except Exception:  # noqa: BLE001
-            pass
-        pythoncom.CoUninitialize()
+    return os.path.exists(out)
+
+
+def _office_to_pdf(src, out):
+    """Печать через Office — дочерним процессом; дальше пробуем LibreOffice."""
+    return _office_child(src, out)
 
 
 def _soffice_to_pdf(src, out):
@@ -1563,34 +3370,7 @@ def _word_html_file(doc):
     if os.path.exists(out):
         return out
     src = os.path.abspath(doc.path)
-    try:
-        import pythoncom
-        import win32com.client as win32
-    except ImportError:
-        return None
-    pythoncom.CoInitialize()
-    app = None
-    try:
-        app = win32.Dispatch("Word.Application")
-        app.Visible = False
-        app.DisplayAlerts = 0
-        d = app.Documents.Open(src, ReadOnly=True, AddToRecentFiles=False,
-                               Visible=False, ConfirmConversions=False)
-        try:
-            d.WebOptions.AllowPNG = True
-            d.SaveAs2(out, FileFormat=10)      # wdFormatFilteredHTML
-        finally:
-            d.Close(False)
-        return out if os.path.exists(out) else None
-    except Exception:  # noqa: BLE001 — Word недоступен: остаётся наш разбор
-        return None
-    finally:
-        try:
-            if app is not None:
-                app.Quit()
-        except Exception:  # noqa: BLE001
-            pass
-        pythoncom.CoUninitialize()
+    return out if _office_child(src, out, html=True) else None
 
 
 def _word_html(doc):
@@ -1614,33 +3394,7 @@ def _word_html(doc):
 
     src = os.path.abspath(doc.path)
     raw_path = os.path.join(PREVIEW_DIR, key + ".htm")
-    ok = False
-    try:
-        import pythoncom
-        import win32com.client as win32
-
-        pythoncom.CoInitialize()
-        app = None
-        try:
-            app = win32.Dispatch("Word.Application")
-            app.Visible = False
-            app.DisplayAlerts = 0
-            d = app.Documents.Open(src, ReadOnly=True, AddToRecentFiles=False,
-                                   Visible=False, ConfirmConversions=False)
-            try:
-                d.SaveAs2(raw_path, FileFormat=10)      # wdFormatFilteredHTML
-            finally:
-                d.Close(False)
-            ok = os.path.exists(raw_path)
-        finally:
-            try:
-                if app is not None:
-                    app.Quit()
-            except Exception:  # noqa: BLE001
-                pass
-            pythoncom.CoUninitialize()
-    except Exception:  # noqa: BLE001 — Word недоступен: остаётся наш разбор
-        ok = False
+    ok = _office_child(src, raw_path, html=True)
     if not ok:
         return None
 
@@ -1804,7 +3558,25 @@ def document_message(doc_id: int, background: BackgroundTasks, body: dict = Body
         version = agents.version_of("intake")
         action = res.get("action")
         if action == "заполнить поле" and res.get("edits"):
-            lines = chat.apply_edits(db, None, res["edits"])
+            # Сначала строки, ждущие подтверждения: результат разбора живёт
+            # в них, и правка из разговора о документе должна менять их, а не
+            # заводить рядом строку реестра (12.10.2026).
+            lines, rest = chat.apply_proposal_edits(db, doc, res["edits"])
+            for pr, field, was, val in getattr(chat.apply_proposal_edits, "last_changes", []):
+                # В память — строка словами, а не номер предложения: при
+                # следующем разборе номера будут другие.
+                f = json.loads(pr.payload)
+                label = (f.get("code") or f.get("fio")
+                         or " ".join(str(f.get(k)) for k in ("contract", "position", "month")
+                                     if f.get(k)) or "п%d" % pr.id)
+                intake.remember_correction(db, doc, entity=pr.entity, confirmed=True,
+                    wrong=json.dumps({label: was, "поле": field}, ensure_ascii=False),
+                    right=json.dumps({label: val, "поле": field}, ensure_ascii=False),
+                    note=text[:300], agent_version=version)
+            chat.apply_edits.last_changes = []
+            if rest:
+                lines += chat.apply_edits(db, None, rest, create=False)
+            lines = list(dict.fromkeys(lines))      # одна причина — одна строка
             for entity, key, field, was, val in getattr(chat.apply_edits, "last_changes", []):
                 finder = chat._find_contract if entity == 'договор' else chat._find_employee
                 corrected = finder(db, None, key)
@@ -1859,7 +3631,8 @@ SOLVER_FIELDS = {
                   ("salary", "зарплата"), ("date_from", "дата начала"),
                   ("date_to", "дата окончания"),
                   ("allowed_contracts", "разрешенные договоры"),
-                  ("forbidden_contracts", "запрещенные договоры")],
+                  ("forbidden_contracts", "запрещенные договоры"),
+                  ("account", "лицевой счет")],
     "contracts": [("code", "код"), ("name", "название"), ("number", "номер"),
                   ("kind", "тип договора"), ("account", "счет"), ("goz", "ГОЗ"),
                   ("department", "подразделение"), ("priority", "Приоритет"),
@@ -2259,35 +4032,285 @@ def _allowed_kinds(f):
     return ", ".join(yes) or None
 
 
-def _registry_data(db, case):
+def _registry_data(db, case, warn=None):
     """Все, что агент собрал для расчета, — из реестра организации.
 
     Реестр общий для всех планов: договор живет несколько лет, штатка меняется
     приказами. План на год берет из реестра то, что в этом году действует, а
     год берется из самого плана.
+
+    Договоры и версии документов план выбирает сам (SOURCE-003): выбор
+    применяется к копиям строк, реестр соседних планов не меняется. Что
+    выбор убрал или подменил, дописывается в warn.
     """
-    return {
-        "year": case.year,
+    # Правки, с которыми реестр сравнялся, снимаются и перед расчётом: он
+    # идёт за реестром, а в допущениях сказано, что снято (30.09.2026).
+    gone = basis.dissolve_caught_up(db, case)
+    if gone and warn is not None:
+        warn.append("Правки плана сняты — реестр сравнялся с ними: %s." % "; ".join(gone))
+    rows = basis.apply(db, case, {
         "employees": db.query(Employee).order_by(Employee.id).all(),
         "contracts": db.query(Contract).order_by(Contract.id).all(),
         "inflows": db.query(Inflow).order_by(Inflow.id).all(),
         "labor": db.query(LaborRow).order_by(LaborRow.id).all(),
         "secret": db.query(SecretAllowance).order_by(SecretAllowance.id).all(),
-        "substitutions": [(s.position, s.replaced_by) for s in
-                          db.query(Substitution).order_by(Substitution.id).all()],
+        "substitutions": db.query(Substitution).order_by(Substitution.id).all(),
+        "values": db.query(ContractValue).order_by(ContractValue.id).all(),
+    }, warn)
+    data = {
+        "year": case.year,
+        "employees": rows["employees"],
+        "contracts": rows["contracts"],
+        "inflows": rows["inflows"],
+        "labor": rows["labor"],
+        "secret": rows["secret"],
+        "values": rows["values"],
+        "substitutions": [(s.position, s.replaced_by) for s in rows["substitutions"]],
+        # Действующий состав рабочих групп: члены группы уходят в расчёт
+        # закреплениями без вида (_apply_plan_settings).
+        "workgroups": _workgroup_current(db),
         "settings": _case_settings(case),
+        # Документы и число их строк во входе — основание расчёта.
+        "row_sources": basis.row_sources(rows),
+        # Свои суммы месяцев года плана; прочие месяцы решатель берёт из
+        # зарплаты штатного расписания (правило 1, 19.09.2026).
+        # Зарплата — только из таблицы по месяцам года плана (правило 1,
+        # 19.09.2026): в штатном расписании её нет.
+        # Правки зарплаты этого плана (30.09.2026) — поверх таблицы месяцев.
+        # Строки одного человека в разных управленческих подразделениях
+        # (01.10.2026) складываются: решатель платит человеку одну зарплату.
+        "salary_months": basis.apply_salary(
+            case, [(c, m, a) for (c, m), a in sorted(salary.month_totals(db, case.year).items())],
+            warn),
+        # Подразделения строк — в вход, для раздела 16 отчёта (снимок расчёта).
+        "mgmt_rows": _mgmt_rows(db, case.year),
+        # Факт начислений (30.09.2026): месяцы, за которые он загружен, расчёт
+        # берёт как были и не пересчитывает (лист «факт_выплат»). Месяц
+        # выбирать не нужно — он из самого документа (пользователь: «зачем
+        # выбирать месяц, я не поняла? требуется подгрузить документ»).
+        "fact_through": _fact_through(db, case),
+        "facts": facts.rows_for(db, case.year, _fact_through(db, case),
+                                skip_contracts=basis.read(case)["вне расчёта"]),
     }
+    # Документы факта — тоже основание расчёта: замена или удаление файла
+    # помечает расчёт к пересмотру, как у прочих документов.
+    for f in data["facts"]:
+        if f.document_id:
+            one = data["row_sources"].setdefault(f.document_id, {})
+            one["строк факта"] = one.get("строк факта", 0) + 1
+    return data
 
 
-def _apply_plan_settings(data, case):
+def _fact_through(db, case):
+    return facts.through(db, case.year) if case is not None else 0
+
+
+@app.get("/api/case/{case_id}/facts/form")
+def facts_form(case_id: int):
+    """Форма для заполнения факта начислений — книга в форме 6.3 «ШР на
+    дату, детализация назначений», раскладкой шаблона кадров пользователя
+    (30.09.2026: «и как загружать её?»; «вот этот шаблон, я же скидывала»).
+    Строки — уже загруженный факт года плана, «Дата построения» — последний
+    день его месяцев; факта нет — одна шапка. Заполненную форму, как и
+    выгрузку 1С, загружают на вкладке «Факт начислений»."""
+    db = session()
+    try:
+        case = db.get(Case, case_id)
+        if case is None:
+            raise HTTPException(404, "план не найден")
+        year = case.year or facts.case_year(db, case_id)
+        name = "ШР детализация, факт начислений %s.xlsx" % year
+        return Response(
+            facts.form_book(year, facts.detail_rows(db, year), facts.through(db, year)),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename*=UTF-8''%s" % quote(name)})
+    finally:
+        db.close()
+
+
+def _contract_months(c, year):
+    """Месяцы года плана, в которых договор действует: (первый, последний).
+
+    Даты — с правками плана (basis.apply уже подставил их в копию строки).
+    Срок не задан — весь год; договор в этом году не действует — None."""
+    def at(text):
+        p = str(text or "").strip().split(".")
+        try:
+            return (int(p[2]), int(p[1])) if len(p) == 3 else None
+        except ValueError:
+            return None
+    get = (lambda k: c.get(k)) if isinstance(c, dict) else (lambda k: getattr(c, k, None))
+    if not year:
+        return (1, 12)
+    a, b = at(get("date_from")), at(get("date_to"))
+    lo = 1 if a is None or a[0] < year else (a[1] if a[0] == year else 13)
+    hi = 12 if b is None or b[0] > year else (b[1] if b[0] == year else 0)
+    return (lo, hi) if lo <= hi else None
+
+
+def _month_spans(months):
+    """[1, 2, 3, 5] → [(1, 3), (5, 5)]."""
+    out = []
+    for m in sorted(set(months)):
+        if out and m == out[-1][1] + 1:
+            out[-1] = (out[-1][0], m)
+        else:
+            out.append((m, m))
+    return out
+
+
+def _apply_plan_settings(data, case, warn=None, ps=None):
     """Переменные, заданные экономистом в чате, поверх данных реестра:
     закрепления и запреты — листами ручных назначений, настройки — в
-    «настройки». Они живут с планом и уходят в каждый его расчёт."""
-    ps = chat.plan_settings(case)
+    «настройки». Они живут с планом и уходят в каждый его расчёт. ps —
+    изменённые переменные для опыта разбора невыполнимости; без него —
+    сохранённые в плане."""
+    ps = ps if ps is not None else chat.plan_settings(case)
     if ps.get("настройки"):
         data["settings"] = {**(data.get("settings") or {}), **ps["настройки"]}
-    data["manual_assignments"] = ps.get("назначения") or []
-    data["manual_prohibitions"] = ps.get("запреты") or []
+    # Веса целей после претензий — тоже условие плана (chat.apply_claims):
+    # графы листа «настройки» с именами штрафов.
+    if ps.get("веса"):
+        data["settings"] = {**(data.get("settings") or {}), **ps["веса"]}
+    fixes = ps.get("назначения") or []
+    bans = list(ps.get("запреты") or [])
+    year = data.get("year") or getattr(case, "year", None)
+    # Члены рабочих групп договоров плана — закрепления без вида на срок группы
+    # (пользователь 30.09.2026: «а что с сотрудниками, которые в группе? их же
+    # тоже нужно отобразить, просто не дать удалить»): член группы получает с
+    # договора выплату любого вида в каждом месяце срока, какого — решает
+    # расчёт (остаточный принцип). Живут в приказах, а не в плане: снять их
+    # можно только приказом, поэтому в хранимые закрепления они не пишутся.
+    in_plan = {getattr(c, "code", None) or (c.get("code") if isinstance(c, dict) else None)
+               for c in (data.get("contracts") or [])}
+    # Выплата члену группы в этом плане (пользователь 30.09.2026: «какую
+    # выплату ему дать, решает расчёт — это можно задать, только удалить
+    # нельзя, если не задано — то по возможности ВСЮ»): не задано — вся
+    # зарплата с договора по возможности (стадия решателя после БЭП);
+    # «вся зарплата» — прочие договоры плана запрещены; названные виды —
+    # хотя бы одна выплата каждого.
+    group_pay = ps.get("рабочие группы") or {}
+    # Строка штатного расписания вне расчёта плана (30.09.2026) уходит из
+    # входа вместе со своими закреплениями: закрепление за тем, кого в
+    # расчёте нет, решатель выполнить не может и кончает «решения нет».
+    # Хранятся они по-прежнему — вернул строку в расчёт, вернулись и они.
+    gone = basis.read(case)["сотрудники вне расчёта"]
+    for g in data.get("workgroups") or []:
+        if g.get("договор") not in in_plan or g.get("сотрудник") in gone:
+            continue
+        span = _contract_months({"date_from": g.get("с"), "date_to": g.get("по")}, year)
+        if span is None:
+            continue
+        base = {"сотрудник": g["сотрудник"], "фио": g.get("фио"), "договор": g["договор"],
+                "с": span[0], "по": span[1], "приказ": g.get("приказ")}
+        choice = group_pay.get("%s|%s" % (g["договор"], g["сотрудник"])) or {}
+        kinds = [k for k in (choice.get("виды") or []) if k in chat.KINDS]
+        if kinds:
+            pins = [{**base, "вид": k, "сумма": choice.get("сумма") if len(kinds) == 1 else None}
+                    for k in kinds]
+        elif choice.get("только"):
+            pins = [{**base, "вид": "любой", "сумма": None, "только": True}]
+        else:
+            pins = [{**base, "вид": "любой", "сумма": None, "по возможности вся": True}]
+        for pin in pins:
+            if not any((f.get("сотрудник"), f.get("договор"), f.get("с"), f.get("по"),
+                        f.get("вид"))
+                       == (pin["сотрудник"], pin["договор"], pin["с"], pin["по"], pin["вид"])
+                       for f in fixes):
+                fixes = list(fixes) + [pin]
+    # Месяцы без выплат договора в этом плане (владелец продукта 01.10.2026:
+    # снятая галочка выключает договор на весь срок, а нужен «конкретный
+    # месяц»): в эти месяцы с договора не платят никому — запрет каждому
+    # сотруднику плана; закрепления на договоре теряют эти месяцы, иначе
+    # закрепление и запрет спорили бы и расчёт кончался «решения нет».
+    closed = {c: m for c, m in basis.closed_months(case).items() if c in in_plan}
+    if closed:
+        cut = []
+        for f in fixes:
+            shut = set(closed.get(f.get("договор")) or ())
+            left = [m for m in range(int(f["с"]), int(f["по"]) + 1) if m not in shut]
+            cut += [{**f, "с": a, "по": b} for a, b in _month_spans(left)]
+        fixes = cut
+        staff = [getattr(e, "code", None) or (e.get("code") if isinstance(e, dict) else None)
+                 for e in (data.get("employees") or [])]
+        for code, months in closed.items():
+            for a, b in _month_spans(months):
+                for emp in staff:
+                    if emp:
+                        bans.append({"сотрудник": emp, "фио": None, "договор": code,
+                                     "с": a, "по": b, "вид": "любой", "сумма": None})
+        if warn is not None:
+            warn.append("Месяцы без выплат в этом плане: %s." % "; ".join(
+                "%s — %s" % (code, facts.months_text(months))
+                for code, months in sorted(closed.items())))
+    # Закрепление действует только в месяцах договора в году плана, с
+    # правками плана (решение пользователя 29.09.2026: «чтоб можно было
+    # выбрать месяцы в период договора»): срок урезается до периода договора,
+    # а закрепление целиком вне его в расчёт не идёт. Иначе срок, выбранный
+    # до правки окончания договора, давал решателю невыполнимое требование, и
+    # расчёт кончался «решения нет». Хранится выбранное экономистом —
+    # урезается только вход расчёта; экран показывает то же урезанное.
+    period = {}
+    for c in data.get("contracts") or []:
+        code = getattr(c, "code", None) or (c.get("code") if isinstance(c, dict) else None)
+        if code:
+            period[code] = _contract_months(c, year)
+    kept, outside = [], []
+    for f in fixes:
+        if f.get("договор") not in period:
+            # Договор снят с расчёта плана или ушёл из реестра: закрепление
+            # на нём выполнить нечем, и расчёт кончался «решения нет»
+            # (MANUAL_ASSIGNMENT_NO_PAYMENT, найдено сквозной проверкой
+            # 30.09.2026). Хранится выбранное экономистом — вернут договор в
+            # расчёт, вернётся и закрепление.
+            outside.append(f)
+            continue
+        span = period[f["договор"]]
+        if span is None:
+            continue
+        a, b = max(int(f["с"]), span[0]), min(int(f["по"]), span[1])
+        if a <= b:
+            kept.append({**f, "с": a, "по": b})
+    fixes = kept
+    bans = [b for b in bans if b.get("договор") in period]
+    if outside and warn is not None:
+        warn.append("Закрепления на договорах вне расчёта плана не учтены: %s."
+                    % "; ".join(sorted({"%s — %s" % (f.get("фио") or f.get("сотрудник"),
+                                                     f.get("договор")) for f in outside})))
+    # Месяцы факта расчёт не пересчитывает (30.09.2026): закрепление в них
+    # выполнять нечем — оно урезается до месяцев после «факт по», целиком в
+    # факте — в расчёт не идёт. Хранится выбранное экономистом.
+    through = int(data.get("fact_through") or 0)
+    if through:
+        fixes = [{**f, "с": max(int(f["с"]), through + 1)} for f in fixes
+                 if int(f["по"]) > through]
+        bans = [{**b, "с": max(int(b["с"]), through + 1)} for b in bans
+                if int(b["по"]) > through]
+    if gone:
+        lost = sorted({str(f.get("фио") or f.get("сотрудник")) for f in fixes
+                       if f.get("сотрудник") in gone})
+        fixes = [f for f in fixes if f.get("сотрудник") not in gone]
+        bans = [b for b in bans if b.get("сотрудник") not in gone]
+        if lost and warn is not None:
+            warn.append("Закрепления сотрудников вне расчёта плана не учтены: %s."
+                        % ", ".join(lost))
+    # «Вся зарплата с этого договора» (признак «только») — это закрепление
+    # плюс запрет платить тому же человеку с прочих договоров плана в те же
+    # месяцы. Запреты выводятся здесь, а не хранятся: договор, добавленный
+    # в план позже, попадает под тот же запрет, а снятие признака ничего не
+    # оставляет за собой.
+    codes = [getattr(c, "code", None) or (c.get("code") if isinstance(c, dict) else None)
+             for c in (data.get("contracts") or [])]
+    for f in fixes:
+        if not f.get("только"):
+            continue
+        for code in codes:
+            if not code or code == f["договор"]:
+                continue
+            bans.append({"сотрудник": f["сотрудник"], "фио": f.get("фио"), "договор": code,
+                         "с": f["с"], "по": f["по"], "вид": "любой", "сумма": None})
+    data["manual_assignments"] = fixes
+    data["manual_prohibitions"] = bans
     return ps
 
 
@@ -2308,7 +4331,11 @@ def _retire_document(db, doc, new_version=None):
     actuality.mark_review(db, actuality.runs_using_document(db, doc.id),
                           "документ «%s» заменён версией %s"
                           % (doc.name, new_version or ((doc.version or 1) + 1)))
-    for model in (Employee, Contract, LaborRow, Inflow, SecretAllowance, Substitution):
+    # Снимок строк версии — до удаления: план может выбрать эту версию для
+    # расчёта (SOURCE-003), а разбор файла заново дал бы другой ответ модели.
+    doc.rows_snapshot = basis.snapshot(db, doc)
+    for model in (Employee, Contract, LaborRow, Inflow, SecretAllowance, Substitution,
+                  ContractValue):
         db.query(model).filter_by(document_id=doc.id).delete()
     db.query(Proposal).filter_by(document_id=doc.id, state="предложено").delete()
     doc.state = "заменен"
@@ -2331,6 +4358,7 @@ def _forget_document(db, doc):
         "надбавок 120": db.query(SecretAllowance)
                           .filter_by(document_id=doc.id).delete(),
         "правил замещения": db.query(Substitution).filter_by(document_id=doc.id).delete(),
+        "величин пакета": db.query(ContractValue).filter_by(document_id=doc.id).delete(),
     }
     # Непринятые предложения уходят вместе с документом: подтверждать строки
     # файла, которого больше нет, не по чему. ON DELETE CASCADE в схеме есть,
@@ -2348,7 +4376,17 @@ def _forget_document(db, doc):
         gone["величин без основания"] = len(lost)
         gone["_величины"] = ", ".join(lost)
     path = doc.path
+    # Удалена действующая версия, а у предыдущей есть снимок строк: они
+    # возвращаются в реестр. Иначе вместе с ошибочной загрузкой договор
+    # терял бы и данные прежней редакции.
+    prev = (db.get(Document, doc.supersedes_id)
+            if doc.supersedes_id and doc.state != "заменен" else None)
+    # Цепочка версий не рвётся: следующая версия ссылается на предыдущую.
+    db.query(Document).filter_by(supersedes_id=doc.id).update(
+        {"supersedes_id": doc.supersedes_id})
     db.delete(doc)
+    if prev is not None and prev.state == "заменен" and basis.restore(db, prev) is not None:
+        gone["_версия"] = prev.version or 1
     db.commit()
     try:
         if path and os.path.exists(path):
@@ -2373,6 +4411,7 @@ def delete_document(doc_id: int):
             raise HTTPException(404, "документ не найден")
         name, case_id = doc.name, doc.case_id
         gone = _forget_document(db, doc)
+        back = gone.pop("_версия", None)
         if case_id:
             names = gone.pop("_величины", "")
             lost = ", ".join("%s %d" % (k, v) for k, v in gone.items()
@@ -2380,7 +4419,9 @@ def delete_document(doc_id: int):
             if names:
                 lost += " (%s — теперь без основания, величины остались)" % names
             agents.say(db, case_id,
-                       "Удален документ «%s»%s." % (name, ", с ним " + lost if lost else ""),
+                       "Удален документ «%s»%s%s." % (
+                           name, ", с ним " + lost if lost else "",
+                           "; в реестре снова версия %s" % back if back else ""),
                        who="экономист")
         return {"ok": True, "removed": gone}
     finally:
@@ -2514,6 +4555,26 @@ def post_message(case_id: int, background: BackgroundTasks, body: dict = Body(..
         db.close()
 
 
+def _offline_reply(db, case, error):
+    """Ответ на реплику, когда модель недоступна: последний расчёт и причина."""
+    last = db.query(Run).filter_by(case_id=case.id).order_by(Run.id.desc()).first()
+    state = ""
+    if last is not None and last.status == "нет решения":
+        try:
+            why = (json.loads(last.summary) if last.summary else {}).get("анализ") or []
+        except ValueError:
+            why = []
+        state = "Расчёт № %d — решения нет. %s" % (last.id, " ".join(why))
+    elif last is not None and last.status == "OPTIMAL":
+        state = "Расчёт № %d — план есть%s." % (
+            last.id, ", требует пересмотра" if last.review == actuality.REVIEW else "")
+    elif last is not None:
+        state = "Расчёт № %d — %s." % (last.id, last.status)
+    return ((state.strip() + "\n\n" if state else "") +
+            "Модель недоступна (%s): на вопросы своими словами не отвечу. Без неё работают "
+            "команды правок и разбор документов." % (error or "причина не названа"))
+
+
 def _message_do(db, case_id, background, text):
     """Тело реплики: лента, ответ модели, действия сервиса по её ответу."""
     case = db.get(Case, case_id)
@@ -2535,12 +4596,15 @@ def _message_do(db, case_id, background, text):
             answer, changed, run = intake.extract.apply_chat(passport, text)
             if changed:
                 case.passport = json.dumps(passport, ensure_ascii=False)
-            agents.say(db, case_id, answer, agent="intake")
-            db.commit()
-            return {"ok": True, "solve": bool(run)}
-        agents.say(db, case_id,
-                   "Не могу ответить: %s. Загрузите документы — их разбор "
-                   "работает и без модели." % res.get("error"), agent="intake")
+            if changed or run or not answer.startswith("Не понял правку"):
+                agents.say(db, case_id, answer, agent="intake")
+                db.commit()
+                return {"ok": True, "solve": bool(run)}
+        # Вопрос, а не команда: разбор команд на него отвечал «Не понял
+        # правку» (02.10.2026, на «решения нет?»). Без модели отвечаем тем,
+        # что знаем без неё, — состоянием последнего расчёта — и честно
+        # называем, почему не ответить своими словами.
+        agents.say(db, case_id, _offline_reply(db, case, res.get("error")), agent="intake")
         db.commit()
         return {"ok": True}
 
@@ -2548,12 +4612,22 @@ def _message_do(db, case_id, background, text):
     db.commit()
 
     action = res.get("action")
-    # Закрепления, запреты и настройки — переменные решателя, заданные
-    # рукой экономиста. Пишем в план и пересчитываем, если план уже
-    # считался; без месяцев — спрашиваем и ничего не пишем.
-    if res.get("fixes") or res.get("settings") or chat.parse_settings(text):
+    # Закрепления, запреты, настройки и претензии — переменные решателя,
+    # заданные рукой экономиста. Пишем в план и пересчитываем, если план уже
+    # считался; без месяцев — спрашиваем и ничего не пишем. Претензия
+    # берётся из ответа модели независимо от выбранного ею действия (слабая
+    # модель называет цели, а действие оставляет «ничего»), а если модель
+    # целей не назвала — из самой реплики кодом (chat.parse_claims).
+    claims = res.get("claims") or chat.parse_claims(text)
+    if res.get("fixes") or res.get("settings") or chat.parse_settings(text) or claims:
+        was = case.plan_settings
+        last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
+                .order_by(Run.id.desc()).first())
+        base = json.loads(last.settings) if last and last.settings else {}
         lines, questions = chat.apply_fixes(db, case, res.get("fixes"), text)
         lines += chat.apply_settings(db, case, res.get("settings"), text)
+        if claims:
+            lines += chat.apply_claims(db, case, claims, text, base=base)[0]
         db.commit()
         if lines:
             agents.say(db, case_id, "\n".join(lines), agent="tuning")
@@ -2562,11 +4636,13 @@ def _message_do(db, case_id, background, text):
                        payload={"kind": "ask_months"})
             db.commit()
             return {"ok": True, "action": "вопрос"}
-        if not lines:
+        # Пересчёт стоит десять минут — он идёт, только если условие плана
+        # действительно изменилось. «Не нашёл сотрудника» и претензия, не
+        # сдвинувшая ни одного веса, расчёта не стоят.
+        db.refresh(case)
+        if not lines or case.plan_settings == was:
             db.commit()
             return {"ok": True, "action": "ничего"}
-        last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
-                .order_by(Run.id.desc()).first())
         if last is None:
             db.commit()
             return {"ok": True, "action": "закреплено"}
@@ -2577,7 +4653,7 @@ def _message_do(db, case_id, background, text):
                        "он сейчас идет." % busy.id, agent="tuning")
             db.commit()
             return {"ok": True, "action": "закреплено"}
-        base = json.loads(last.settings) if last and last.settings else {}
+        base = {**base, **(chat.plan_settings(case).get("веса") or {})}
         run, created = _start_run(db, case_id, base)
         if not created:
             agents.say(db, case_id, "Условие записано. Расчёт № %d уже идёт." % run.id,
@@ -2646,29 +4722,15 @@ def _message_do(db, case_id, background, text):
         return {"ok": True, "action": "флажок", "document": doc.name}
 
     if action == "претензия к плану":
-        # Претензия сдвигает веса целей относительно последнего удачного
-        # прогона и запускает пересчет. Что именно сдвинуто — в ленте и в
-        # настройках прогона, чтобы план помнил свои претензии.
-        last = (db.query(Run).filter_by(case_id=case_id, status="OPTIMAL")
-                .order_by(Run.id.desc()).first())
-        base = json.loads(last.settings) if last and last.settings else {}
-        new_settings, lines = chat.claim_settings(base, res.get("claims"), text)
-        if not res.get("claims"):
-            agents.say(db, case_id, "Претензию понял, но в цель решателя "
-                       "перевести не смог — назовите, что именно в плане не так: "
-                       "переводы, связки с договорами, освоение по месяцам или "
-                       "суммы по месяцам.", agent="solver")
-            db.commit()
-            return {"ok": True, "action": "ничего"}
-        agents.say(db, case_id, "\n".join(lines), agent="solver")
-        run, created = _start_run(db, case_id, new_settings)
-        if not created:
-            agents.say(db, case_id, "Условие записано. Пересчитаю после расчета № %d — "
-                       "он сейчас идет." % run.id, agent="tuning")
-            db.commit()
-            return {"ok": True, "action": "закреплено", "run_id": run.id}
-        background.add_task(_solve, case_id, run.id, new_settings)
-        return {"ok": True, "action": "расчет", "run_id": run.id}
+        # Претензия с названной целью обработана выше вместе с условиями
+        # плана; сюда доходит только та, в которой цели не нашли ни модель,
+        # ни разбор реплики.
+        agents.say(db, case_id, "Претензию понял, но в цель решателя "
+                   "перевести не смог — назовите, что именно в плане не так: "
+                   "переводы, связки с договорами, освоение по месяцам или "
+                   "суммы по месяцам.", agent="tuning")
+        db.commit()
+        return {"ok": True, "action": "ничего"}
 
     if action == "запустить расчет":
         busy = _running_run(db, case_id)
@@ -2797,6 +4859,7 @@ def case_data(case_id: int):
     try:
         emps = db.query(Employee).order_by(Employee.code).all()
         ctrs = db.query(Contract).order_by(Contract.code).all()
+        manual = basis.manual_columns(db)
         return {
             # Поля отдаются все, какие есть в контракте входного файла: то, что
             # уходит в расчет, экономист должен видеть и проверить.
@@ -2808,6 +4871,7 @@ def case_data(case_id: int):
                            "salary": e.salary,
                            "allowed": e.allowed_contracts,
                            "forbidden": e.forbidden_contracts,
+                           "account": e.account,
                            "from": e.date_from, "to": e.date_to,
                            "source": e.source} for e in emps],
             "contracts": [{"code": c.code, "name": c.name, "number": c.number,
@@ -2819,8 +4883,13 @@ def case_data(case_id: int):
                            "salary_deadline": c.salary_deadline,
                            "allowance_deadline": c.allowance_deadline,
                            "source": c.source,
+                           # Графы, введённые руками поверх документа (SOURCE-007).
+                           "manual": sorted(manual.get(c.code, [])),
                            "from": c.date_from, "to": c.date_to} for c in ctrs],
-            "labor": [{"contract": r.contract_code, "year": r.year,
+            # Итог ФОТ по реестру считает сервер, а не страница (UI-017, UI-002).
+            "contracts_fund": round(sum(float(c.fund) for c in ctrs
+                                        if c.fund not in (None, "")), 2),
+            "labor": [{"id": r.id, "contract": r.contract_code, "year": r.year,
                        "position": r.position, "page": r.salary_page,
                        "group": r.salary_group, "level": r.position_level,
                         "person_months": r.person_months, "avg_cost": r.avg_cost,
@@ -2833,21 +4902,82 @@ def case_data(case_id: int):
                          "source": r.source}
                         for r in db.query(Inflow)
                         .order_by(Inflow.contract_code, Inflow.month).all()],
-            "secret": [{"employee": r.employee_code,
-                        "contract": r.secret_contract_code, "rate": r.rate,
-                        "source": r.source}
+            # id — чтобы строку можно было править в ячейке и удалить.
+            "secret": [_secret_row(r)
                        for r in db.query(SecretAllowance)
                        .order_by(SecretAllowance.id).all()],
             # Нормативная база общая: правила и справочник не привязаны к делу.
-            "substitutions": [{"position": s.position, "replaced_by": s.replaced_by,
+            # id — чтобы строку можно было изменить и удалить (SOURCE-010).
+            "substitutions": [{"id": s.id, "position": s.position, "replaced_by": s.replaced_by,
                                "source": s.source} for s in
                               db.query(Substitution).order_by(Substitution.id).all()],
+            # Рабочие группы договоров (28.09.2026): строка — член группы,
+            # приказ при нём. Договор и строка штатного расписания могут быть
+            # пусты — их выбирает экономист.
+            "workgroups": _workgroup_rows(db),
+            # Приказы о рабочих группах — строкой на приказ (вкладка реестра
+            # «Приказы», 29.09.2026): что загружено и что осталось разобрать.
+            "workorders": _workorders(db),
             "reference": reference.read_rows(),
             # Откуда каждая величина справочника: документ, дата, основание.
             "reference_sources": reference.read_sources(),
+            # Величины с датами (SOURCE-012): экран показывает справочник на
+            # дату и историю должности.
+            "reference_history": reference.read_history(),
+            # Управленческие подразделения (01.10.2026).
+            "mgmt_departments": _mgmt_list(db),
+            "salary": _salary_table(db, emps, _salary_year(db, case_id)),
+            # Факт начислений года плана (30.09.2026): вкладка реестра и
+            # вкладка плана — строками и формой 6.3 «ШР на дату, детализация
+            # назначений», как раздел 6.3 отчёта и шаблон кадров.
+            "facts": facts.registry_rows(db, _salary_year(db, case_id)),
+            "facts_detail": facts.detail_rows(db, _salary_year(db, case_id)),
         }
     finally:
         db.close()
+
+
+def _salary_year(db, case_id):
+    """Год вкладки «Заработная плата по месяцам» — год открытого плана."""
+    case = db.get(Case, case_id)
+    return case.year if case is not None and case.year else now().year
+
+
+def _salary_table(db, emps, year):
+    """Таблица «Заработная плата по месяцам» года: строки, которые принёс
+    документ или добавил экономист. В месяце — сумма из таблицы; зарплаты в
+    штатном расписании нет (решение пользователя 19.09.2026), поэтому месяц
+    без суммы пуст. active — месяцы срока строки: вне их сумма не нужна.
+    Итог по месяцам считает сервер, а не страница (UI-017, UI-002).
+    candidates — кого ещё можно добавить: строки штатного расписания без
+    строки зарплаты."""
+    by_code = {e.code: e for e in emps}
+    # Строка — строка таблицы зарплаты: у человека в двух управленческих
+    # подразделениях их две, у каждой свои суммы (01.10.2026).
+    own = {(r.salary_row_id, r.month): r.amount
+           for r in db.query(SalaryMonth).filter_by(year=year).all()}
+    depts = {d.id: d.name for d in db.query(MgmtDepartment).all()}
+    listed = (db.query(SalaryRow).filter_by(year=year)
+              .order_by(SalaryRow.employee_code, SalaryRow.id).all())
+    # Итог месяца без единой суммы пуст, а не 0: «0» читался бы как зарплата.
+    rows, totals, seen = [], [None] * 12, set()
+    for r in listed:
+        e = by_code.get(r.employee_code)
+        if e is None:
+            continue
+        seen.add(r.employee_code)
+        months = [own.get((r.id, m)) for m in range(1, 13)]
+        for m, value in enumerate(months):
+            if value is not None:
+                totals[m] = (totals[m] or 0.0) + value
+        rows.append({"id": r.id, "code": e.code, "fio": e.fio, "months": months,
+                     "active": build_input.active_months(e.date_from, e.date_to, year),
+                     "source": r.source, "dept_id": r.mgmt_department_id,
+                     "dept": depts.get(r.mgmt_department_id)})
+    candidates = [{"code": e.code, "fio": e.fio} for e in emps if e.code not in seen]
+    return {"year": year, "rows": rows,
+            "totals": [None if t is None else round(t, 2) for t in totals],
+            "candidates": candidates}
 
 
 #: Разбор правил по прогону: чтение двух книг занимает секунды, а ответ
@@ -2873,7 +5003,7 @@ def run_rules(case_id: int, run_id: int):
 
 @app.get("/api/case/{case_id}/run/{run_id}/report")
 def run_report(case_id: int, run_id: int):
-    """План ФОТ на год в формах экономистов: двенадцать разделов числами."""
+    """План ФОТ на год в формах экономистов: пятнадцать разделов числами."""
     src, out = _run_files(db_run(case_id, run_id))
     key = ("отчет", run_id, os.path.getmtime(out))
     if key not in _RULES_CACHE:
@@ -3000,7 +5130,10 @@ def _reference_change(applied):
 @app.post("/api/reference")
 async def post_reference(request: Request):
     body = await request.json()
-    applied = reference.apply(body.get("edits") or [])
+    # Дата, с которой величины действуют (01.10.2026): из карточки
+    # расхождений документа; без неё — величина на все даты, как раньше.
+    applied = reference.apply(body.get("edits") or [],
+                              effective=body.get("effective_from") or None)
     case_id = body.get("case_id")
     if applied:
         db = session()
@@ -3046,58 +5179,71 @@ async def document_reference(doc_id: int, request: Request):
         d = db.get(Document, doc_id)
         if d is None:
             raise HTTPException(404, "документ не найден")
-        from fot_planner.harness_local import decisions as D
-        if D.stale(expected, d.sha256):
-            record_decision(db, kind="норма", subject_kind="документ", subject_id=d.id,
-                            subject_digest=D.digest(d.sha256, edits), scope="организация",
-                            action={"правок": len(edits)}, grounds="карточка документа",
-                            precondition=expected, outcome="отклонено: документ изменился после открытия формы")
-            db.commit()
-            raise HTTPException(409, "документ изменился после открытия формы — откройте карточку заново")
-        applied = reference.apply(edits)
-        if applied:
-            actuality.mark_review(db, actuality.runs_pinned_reference(db),
-                                  _reference_change(applied))
-        if edits:
-            # Норма меняется для всей организации: справочник один.
-            record_decision(db, kind="норма", subject_kind="документ", subject_id=d.id,
-                            subject_digest=D.digest(d.sha256, edits), scope="организация",
-                            action={"правок": len(applied), "поля": sorted({a["field"] for a in applied})},
-                            grounds="карточка документа", precondition=expected)
-        gave = {}
-        try:
-            gave = json.loads(d.gave) if d.gave else {}
-        except ValueError:
-            gave = {}
-        # Величина записана из этого документа — он и есть её источник.
-        for field in sorted({a["field"] for a in applied}):
-            reference.set_source(field, d.name, d.id, _dt(d.uploaded),
-                                 gave.get("основание"), gave.get("действует с"))
-        done = {(a["pos"], a["field"]) for a in applied}
-        # Строка без изменения — тоже записана: справочник уже такой.
-        asked = {(e.get("pos"), e.get("field")) for e in edits}
-        rest = [c for c in gave.get("расхождения") or []
-                if (c.get("pos"), c.get("field")) not in done
-                and (c.get("pos"), c.get("field")) not in asked]
-        gave["расхождения"] = rest
-        gave["расхождений"] = len(rest)
-        d.gave = json.dumps(gave, ensure_ascii=False)
-        d.summary = "расхождений %d" % len(rest)
-        if d.case_id:
-            agents.say(db, d.case_id,
-                       "Записал в справочник %d %s из «%s»."
-                       % (len(applied), intake._plural(len(applied), "значение",
-                                                       "значения", "значений"), d.name),
-                       agent="norms", document_id=d.id,
-                       payload={"kind": "reference_applied", "applied": applied})
-            if applied:
-                agents.handoff(db, d.case_id, "norms", "solver",
-                               "Справочник изменен — прежний план посчитан по "
-                               "старым величинам, нужен пересчет.")
-        db.commit()
-        return {"ok": True, "applied": applied, "осталось": rest}
+        return _write_document_reference(db, d, edits, expected)
     finally:
         db.close()
+
+
+def _write_document_reference(db, d, edits, expected=None, grounds="карточка документа"):
+    """Записать в справочник правки из документа ``d``: величины, источник,
+    журнал решений. Общая для карточки документа и начальной загрузки из
+    папки (SOURCE-015), где подтверждать некому."""
+    from fot_planner.harness_local import decisions as D
+    if D.stale(expected, d.sha256):
+        record_decision(db, kind="норма", subject_kind="документ", subject_id=d.id,
+                        subject_digest=D.digest(d.sha256, edits), scope="организация",
+                        action={"правок": len(edits)}, grounds=grounds,
+                        precondition=expected, outcome="отклонено: документ изменился после открытия формы")
+        db.commit()
+        raise HTTPException(409, "документ изменился после открытия формы — откройте карточку заново")
+    try:
+        told = json.loads(d.gave) if d.gave else {}
+    except ValueError:
+        told = {}
+    # Величины документа действуют с его даты (01.10.2026): прежние
+    # остаются в справочнике до неё — план прошлых месяцев не меняется.
+    applied = reference.apply(edits, effective=told.get("действует с") or None, doc=d)
+    if applied:
+        actuality.mark_review(db, actuality.runs_pinned_reference(db),
+                              _reference_change(applied))
+    if edits:
+        # Норма меняется для всей организации: справочник один.
+        record_decision(db, kind="норма", subject_kind="документ", subject_id=d.id,
+                        subject_digest=D.digest(d.sha256, edits), scope="организация",
+                        action={"правок": len(applied), "поля": sorted({a["field"] for a in applied})},
+                        grounds=grounds, precondition=expected)
+    gave = {}
+    try:
+        gave = json.loads(d.gave) if d.gave else {}
+    except ValueError:
+        gave = {}
+    # Величина записана из этого документа — он и есть её источник.
+    for field in sorted({a["field"] for a in applied}):
+        reference.set_source(field, d.name, d.id, _dt(d.uploaded),
+                             gave.get("основание"), gave.get("действует с"))
+    done = {(a["pos"], a["field"]) for a in applied}
+    # Строка без изменения — тоже записана: справочник уже такой.
+    asked = {(e.get("pos"), e.get("field")) for e in edits}
+    rest = [c for c in gave.get("расхождения") or []
+            if (c.get("pos"), c.get("field")) not in done
+            and (c.get("pos"), c.get("field")) not in asked]
+    gave["расхождения"] = rest
+    gave["расхождений"] = len(rest)
+    d.gave = json.dumps(gave, ensure_ascii=False)
+    d.summary = "расхождений %d" % len(rest)
+    if d.case_id:
+        agents.say(db, d.case_id,
+                   "Записал в справочник %d %s из «%s»."
+                   % (len(applied), intake._plural(len(applied), "значение",
+                                                   "значения", "значений"), d.name),
+                   agent="norms", document_id=d.id,
+                   payload={"kind": "reference_applied", "applied": applied})
+        if applied:
+            agents.handoff(db, d.case_id, "norms", "solver",
+                           "Справочник изменен — прежний план посчитан по "
+                           "старым величинам, нужен пересчет.")
+    db.commit()
+    return {"ok": True, "applied": applied, "осталось": rest}
 
 
 @app.post("/api/document/{doc_id}/source")
@@ -3138,6 +5284,25 @@ async def document_source(doc_id: int, request: Request):
 
 
 # ── расчет ──────────────────────────────────────────────────────
+def _conflict_reason(descr, no_plan):
+    """Строка «Конфликт» решателя — словами для ленты, или None.
+
+    Обычно названо ограничение в скобках, и при «ни одна строка трудоёмкости
+    не закрыта» оно — следствие, его не пересказываем. Закрепление экономиста,
+    которое не выполнить (MANUAL-ANY-001: договор в эти месяцы не может ему
+    платить), — причина, а не следствие: её называем всегда, целиком."""
+    import re
+    text = str(descr or "")
+    m = re.search(r"\(([^)]+)\)", text)
+    if not m:
+        return None
+    if "акреплен" in text or "акреплён" in text:
+        return "%s: %s." % (text.split("(")[0].strip().rstrip("."), m.group(1))
+    if no_plan:
+        return None
+    return "Решатель назвал ограничение, которое не сошлось: %s." % m.group(1)
+
+
 def _explain_failure(db, case, run, src, out, err_text=""):
     """Почему решения нет — словами экономиста, а не кодом статуса.
 
@@ -3180,7 +5345,8 @@ def _explain_failure(db, case, run, src, out, err_text=""):
         found["почему"].append(
             "Ни одного допустимого плана не нашлось: ни одна строка трудоемкости не закрыта "
             "даже частично, значит, дело не в подборе людей, а в жестком условии — деньгах "
-            "по месяцам, сроках договоров или числе людей по строкам РКМ.")
+            "по месяцам, сроках договоров, числе людей по строкам РКМ или закреплениях "
+            "плана.")
 
     employees = db.query(Employee).all()
     subs = db.query(Substitution).all()
@@ -3250,10 +5416,9 @@ def _explain_failure(db, case, run, src, out, err_text=""):
                              "в настройках.")
                 found["почему"].append(text)
         elif section == "Конфликт":
-            m = re.search(r"\(([^)]+)\)", str(descr or ""))
-            if m and not no_plan:
-                found["почему"].append("Решатель назвал ограничение, которое не сошлось: %s."
-                                       % m.group(1))
+            reason = _conflict_reason(descr, no_plan)
+            if reason:
+                found["почему"].append(reason)
         else:
             where = " · ".join(str(x) for x in (obj, w[3]) if x not in (None, "", "—"))
             found["почему"].append("%s%s%s" % (descr, (" — " + where) if where else "",
@@ -3267,7 +5432,20 @@ def _explain_failure(db, case, run, src, out, err_text=""):
                                "Это ошибка сборки входного файла — сообщите разработчику." % last)
     if not found["почему"]:
         found["почему"].append("Решатель не назвал ограничение. Проверьте предупреждения "
-                               "сборки входа в ленте и поступления по договорам.")
+                               "сборки входа в ленте и закрепления плана.")
+    # Сначала — закрепления экономиста: это его решения, и снять их дешевле,
+    # чем допускать дефицит. Общая фраза «дело в деньгах или сроках» при
+    # найденном закреплении вводит в заблуждение (02.10.2026: «вся зарплата»
+    # Зайцева с C_BASE-26 не давала закрыть строки РКМ C_GOZ-26, а разбор
+    # говорил о деньгах) — тогда она уходит, остаётся названное закрепление.
+    pin = _try_without_pins(db, case, run)
+    if pin:
+        found["почему"] = [x for x in found["почему"]
+                           if not x.startswith("Ни одного допустимого плана")]
+        found["почему"].insert(0, "Мешает закрепление плана: расчёт сходится, если %s." % pin)
+        found["опыты"] = [(pin, "сходится", "")]
+        found["текст"] = "Решения нет. " + " ".join(found["почему"])
+        return found
     # Во что обойдется выход: те же данные, но с одним ослабленным условием.
     # Первое, при котором план сходится, и есть цена вопроса.
     found["опыты"] = _try_relaxations(src, case, run)
@@ -3288,9 +5466,95 @@ _RELAXATIONS = (
 
 
 def _registry_ready(db):
-    """Реестр организации полон для расчета: люди, договоры, поступления."""
-    return bool(db.query(Employee).count() and db.query(Contract).count()
-                and db.query(Inflow).count())
+    """Реестр организации полон для расчета: люди и договоры. Поступления в
+    расчёт не подаются (ПРАВИЛА_РЕШАТЕЛЯ, правило 21) и не требуются."""
+    return bool(db.query(Employee).count() and db.query(Contract).count())
+
+
+#: Сколько опытов над закреплениями плана — не больше: каждый — прогон решателя.
+PIN_TRIALS = 6
+
+
+def _pin_trials(db, ps):
+    """Опыты над закреплениями экономиста: [(подпись, изменённые переменные)].
+
+    У закрепления «вся зарплата» сначала пробуем снять только этот признак —
+    это мягче и чаще всего и есть выход, — потом закрепление целиком. Члена
+    рабочей группы снять нельзя (состав меняет приказ), пробуем только его
+    «вся зарплата»."""
+    names = {e.code: e.fio for e in db.query(Employee).all()}
+    pins = ps.get("назначения") or []
+
+    def key(f):
+        return f.get("сотрудник"), f.get("договор"), f.get("с"), f.get("по")
+
+    out, seen = [], []
+    for f0 in pins:
+        k = key(f0)
+        if k in seen:
+            continue
+        seen.append(k)
+        rest = [f for f in pins if key(f) != k]
+        group = [f for f in pins if key(f) == k]
+        who = "%s на %s, %s" % (f0.get("фио") or names.get(f0.get("сотрудник")) or f0.get("сотрудник"),
+                                f0.get("договор"),
+                                facts.months_text(range(int(f0["с"]), int(f0["по"]) + 1)))
+        if any(f.get("только") for f in group):
+            out.append(("у закрепления %s снять «вся зарплата»" % who,
+                        {**ps, "назначения": rest + [{**f, "только": False} for f in group]}))
+        out.append(("снять закрепление %s" % who, {**ps, "назначения": rest}))
+    groups = ps.get("рабочие группы") or {}
+    for gk, choice in groups.items():
+        if choice.get("только") and "|" in gk:
+            code, emp = gk.split("|", 1)
+            out.append(("у члена рабочей группы %s на %s снять «вся зарплата»"
+                        % (names.get(emp) or emp, code),
+                        {**ps, "рабочие группы": {**groups, gk: {**choice, "только": False}}}))
+    return out
+
+
+def _try_without_pins(db, case, run):
+    """Мешает ли закрепление экономиста: подпись выхода или None.
+
+    Сначала один прогон без всех закреплений и признаков «вся зарплата»:
+    не сходится и так — дело не в них, остальные опыты не нужны. Сходится —
+    по одному, пока не найдётся то, без которого план есть. Повтор прогона
+    из снимка не разбирается: его вход не из нынешнего реестра."""
+    if getattr(run, "retry_of", None):
+        return None
+    ps = chat.plan_settings(case)
+    trials = _pin_trials(db, ps)
+    if not trials:
+        return None
+    bare = {**ps, "назначения": [],
+            "рабочие группы": {k: {**v, "только": False}
+                               for k, v in (ps.get("рабочие группы") or {}).items()}}
+    if not _solves_with(db, case, run, bare, "pins0"):
+        return None
+    for i, (name, variant) in enumerate(trials[:PIN_TRIALS], 1):
+        if _solves_with(db, case, run, variant, "pins%d" % i):
+            return name
+    return "снять закрепления плана"
+
+
+def _solves_with(db, case, run, ps, tag):
+    """Сходится ли расчёт на нынешнем реестре с переменными плана ps."""
+    try:
+        warn = []
+        data = _registry_data(db, case, warn)
+        settings = json.loads(run.settings) if run.settings else {}
+        if settings:
+            data["settings"] = {**(data.get("settings") or {}),
+                                **{k: v for k, v in settings.items() if k != "претензии"}}
+        _apply_plan_settings(data, case, warn, ps=ps)
+        tmp = os.path.join(RESULT_DIR, "case%d_run%d_%s.xlsx" % (case.id, run.id, tag))
+        build_input.build(reference.TEMPLATE, tmp, data, warn)
+        res = tmp.replace(".xlsx", "_out.xlsx")
+        p = subprocess.run([EXE, "solve", "-i", tmp, "-o", res],
+                           capture_output=True, text=True, timeout=180, cwd=ROOT)
+        return not _no_solution(p.returncode, _read_solver_output(p.stdout or "")["solver_status"])
+    except Exception:  # noqa: BLE001 — опыт не должен ронять разбор
+        return False
 
 
 def _labor_plan_sum(db, obj):
@@ -3333,7 +5597,7 @@ def _try_relaxations(src, case, run):
             limit = 480 if column == "разрешить дефицит" else 180
             p = subprocess.run([EXE, "solve", "-i", tmp, "-o", res],
                                capture_output=True, text=True, timeout=limit, cwd=ROOT)
-            if p.returncode != 0:
+            if _no_solution(p.returncode, _read_solver_output(p.stdout or "")["solver_status"]):
                 out.append((name, "не сходится", ""))
                 continue
             cost = _relaxation_cost(res)
@@ -3522,23 +5786,30 @@ def _n(v):
     return ("%.2f" % v).rstrip("0").rstrip(".").replace(".", ",")
 
 
-def _run_sources(db):
+def _run_sources(db, data=None):
     """Что легло в основание расчета: документы и версии агентов.
 
     Документ попадает сюда, если хоть одна строка реестра ссылается на него.
     У каждого — имя, версия и что он дал реестру. Отпечаток содержимого тоже
     сохраняется в записи прогона, но нигде не показывается: экономисту он
     ничего не говорит, а служебную сверку сервис делает сам при загрузке.
+
+    С данными сборки основание считается по строкам, ушедшим во вход: план
+    мог снять договор или выбрать прежнюю версию документа (SOURCE-003).
     """
-    rows = {}
-    for model, what in ((Employee, "сотрудников"), (Contract, "договоров"),
-                        (LaborRow, "строк трудоемкости"), (Inflow, "поступлений"),
-                        (SecretAllowance, "надбавок 120"),
-                        (Substitution, "правил замещения")):
-        for r in db.query(model).all():
-            if r.document_id:
-                rows.setdefault(r.document_id, {})
-                rows[r.document_id][what] = rows[r.document_id].get(what, 0) + 1
+    if data is not None and data.get("row_sources") is not None:
+        rows = data["row_sources"]
+    else:
+        rows = {}
+        for model, what in ((Employee, "сотрудников"), (Contract, "договоров"),
+                            (LaborRow, "строк трудоемкости"), (Inflow, "поступлений"),
+                            (SecretAllowance, "надбавок 120"),
+                            (Substitution, "правил замещения"),
+                            (ContractValue, "величин пакета")):
+            for r in db.query(model).all():
+                if r.document_id:
+                    rows.setdefault(r.document_id, {})
+                    rows[r.document_id][what] = rows[r.document_id].get(what, 0) + 1
     docs = []
     for doc_id, counts in sorted(rows.items()):
         d = db.get(Document, doc_id)
@@ -3614,10 +5885,20 @@ def _audit_requirements():
 
 def _solver_command(src, out, limit):
     command = [EXE, "solve", "-i", src, "-o", out, "--time-limit", str(limit)]
+    command += ['--audit-bundle', out + '.audit.json']
     required = _audit_requirements()
     if required:
         command += ["--require", ",".join(required)]
     return command
+
+
+def _no_solution(returncode, solver_status):
+    """Решения нет — только если решатель плана не нашёл. CLI отдаёт код 1 и
+    при найденном плане, если есть предупреждения (коды *_WARNING — в том
+    числе о факте начислений, 30.09.2026): такой план посчитан, а
+    предупреждения лежат на листе «Проблемы и предупреждения» результата.
+    Раньше любой код, кроме 0, читался как «решения нет»."""
+    return returncode != 0 and solver_status not in ("OPTIMAL", "FEASIBLE")
 
 
 def _read_solver_output(stdout):
@@ -3645,6 +5926,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
     stop = threading.Event()
     threading.Thread(target=_heartbeat, args=(run_id, stop), daemon=True).start()
     draft, draft_digest, out, audit_status, audit_lines, sec = None, None, None, "", [], None
+    audit_checks, solver_status = [], ""
     try:
         case = db.get(Case, case_id)
         run = db.get(Run, run_id)
@@ -3667,16 +5949,16 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
                 sources = pinned[1]
                 w["detail"] = "вход взят из снимка прогона № %d" % pinned_from
             else:
-                data = _registry_data(db, case)
+                data = _registry_data(db, case, warn)
                 if settings:
                     # Настройки прогона поверх настроек из шаблона: сюда попадают
                     # веса целей, сдвинутые претензиями экономиста.
                     data["settings"] = {**(data.get("settings") or {}),
                                         **{k: v for k, v in settings.items()
                                            if k != "претензии"}}
-                _apply_plan_settings(data, case)
+                _apply_plan_settings(data, case, warn)
                 build_input.build(reference.TEMPLATE, src, data, warn)
-                sources = _run_sources(db)
+                sources = _run_sources(db, data)
                 # В строке работы — коротко; сами допущения уходят в ленту
                 # сообщениями и лежат в артефакте, а не растягивают колонку.
                 w["detail"] = "вход собран" + (", допущений %d" % len(warn) if warn else "")
@@ -3767,7 +6049,7 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
                    "попадут. План не считается готовым."]), agent="solver")
             db.commit()
             return
-        if p.returncode != 0:
+        if _no_solution(p.returncode, solver_status):
             run.status = "нет решения"
             case.stage = "нет решения"
             agents.handoff(db, case_id, "solver", "infeasible",
@@ -3798,7 +6080,21 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
         run.status = "OPTIMAL"
         run.result_path = out
         _write_sources_sheet(out, sources)
-        _manifest_final(run, draft, out, "OPTIMAL", audit_status, audit_lines, sec)
+        from audit_runner import run_audit
+        independent = run_audit(_artifacts(), draft, out + '.audit.json', out)
+        if independent.get('verdict') != 'passed':
+            run.status = case.stage = 'не прошёл проверку'
+            run.summary = json.dumps({'независимый аудит': independent}, ensure_ascii=False)
+            _manifest_final(run, draft, out, solver_status, audit_status, audit_lines, sec,
+                             audit_checks=audit_checks, independent_audit=independent)
+            db.commit()
+            agents.say(db, case_id, 'Независимая проверка результата не пройдена. План не готов.', agent='solver')
+            db.commit()
+            return
+        # Финальный снимок ссылается на те же неизменяемые байты, что проверил worker.
+        audited_out = _artifacts().path(independent['output_sha256'])
+        _manifest_final(run, draft, audited_out, solver_status, audit_status, audit_lines, sec,
+                         audit_checks=audit_checks, independent_audit=independent)
         summary = {}
         try:
             import result2json
@@ -3843,7 +6139,8 @@ def _solve(case_id: int, run_id: int, settings: dict | None, pinned_from: int | 
     finally:
         stop.set()
         try:
-            _manifest_close(db, run_id, draft, draft_digest, out, audit_status, audit_lines, sec)
+            _manifest_close(db, run_id, draft, draft_digest, out, audit_status, audit_lines, sec,
+                             audit_checks=audit_checks, solver_status=solver_status)
         except Exception:  # noqa: BLE001 — снимок не должен добить и без того упавший прогон
             pass
         db.close()
@@ -3979,8 +6276,15 @@ def download_result(case_id: int, run_id: int):
     if not (src and os.path.exists(src) and os.path.exists(out)):
         return FileResponse(out, filename="план_ФОТ_%d.xlsx" % run_id)
     book = os.path.join(RESULT_DIR, "case%d_run%d_report.xlsx" % (case_id, run_id))
-    if not os.path.exists(book) or os.path.getmtime(book) < os.path.getmtime(out):
-        import export_report
+    import export_report
+    import report as report_mod
+    import rules as rules_mod
+    # Книга собирается заново и тогда, когда поменялся сам отчёт: иначе
+    # после правки названий и граф (30.09.2026) выгрузка старого расчёта
+    # отдавала прежние листы.
+    fresh = max([os.path.getmtime(out)] + [os.path.getmtime(m.__file__)
+                                           for m in (export_report, report_mod, rules_mod)])
+    if not os.path.exists(book) or os.path.getmtime(book) < fresh:
         try:
             export_report.build(src, out, book, goals=summary.get("цели"), versions=versions)
         except Exception as exc:  # noqa: BLE001 — без отчёта остаётся файл решателя
@@ -4013,6 +6317,18 @@ class NoCacheStatic(StaticFiles):
         else:
             resp.headers["Cache-Control"] = "no-store, must-revalidate"
         return resp
+
+
+@app.get("/plan/{rest:path}", include_in_schema=False)
+@app.get("/registry", include_in_schema=False)
+@app.get("/registry/{rest:path}", include_in_schema=False)
+def screen_address(rest: str = ""):
+    """Адрес экрана — путь, без «#» (пользователь 30.09.2026: «зачем решётка
+    в урлах»): на /plan/… и /registry/… — та же страница, экран по адресу
+    выбирает она сама (app.js, parseRoute). Без этого перезагрузка по такому
+    адресу давала бы 404."""
+    return FileResponse(os.path.join(STATIC, "index.html"),
+                        headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 app.mount("/", NoCacheStatic(directory=STATIC, html=True), name="static")

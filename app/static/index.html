@@ -5,43 +5,36 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Планирование ФОТ — CML-Bench 2.0</title>
 <link rel="stylesheet" href="/fonts.css">
-<link rel="stylesheet" href="/app.css?v=20260909">
-<link rel="stylesheet" href="/issues.css?v=20260909">
+<link rel="stylesheet" href="/app.css?v=20261001-ds-118">
+<link rel="stylesheet" href="/issues.css?v=20260918-ds-16">
+<link rel="stylesheet" href="/workspace.css?v=20260930-4">
 </head>
 <body>
 
-<header class="brandbar">
-  <img src="/logo.svg" alt="CML-Bench 2.0" class="logo">
-  <span class="bname">Сервис планирования фонда оплаты труда</span>
-  <span class="spacer"></span>
-  <!-- Справа — переключатель контекстной колонки: то, что относится ко
-       всему сервису, а не к текущему плану. -->
-  <button type="button" class="iconbtn" id="toggleside" title="Скрыть колонку контекста"
-          aria-label="Скрыть колонку контекста">
-    <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
-         stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-      <rect x="2" y="3" width="12" height="10" rx="1.6"/>
-      <path d="M10.5 3v10"/>
-    </svg>
-  </button>
-</header>
+<div class="shell noside">
 
-<div class="shell">
+  <!-- Граница колонки планов тянется мышью и стрелками: сколько места отдать
+       списку, решает экономист. -->
+  <div class="grip" id="asidegrip" role="separator" aria-orientation="vertical"
+       aria-label="Ширина колонки планов" tabindex="0"
+       aria-valuemin="180" aria-valuemax="420" aria-valuenow="240"></div>
 
-  <!-- Навигация: разделы с иконками, ниже список планов, внизу главное
-       действие и аккаунт. Иконка означает «это раздел», ее отсутствие —
-       «это запись». -->
+  <!-- Навигация: главное действие, разделы, ниже список планов. Иконка
+       означает «это раздел», ее отсутствие — «это запись». -->
   <aside class="cases">
+    <!-- Голова колонки: знак платформы и название модуля (UI-012). Отдельной
+         полосы над приложением нет — она занимала 44 px и называла продукт
+         дважды. -->
+    <span class="bmark">
+      <img src="/logo.svg" alt="CML-Bench 2.0" class="logo" width="162" height="17">
+      <span class="bname">Планирование ФОТ</span>
+    </span>
+
+    <!-- Порядок: главное действие и разделы наверху — они не растут и видны
+         всегда; список планов занимает остаток колонки и прокручивается сам.
+         В макете разделы стоят под списком, но там пять планов: с сорока
+         раздел уехал бы за край или прилип к низу. -->
     <nav class="nav">
-      <!-- Точка входа: последний посчитанный план сразу сводкой, без ленты. -->
-      <button type="button" class="navi" id="opencurrent">
-        <span class="ic" aria-hidden="true">
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M2.5 13.5h11M4 11V7.5M7.3 11V4.5M10.6 11V6.2M13 11V3"/>
-          </svg>
-        </span>
-        Текущий план
-      </button>
       <button type="button" class="navi" id="openreg">
         <span class="ic" aria-hidden="true">
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
@@ -51,12 +44,28 @@
         </span>
         Реестр организации
       </button>
+      <!-- Точка входа: последний посчитанный план сразу сводкой, без ленты. -->
+      <button type="button" class="navi" id="opencurrent">
+        <span class="ic" aria-hidden="true">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2.5 13.5h11M4 11V7.5M7.3 11V4.5M10.6 11V6.2M13 11V3"/>
+          </svg>
+        </span>
+        Текущий план
+      </button>
     </nav>
 
-    <div class="ctitle">Планы</div>
+    <!-- Действие раздела — плюс у его заголовка, а не отдельная кнопка во всю
+         ширину: список планов и есть раздел, к которому оно относится. -->
+    <div class="ctitle">Планы
+      <button type="button" class="cta" id="newcase" title="Новый план"
+              aria-label="Новый план">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" aria-hidden="true">
+          <rect x="6" y="2" width="2" height="10"/><rect x="2" y="6" width="10" height="2"/>
+        </svg>
+      </button>
+    </div>
     <div id="caselist" class="clist"></div>
-
-    <button type="button" class="cta" id="newcase">+&nbsp;&nbsp;Новый план</button>
   </aside>
 
   <!-- лента плана -->
@@ -65,21 +74,51 @@
          принадлежат плану, а не ленте. Лента — только один из его видов,
          поэтому вкладки идут ниже заголовка. -->
     <header class="phead">
-      <div class="row">
+      <!-- Название, состояние и действия — одной строкой заголовка. Строкой
+           ниже действия стояли вплотную над вкладками, и с шестой вкладкой
+           всё слиплось (пользователь 30.09.2026). Места мало — действия
+           переносятся под название, а не налезают на него. -->
+      <div class="ptop">
+        <!-- Заголовок остаётся заголовком, а правит его вложенная кнопка:
+             role="button" на h1 отнимал у страницы уровень заголовка.
+             Кнопку собирает код — вместе с названием внутри неё. -->
         <h1 id="ptitle"></h1>
-        <button id="solve" class="primary" type="button">Рассчитать план</button>
+        <span class="pverdict" id="pverdict"></span>
+        <div class="pactions">
+          <span class="prun" id="prun"></span>
+          <button id="solve" class="primary" type="button">Рассчитать план</button>
+          <!-- Чат с агентами — панелью справа; точка на значке — новые реплики.
+               Такой же значок стоит в строке заголовка реестра (data-chattoggle):
+               чат открывают с любого экрана (30.09.2026). -->
+          <button type="button" class="iconbtn" id="togglechat" data-chattoggle title="Чат с агентами"
+                  aria-label="Чат с агентами" aria-controls="chatpanel" aria-expanded="false">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+               stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 10a1.3 1.3 0 0 1-1.3 1.3H4.7L2 14V3.3A1.3 1.3 0 0 1 3.3 2h9.4A1.3 1.3 0 0 1 14 3.3z"/>
+          </svg>
+          </button>
+        </div>
       </div>
-      <div class="meta" id="pmeta"></div>
     </header>
 
-    <!-- Лента — основной режим; остальные вкладки нужны, чтобы открыть и
-         посмотреть данные, которые агенты собрали, и результат расчета. -->
-    <nav class="tabs" id="tabs">
-      <button type="button" class="tab on" data-view="feed">Лента</button>
+    <!-- Вкладки плана: слева то, что вводят, справа то, что получают
+         (дизайн-разбор 30.09.2026). «Ленты» среди них нет: переписка с
+         агентами — в панели чата по значку в шапке. -->
+    <nav class="tabs" id="tabs" aria-label="Разделы плана">
+      <!-- Какие договоры и на каких условиях идут в этот расчёт: выбор
+           принадлежит плану, а не реестру — реестр библиотека (SOURCE-003). -->
+      <button type="button" class="tab on" data-view="ctr" aria-current="page">Договоры</button>
+      <!-- Штатное расписание и зарплата в этом плане — двумя вкладками с
+           именами реестра, а не гибридом «Сотрудники» (пользователь
+           30.09.2026: «сотрудники — это не штатка и не зарплата, будут
+           ругаться»): правки поверх реестра для расчёта «а что если». -->
+      <button type="button" class="tab" data-view="emp">Штатное расписание</button>
+      <button type="button" class="tab" data-view="zp">Заработная плата по месяцам</button>
+      <button type="button" class="tab" data-view="fact">Факт начислений</button>
       <button type="button" class="tab" data-view="sum">План ФОТ</button>
+      <button type="button" class="tab" data-view="ord">Проекты приказов</button>
     </nav>
 
-    <div class="feed" id="feed"></div>
     <div class="view" id="view" hidden></div>
     <div class="view" id="regview" hidden></div>
     <div class="view" id="agentview" hidden></div>
@@ -87,6 +126,25 @@
     <div class="ask" id="ask" hidden></div>
 
 
+  </main>
+
+  <!-- Чат с агентами — правой колонкой по значку в шапке плана, а не
+     вкладкой «Лента» (решение пользователя 30.09.2026: «Лента сейчас вообще
+     не информативна, нужна ли она?» — «чат панелью»). Открытый, он сдвигает
+     рабочую область, а не ложится поверх панели договора; колонки
+     «Документы в этом плане» больше нет. -->
+<aside class="side chatpanel" id="chatpanel" aria-label="Чат с агентами">
+    <div class="chath">
+      <h2>Чат с агентами</h2>
+      <button type="button" class="iconbtn" id="closechat" title="Закрыть чат"
+              aria-label="Закрыть чат">
+        <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor"
+             stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 4l8 8M12 4l-8 8"/>
+        </svg>
+      </button>
+    </div>
+    <div class="feed" id="feed"></div>
     <form class="composer" id="composer">
       <!-- Кнопка спрашивает, куда класть файл: в реестр организации или
            только в этот план. Само поле выбора файла открывается после ответа. -->
@@ -94,25 +152,15 @@
         <span>+</span>
       </button>
       <input type="file" id="files" multiple accept=".xlsx,.xlsm,.xls,.pdf,.doc,.docx" hidden>
-      <input type="text" id="text" placeholder="Ответьте агенту или напишите, что поправить"
-             autocomplete="off">
+      <input type="text" id="text" placeholder="Ответьте агенту или напишите, что поправить…"
+             aria-label="Сообщение агенту" autocomplete="off">
       <button type="submit" id="send">Отправить</button>
     </form>
-  </main>
-
-  <!-- Контекст плана: версии расчета и документы. Агенты живут в ленте
-       как авторы реплик, отдельной панели им не нужно. -->
-  <aside class="side">
-    <section>
-      <h3>Документы в этом плане</h3>
-      <div id="docs" class="docs"></div>
-      <button type="button" class="ghost" id="toreg">Весь реестр организации</button>
-    </section>
   </aside>
 
 </div>
 
 <script src="/issues.js"></script>
-<script src="/app.js?v=20260909-pin-metric"></script>
+<script src="/app.js?v=20261001-ds-118"></script>
 </body>
 </html>

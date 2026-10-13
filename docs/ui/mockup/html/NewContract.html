@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Создание договора · выбор документов</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #FFFFFF; color: #17191C; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 13px; -webkit-font-smoothing: antialiased; }
+    sc-for, sc-if { display: contents; }
+    a { color: #1F4FA8; text-decoration: none; }
+    a:hover { color: #163A78; text-decoration: underline; }
+    h2 { margin: 0; font-weight: 600; }
+    .btn { height: 32px; padding: 0 13px; border: 1px solid #CBD0D6; border-radius: 3px; background: #FFFFFF; color: #17191C; font: 500 13px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; white-space: nowrap; text-decoration: none; }
+    .btn:hover { background: #F1F3F5; color: #17191C; text-decoration: none; }
+    .btn:active { background: #E4E8EC; }
+    .btn:focus-within { outline: 2px solid #A9C0E6; outline-offset: 1px; }
+    .f-in { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .btn-pri { background: #1F4FA8; border-color: #1F4FA8; color: #FFFFFF; }
+    .btn-pri:hover { background: #163A78; border-color: #163A78; color: #FFFFFF; }
+    .btn-pri:active { background: #12306B; border-color: #12306B; }
+    .btn:disabled { color: #A8AEB4; cursor: default; background: #FFFFFF; border-color: #DEE2E6; }
+    .btn-pri:disabled { background: #C3CEE0; border-color: #C3CEE0; color: #FFFFFF; }
+    .btn-off { background: #C3CEE0; border-color: #C3CEE0; color: #FFFFFF; pointer-events: none; }
+    .btn-lg { height: 38px; padding: 0 17px; font-size: 13px; }
+    .lnk { border: 0; background: none; padding: 0; margin: 0; color: #1F4FA8; font: 400 12.5px/1.45 "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; text-align: left; }
+    .lnk:hover { text-decoration: underline; }
+    .tbl { border: 1px solid #E1E4E7; border-radius: 3px; background: #FFFFFF; overflow: hidden; }
+    .r { display: grid; align-items: center; column-gap: 11px; padding: 0 11px; min-height: 44px; border-top: 1px solid #EDEFF1; }
+    .thead .r { min-height: 28px; border-top: 0; background: #F5F6F8; }
+    .tbody .r:first-child { border-top: 0; }
+    .th { font: 600 11px/1.3 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; letter-spacing: 0; }
+    .td { font: 400 12.5px/1.3 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .num { font-variant-numeric: tabular-nums; }
+    .sub { font: 400 11px/1.35 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; }
+    .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .warn { color: #8A5A00; }
+    .mut { color: #5C636B; }
+    .cap { font: 600 11px/1.2 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; letter-spacing: 0; }
+    .f-files .r { grid-template-columns: minmax(0, 1fr) 110px 44px; }
+    .del { width: 26px; height: 26px; padding: 0; border: 0; border-radius: 3px; background: none; color: #7A828A; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    .del:hover { background: #F1F3F5; color: #A4382C; }
+    .tab { height: 40px; padding: 0 1px; margin-right: 20px; border: 0; border-bottom: 2px solid transparent; background: none; color: #5A6169; font: 400 13px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; display: inline-flex; align-items: center; }
+    .tab:hover { color: #17191C; }
+    .tab:disabled { color: #A8AEB4; cursor: default; }
+    .tab-on { color: #17191C; font-weight: 500; border-bottom-color: #1F4FA8; }
+    input[type="checkbox"] { width: 14px; height: 14px; accent-color: #1F4FA8; margin: 0; cursor: pointer; }
+    .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn {
+      transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn { transition: none; }
+    }
+  </style>
+  <script src="support.js"></script>
+</head>
+<body style="margin: 0;">
+<x-dc>
+
+<div style="width: 1440px; height: 1020px; position: relative; background: #FFFFFF; overflow: hidden;">
+
+  <div style="position: absolute; inset: 0; display: flex; filter: saturate(.5);">
+    <div style="width: 240px; height: 920px; background: #EFF0F1; border-right: 1px solid #E1E4E7;"></div>
+    <div style="flex-grow: 1; padding: 20px 22px;">
+      <div style="font-size: 20px; font-weight: 600; color: #9AA0A6;">Реестр</div>
+      <div style="margin-top: 58px; border: 1px solid #ECEEF0; border-radius: 3px; height: 620px; background: #FBFBFC;"></div>
+    </div>
+  </div>
+  <div style="position: absolute; inset: 0; background: #17191C; opacity: .38;"></div>
+
+  <div style="position: absolute; left: 300px; top: 220px; width: 840px; height: 410px; background: #FFFFFF; border-radius: 3px; box-shadow: 0 18px 48px rgba(16, 20, 26, .28); display: flex; flex-direction: column; overflow: hidden;">
+
+    <div style="padding: 18px 22px 14px; border-bottom: 1px solid #E8EAEC;">
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <h2 style="font-size: 16px;">Создание договора</h2>
+        <a class="btn" href="Main.html" style="width: 28px; height: 28px; padding: 0; border-color: transparent;" aria-label="Закрыть">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 4 8 8M12 4l-8 8"></path></svg>
+        </a>
+      </div>
+    </div>
+
+      <div style="flex-grow: 1; padding: 14px 22px 0; overflow: hidden;">
+        <div style="border: 1px dashed #BFCBDD; background: #F7F9FC; border-radius: 3px; height: 52px; display: flex; align-items: center; justify-content: center;">
+          <label class="btn" style="position: relative; cursor: pointer;">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 10.6V3.2"></path><path d="M5.4 5.6 8 3l2.6 2.6"></path><path d="M3 10.6v2.4h10v-2.4"></path></svg>
+            Выбрать файлы…
+            <input class="f-in" type="file" multiple accept=".xlsx,.xls,.xlsm,.pdf,.docx,.doc" aria-label="Выбрать файлы документов договора">
+          </label>
+        </div>
+
+        <div class="cap" style="padding: 16px 0 8px;">Документы</div>
+
+        <div class="tbl f-files">
+          <div class="thead">
+            <div class="r">
+              <div class="th">Файл</div>
+              <div class="th">Размер</div>
+              <div class="th"></div>
+            </div>
+          </div>
+          <div class="tbody">
+            <sc-for list="{{ files }}" as="f" hint-placeholder-count="5">
+              <div class="r" style="min-height: 40px;">
+                <div class="td">{{ f.name }}</div>
+                <div class="td num lft mut">{{ f.size }}</div>
+                <div style="display: flex; justify-content: flex-end;">
+                  <button class="del" type="button" aria-label="Убрать файл" onClick="{{ f.drop }}">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 4 8 8M12 4l-8 8"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ noFiles }}" hint-placeholder-val="{{ no }}">
+              <div class="r" style="min-height: 40px;">
+                <div class="td mut">Файлы не выбраны</div>
+                <div></div>
+                <div></div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+
+      </div>
+
+      <div style="padding: 14px 22px; border-top: 1px solid #E8EAEC; display: flex; align-items: center; gap: 12px;">
+        <a class="btn btn-lg" href="Main.html">Отмена</a>
+        <div style="flex-grow: 1;"></div>
+        <a class="btn btn-pri btn-lg {{ createCls }}" href="Contract.html">Создать договор</a>
+      </div>
+
+  </div>
+</div>
+</x-dc>
+<script>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { off: [] };
+  }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+
+    var filesDef = [
+      { id: 'f1', name: 'РКМ_41-2026_форма3.xlsx', size: '184 КБ' },
+      { id: 'f2', name: 'Структура_цены_41-2026.xlsx', size: '96 КБ' },
+      { id: 'f3', name: 'ДС-1_к_41-2026.pdf', size: '1,2 МБ' }
+    ];
+    // Список — это то, что человек только что выбрал; лишнее из него убирают.
+    var files = filesDef.filter(function (x) { return st.off.indexOf(x.id) < 0; })
+      .map(function (x) {
+        return {
+          name: x.name, size: x.size,
+          drop: function () { self.setState({ off: st.off.concat([x.id]) }); }
+        };
+      });
+
+    return {
+      no: false,
+      files: files,
+      noFiles: files.length === 0,
+      createCls: files.length === 0 ? 'btn-off' : ''
+    };
+  }
+}
+window.Component = Component;
+</script>
+</body>
+</html>

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #FFFFFF; color: #17191C; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 13px; -webkit-font-smoothing: antialiased; }
+    sc-for, sc-if { display: contents; }
+    a { color: #1F4FA8; text-decoration: none; }
+    a:hover { color: #163A78; text-decoration: underline; }
+    h1 { margin: 0; font-weight: 600; }
+    .btn { height: 32px; padding: 0 13px; border: 1px solid #CBD0D6; border-radius: 3px; background: #FFFFFF; color: #17191C; font: 500 13px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; white-space: nowrap; text-decoration: none; }
+    .btn:hover { background: #F1F3F5; color: #17191C; text-decoration: none; }
+    .btn:active { background: #E4E8EC; }
+    .btn-pri { background: #1F4FA8; border-color: #1F4FA8; color: #FFFFFF; }
+    .btn-pri:hover { background: #163A78; border-color: #163A78; color: #FFFFFF; }
+    .btn-pri:active { background: #12306B; border-color: #12306B; }
+    .lnk { border: 0; background: none; padding: 0; margin: 0; color: #1F4FA8; font: 400 12.5px/1.45 "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; text-align: left; }
+    .lnk:hover { text-decoration: underline; }
+    .sub { font: 400 12.5px/1.6 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; }
+    .num { font-variant-numeric: tabular-nums; }
+    .cap { font: 600 11px/1.2 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; letter-spacing: 0; }
+    .bad { color: #A4382C; }
+    .ok { color: #2B6A4C; }
+    .warn { color: #8A5A00; }
+    .nav { display: block; height: 32px; padding: 0 9px; border: 0; border-radius: 3px; background: none; color: #3B424A; font: 400 12.5px/32px "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; width: 100%; text-align: left; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav:hover { background: #E3E6E9; color: #17191C; text-decoration: none; }
+    .nav-on { background: #D9DFE7; color: #17191C; font-weight: 500; }
+    .stepn { width: 28px; height: 28px; border-radius: 50%; background: #1F4FA8; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+    .qrow { width: 100%; display: flex; align-items: flex-start; gap: 9px; padding: 11px 13px; border: 0; border-top: 1px solid #EDEFF1; background: none; text-align: left; cursor: pointer; font: 500 12.5px/1.45 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; }
+    .qrow:hover { background: #F7F9FC; }
+    .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn {
+      transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn { transition: none; }
+    }
+  </style>
+</helmet>
+
+<div style="width: 1440px; height: 940px; display: flex; background: #FFFFFF; overflow: hidden;">
+
+  <aside style="width: 240px; flex-shrink: 0; height: 940px; background: #EFF0F1; border-right: 1px solid #E1E4E7; display: flex; flex-direction: column; padding: 13px 11px 11px;">
+    <div style="display: flex; align-items: center; gap: 9px; padding: 0 6px 13px;">
+      <div style="width: 23px; height: 23px; border-radius: 3px; background: #1F4FA8; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;">Ф</div>
+      <div style="font-size: 12.5px; font-weight: 600;">Планирование ФОТ</div>
+    </div>
+    <a class="btn btn-pri" href="Plan.dc.html" style="width: 100%;">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3 8h10"></path></svg>
+      Новый план
+    </a>
+    <div class="cap" style="padding: 16px 8px 6px;">Планы</div>
+    <a class="nav" href="Plan.dc.html">План 2027 — базовый</a>
+    <a class="nav" href="Plan.dc.html">План 2027 — индексация</a>
+    <div style="height: 1px; background: #DDE0E3; margin: 13px 4px;"></div>
+    <a class="nav" href="Main.dc.html">Реестр</a>
+    <div style="flex-grow: 1;"></div>
+    <div class="nav nav-on">Инструкция</div>
+  </aside>
+
+  <div style="flex-grow: 1; min-width: 0; padding: 20px 26px 22px; display: flex; flex-direction: column;">
+
+    <div style="padding-bottom: 16px;">
+      <h1 style="font-size: 20px;">Как посчитать план ФОТ</h1>
+      <div class="sub" style="margin-top: 4px;">Четыре шага. Реестр правится только через записанные решения, план — отдельный черновик.</div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 680px minmax(0, 1fr); gap: 30px; flex-grow: 1; min-height: 0;">
+
+      <div>
+        <sc-for list="{{ steps }}" as="s" hint-placeholder-count="4">
+          <div style="display: flex; gap: 13px; padding-bottom: 15px;">
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+              <div class="stepn">{{ s.n }}</div>
+              <div style="width: 1px; flex-grow: 1; background: #E1E4E7;"></div>
+            </div>
+            <div style="min-width: 0; padding-top: 3px;">
+              <div style="font-size: 13px; font-weight: 600;">{{ s.title }}</div>
+              <div class="sub" style="margin-top: 4px;">{{ s.text }}</div>
+              <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
+                <a class="btn" href="{{ s.href }}">{{ s.cta }}</a>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+
+        <div style="border: 1px solid #C6D6EE; background: #F4F8FD; border-radius: 3px; padding: 14px 16px;">
+          <div style="font-size: 13px; font-weight: 600;">Ответов два, и они не смешиваются</div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding-top: 10px;">
+            <div>
+              <div class="cap">Решатель</div>
+              <div class="num ok" style="font-size: 13px; font-weight: 600; margin-top: 4px;">OPTIMAL</div>
+              <div class="sub" style="margin-top: 4px; font-size: 12.5px;">Найдено наилучшее решение записанной модели. Бывает FEASIBLE — стадию остановили по времени, минимум не доказан, и INFEASIBLE — решения нет.</div>
+            </div>
+            <div>
+              <div class="cap">Проверка результата</div>
+              <div class="num bad" style="font-size: 13px; font-weight: 600; margin-top: 4px;">не пройден</div>
+              <div class="sub" style="margin-top: 4px; font-size: 12.5px;">Шесть карточек проверяют выданные числа по правилам, которых в модели нет. Ещё пять правил не написаны — в разделе «Контроль» у них стоит «не реализована».</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="cap" style="padding-bottom: 8px;">Частые вопросы</div>
+        <div style="border: 1px solid #E1E4E7; border-radius: 3px; overflow: hidden;">
+          <sc-for list="{{ faq }}" as="q" hint-placeholder-count="7">
+            <div>
+              <button class="qrow" type="button" onClick="{{ q.toggle }}">
+                <span style="color: #7A828A; margin-top: 2px; flex-shrink: 0;">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="{{ q.icon }}"></path></svg>
+                </span>
+                <span style="min-width: 0;">{{ q.q }}</span>
+              </button>
+              <sc-if value="{{ q.open }}" hint-placeholder-val="{{ no }}">
+                <div class="sub" style="padding: 0 13px 12px 34px; font-size: 12.5px;">{{ q.a }}</div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+
+        <div class="cap" style="padding: 18px 0 8px;">Что система делает сама</div>
+        <div style="border: 1px solid #E1E4E7; border-radius: 3px; padding: 3px 0;">
+          <sc-for list="{{ auto }}" as="a" hint-placeholder-count="6">
+            <div style="display: flex; gap: 9px; padding: 8px 13px; border-top: 1px solid #F0F2F4;">
+              <span style="color: #2B6A4C; margin-top: 2px; flex-shrink: 0;">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 8.4 3.3 3.2L13 4.6"></path></svg>
+              </span>
+              <div class="sub" style="color: #17191C; font-size: 12.5px;">{{ a }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="margin-top: 16px; display: flex; align-items: center; gap: 10px;">
+          <button class="btn" type="button">Видео, 4 минуты</button>
+          <a class="lnk" href="Plan.dc.html">Лента: кто что менял</a>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { open: 0 };
+  }
+  renderVals() {
+    var self = this;
+    var faqDef = [
+      { q: 'Решатель написал OPTIMAL, а план не годится. Как так?', a: 'Это два разных ответа. Решатель отвечает за свою модель: неверно записанное условие он честно решит и скажет OPTIMAL. Проверка результата смотрит на выданные числа отдельно. Годен план только когда прошли оба.' },
+      { q: 'Почему написано FEASIBLE, а не OPTIMAL?', a: 'Стадию остановили по времени: минимум не доказан. Числа допустимые, но лучшего решения по этой стадии никто не подтвердил. Чаще всего это стадия «число договоров с остатком ФОТ».' },
+      { q: 'Зарплаты нет в штатном расписании. Где она?', a: 'На соседней вкладке «Заработная плата по месяцам»: строка сотрудника по месяцам, ячейки правятся. Изменение с апреля действует с апреля и дальше, а планы, где человек участвует, получают «требует пересмотра». Оклад должности — в справочнике должностей, это другое число.' },
+      { q: 'Я сняла договор из плана — он пропал у коллеги?', a: 'Нет. Реестр один на организацию, флажок живёт в плане. Если сотрудник был разрешён только на снятых договорах, остальные ему в этом плане запретятся — это попадёт в допущения расчёта.' },
+      { q: 'Откуда берётся графа «Выплаты до»?', a: 'Это более ранний из двух сроков — выплаты оклада и выплаты надбавок. Оба читаются из документов; где срока нет, принимается дата окончания договора, и это уходит в допущения расчёта. Если срок раньше окончания, графа желтеет; если позже — краснеет, потому что это нарушение.' },
+      { q: 'Загрузила новую версию — старая пропала?', a: 'Нет. Файл с тем же именем ложится новой версией, остальные хранятся. В реестре показывается последняя; какая идёт в расчёт — выбирает план. То же и со штатным расписанием: у подгрузок своя история версий.' },
+      { q: 'Написано «решения нет». Что делать?', a: 'Два жёстких условия несовместимы — на экране указано какие, по какому объекту, за какой период и на сколько расходятся. Там же таблица «Варианты»: что изменить, где и на какие планы это подействует. Веса целей на исполнимость не влияют — меняются данные или пределы.' }
+    ];
+    var faq = faqDef.map(function (f, i) {
+      var isOpen = self.state.open === i;
+      return {
+        q: f.q, a: f.a, open: isOpen,
+        icon: isOpen ? 'm4 6 4 4 4-4' : 'm6 4 4 4-4 4',
+        toggle: function () { self.setState({ open: isOpen ? -1 : i }); }
+      };
+    });
+    return {
+      no: false,
+      faq: faq,
+      steps: [
+        { n: '1', title: 'Создайте договор', text: 'Выберите файлы одного договора — РКМ, структуру цены, договор, дополнительные соглашения. В окне только список выбранного: лишний файл убирается крестиком. Больше в нём ничего не спрашивают.', cta: 'Создать договор', href: 'NewContract.dc.html' },
+        { n: '2', title: 'Проверьте реквизиты в карточке договора', text: 'Разбор подставил, что нашёл: у каждой величины видно документ, редакцию и страницу. Чего в документах нет — лицевой счёт, источник финансирования, разрешённые виды начислений, приоритет 2030 — ставится вручную, один раз на договор.', cta: 'Открыть договор', href: 'Contract.dc.html' },
+        { n: '3', title: 'Соберите план', text: 'Отметьте договоры в графе «Учитывать в расчёте». Условия договора перебиваются только для этого плана: число в графе «Правок условий» открывает окно, где видно значение договора и значение в плане. Снятый договор исчезает из всех разделов, итоги пересчитываются.', cta: 'Открыть план', href: 'Plan.dc.html' },
+        { n: '4', title: 'Задайте условия и рассчитайте', text: 'Жёсткие пределы не двигаются — план с нарушением не выдаётся. Закрепления фиксируют отдельное: сумму в клетке, ставку, предел. Порядок одиннадцати критериев и допуск ухудшения задаются в таблице «Критерии оптимизации», но сегодня расчёт берёт порядок стадий из кода — это записано в разделе «Контроль».', cta: 'Условия расчёта', href: 'Plan.dc.html' }
+      ],
+      auto: [
+        'Ищет данные по смыслу граф, а не по названию листа или номеру формы',
+        'Показывает страницу документа, с которой прочитана каждая величина',
+        'Хранит редакции документов и подгрузок штатного расписания',
+        'Сохраняет ручной ввод поверх нового разбора документа',
+        'Записывает каждое изменение в ленту плана с прежним значением',
+        'Помечает расчёты «требует пересмотра», когда изменился их вход'
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

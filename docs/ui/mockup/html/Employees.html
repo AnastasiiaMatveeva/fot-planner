@@ -1,0 +1,1081 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Штатное расписание, зарплата по месяцам, справочник</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #FFFFFF; color: #17191C; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 13px; -webkit-font-smoothing: antialiased; }
+    sc-for, sc-if { display: contents; }
+    a { color: #1F4FA8; text-decoration: none; }
+    a:hover { color: #163A78; text-decoration: underline; }
+    h1 { margin: 0; font-weight: 600; }
+    .btn { height: 32px; padding: 0 13px; border: 1px solid #CBD0D6; border-radius: 3px; background: #FFFFFF; color: #17191C; font: 500 13px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; white-space: nowrap; text-decoration: none; }
+    .btn:hover { background: #F1F3F5; color: #17191C; text-decoration: none; }
+    .btn:active { background: #E4E8EC; }
+    .btn:disabled { color: #A8AEB4; cursor: default; }
+    .btn-pri { background: #1F4FA8; border-color: #1F4FA8; color: #FFFFFF; }
+    .btn-pri:hover { background: #163A78; border-color: #163A78; color: #FFFFFF; }
+    .btn-pri:active { background: #12306B; border-color: #12306B; }
+    .btn-sm { height: 26px; padding: 0 8px; font-size: 12.5px; }
+    .btn-ic { width: 26px; padding: 0; }
+    .lnk { border: 0; background: none; padding: 0; margin: 0; color: #1F4FA8; font: 400 12.5px/1.45 "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; text-align: left; }
+    .lnk:hover { text-decoration: underline; }
+    .inp { height: 30px; width: 100%; border: 1px solid #CBD0D6; border-radius: 3px; padding: 0 8px; background: #FFFFFF; color: #17191C; font: 400 12.5px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+    .inp:focus-visible { outline: 2px solid #A9C0E6; outline-offset: -1px; border-color: #1F4FA8; }
+    .cell { height: 26px; width: 100%; border: 1px solid transparent; border-radius: 3px; padding: 0 5px; background: transparent; color: #17191C; font: 400 12.5px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-variant-numeric: tabular-nums; text-align: right; }
+    .cell:hover { border-color: #DDE0E3; background: #FFFFFF; }
+    .cell:focus-visible { outline: 2px solid #A9C0E6; outline-offset: -1px; border-color: #1F4FA8; background: #FFFFFF; }
+    .cell-ch { background: #FDF4E0; border-color: #E3CE9E; color: #7A4F00; }
+    .tbl-ref { background: #FBFCFD; }
+    .tbl-ref .r { min-height: 28px; }
+    .tbl-ref .thead .r { min-height: 26px; }
+    .tbl { border: 1px solid #E1E4E7; border-radius: 3px; background: #FFFFFF; }
+    .scroll { overflow-x: auto; overflow-y: hidden; border-radius: 3px 3px 0 0; }
+    .t-sec .r { grid-template-columns: 92px minmax(0, 1fr) 232px 148px 106px 106px 186px 50px; }
+    .r { display: grid; align-items: center; column-gap: 10px; padding: 0 10px; min-height: 40px; border-top: 1px solid #EDEFF1; }
+    .thead .r { min-height: 34px; border-top: 0; background: #F5F6F8; padding: 0 10px; }
+    .tbody .r:first-child { border-top: 0; }
+    .tbody .r:hover { background: #F7F9FC; }
+    .thb { width: 100%; height: 32px; padding: 0; border: 0; border-radius: 3px; background: none; color: #5C636B; font: 600 11px/1.25 "Segoe UI", "Helvetica Neue", Arial, sans-serif; letter-spacing: 0; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 4px; }
+    .thb:hover { background: #E8EBEE; color: #17191C; }
+    .thb .ar { color: #7A828A; font-size: 11px; }
+    .thb-on .ar { color: #1F4FA8; }
+    .thb-n { justify-content: flex-end; text-align: right; }
+    .thc { position: relative; display: flex; align-items: center; gap: 1px; min-width: 0; }
+    .thc .thb { flex-grow: 1; min-width: 0; }
+    .thm { width: 18px; height: 22px; border: 0; border-radius: 3px; background: none; color: #7A828A; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .thm:hover { background: #E8EBEE; color: #17191C; }
+    .thm-on { color: #1F4FA8; }
+    .menu { position: absolute; top: 28px; left: 0; z-index: 6; width: 236px; background: #FFFFFF; border: 1px solid #C2C8CE; box-shadow: 0 6px 18px rgba(16, 20, 26, .18); padding: 3px; text-align: left; }
+    .mi { display: block; width: 100%; height: 26px; padding: 0 8px; border: 0; background: none; text-align: left; font: 400 12.5px/26px "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; cursor: pointer; }
+    .mi:hover { background: #E9EFF9; }
+    .msep { height: 1px; background: #E1E4E7; margin: 3px 0; }
+    .mvs { max-height: 184px; overflow-y: auto; }
+    .mcap { font: 600 11px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; padding: 6px 8px 4px; }
+    .mv { display: flex; align-items: center; gap: 7px; height: 24px; padding: 0 8px; cursor: pointer; font-size: 12.5px; }
+    .mv:hover { background: #F1F3F5; }
+    .mv span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .thb-on { color: #17191C; }
+    .th { font: 600 11px/1.25 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; letter-spacing: 0; }
+    .td { font: 400 12.5px/1.3 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #17191C; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .num { font-variant-numeric: tabular-nums; text-align: right; }
+    .lft { text-align: left; }
+    .sub { font: 400 11px/1.35 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; }
+    .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .warn { color: #8A5A00; }
+    .mut { color: #5C636B; }
+    .cap { font: 600 11px/1.2 "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: #5C636B; letter-spacing: 0; }
+    .grp { display: flex; align-items: center; gap: 10px; padding: 0 10px; height: 32px; background: #EEF1F4; border-top: 1px solid #DDE1E5; }
+    .tot { background: #F5F6F8; border-top: 1px solid #DDE0E3; font-weight: 600; }
+    .nav { display: block; height: 32px; padding: 0 9px; border: 0; border-radius: 3px; background: none; color: #3B424A; font: 400 12.5px/32px "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; width: 100%; text-align: left; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav:hover { background: #E3E6E9; color: #17191C; text-decoration: none; }
+    .nav-on { background: #D9DFE7; color: #17191C; font-weight: 500; }
+    .tab { height: 40px; padding: 0 1px; margin-right: 22px; border: 0; border-bottom: 2px solid transparent; background: none; color: #5A6169; font: 400 13px/1 "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; }
+    .tab:hover { color: #17191C; text-decoration: none; }
+    .tab-on { color: #17191C; font-weight: 500; border-bottom-color: #1F4FA8; }
+    .pag { display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 40px; border-top: 1px solid #E1E4E7; background: #FBFBFC; border-radius: 0 0 3px 3px; }
+    input[type="checkbox"] { width: 14px; height: 14px; accent-color: #1F4FA8; margin: 0; cursor: pointer; }
+    .t-shr { min-width: 1700px; }
+    .t-shr .r { min-height: 38px; grid-template-columns: 82px 96px 150px 230px 132px 148px 128px 92px 96px 104px minmax(0, 1fr) 150px; }
+    .t-zp .r { grid-template-columns: 86px 138px repeat(12, minmax(0, 1fr)); column-gap: 4px; }
+    .t-ref .r { min-height: 30px; grid-template-columns: minmax(0, 1fr) 168px 116px 116px 116px 116px; }
+    .t-sub .r { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 50px; }
+    .cell-l { text-align: left; }
+    .vrow { display: grid; grid-template-columns: 96px 112px 72px 84px 84px 92px minmax(0, 1fr) 96px; align-items: center; column-gap: 10px; min-height: 28px; padding: 0 10px; border-top: 1px solid #E8EAEC; }
+    .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn {
+      transition: background-color .12s ease-out, border-color .12s ease-out, color .12s ease-out;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .btn, .tab, .nav, .thb, .thm, .lnk, .mi, .mv, .del, .exp, .cell, .cin, .inp, .celn { transition: none; }
+    }
+  </style>
+  <script src="support.js"></script>
+</head>
+<body style="margin: 0;">
+<x-dc>
+
+<div style="width: 1440px; height: 1080px; display: flex; background: #FFFFFF; overflow: hidden;">
+
+  <aside style="width: 240px; flex-shrink: 0; height: 1080px; background: #EFF0F1; border-right: 1px solid #E1E4E7; display: flex; flex-direction: column; padding: 13px 11px 11px;">
+    <div style="display: flex; align-items: center; gap: 9px; padding: 0 6px 13px;">
+      <div style="width: 23px; height: 23px; border-radius: 3px; background: #1F4FA8; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600;">Ф</div>
+      <div style="font-size: 12.5px; font-weight: 600;">Планирование ФОТ</div>
+    </div>
+    <a class="btn btn-pri" href="Plan.html" style="width: 100%;">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3 8h10"></path></svg>
+      Новый план
+    </a>
+    <div class="cap" style="padding: 16px 8px 6px;">Планы</div>
+    <a class="nav" href="Plan.html">План 2027 — базовый</a>
+    <a class="nav" href="Plan.html">План 2027 — индексация</a>
+    <div style="height: 1px; background: #DDE0E3; margin: 13px 4px;"></div>
+    <div class="nav nav-on">Реестр</div>
+    <div style="flex-grow: 1;"></div>
+    <a class="nav" href="Help.html">Инструкция</a>
+  </aside>
+
+  <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; padding: 18px 22px 18px;">
+
+    <h1 style="font-size: 20px;">Реестр</h1>
+
+    <div style="display: flex; align-items: center; margin-top: 11px; border-bottom: 1px solid #E1E4E7;">
+      <a class="tab" href="Main.html">Договоры</a>
+      <button class="tab {{ shrCls }}" type="button" onClick="{{ h.shr }}">Штатное расписание</button>
+      <button class="tab {{ zpCls }}" type="button" onClick="{{ h.zp }}">Заработная плата по месяцам</button>
+      <a class="tab" href="Main.html">Трудоёмкость</a>
+      <button class="tab {{ secCls }}" type="button" onClick="{{ h.sec }}">120 надбавка</button>
+      <button class="tab {{ refCls }}" type="button" onClick="{{ h.ref }}">Справочник должностей</button>
+      <button class="tab {{ subCls }}" type="button" onClick="{{ h.sub }}">Правила замещения</button>
+    </div>
+
+    <sc-if value="{{ isShr }}" hint-placeholder-val="{{ yes }}">
+      <div style="padding-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding-bottom: 10px;">
+          <div style="position: relative; width: 236px;">
+            <label class="sub" for="q" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Поиск</label>
+            <input class="inp" id="q" type="text" placeholder="ФИО, табельный номер, код строки…" value="{{ q }}" onChange="{{ h.q }}">
+          </div>
+          <button class="btn btn-sm" type="button">Загрузить редакцию</button>
+          <button class="btn btn-sm" type="button" onClick="{{ h.hist }}">{{ histLabel }}</button>
+          <div style="flex-grow: 1;"></div>
+          <div class="sub num">Редакция 4 от 09.09.2026</div>
+        </div>
+
+        <sc-if value="{{ hist }}" hint-placeholder-val="{{ no }}">
+          <div class="tbl tbl-ref" style="margin-bottom: 11px;">
+            <div class="vrow" style="border-top: 0; background: #F5F6F8; min-height: 30px;">
+              <div class="th">Редакция</div>
+              <div class="th">Дата загрузки</div>
+              <div class="th num">Строк</div>
+              <div class="th num">Принято</div>
+              <div class="th num">Уволено</div>
+              <div class="th num">Изменено</div>
+              <div class="th">Состояние</div>
+              <div class="th"></div>
+            </div>
+            <sc-for list="{{ vers }}" as="v" hint-placeholder-count="4">
+              <div class="vrow">
+                <div class="td {{ v.cls }}">{{ v.n }}</div>
+                <div class="td num lft">{{ v.when }}</div>
+                <div class="td num">{{ v.rows }}</div>
+                <div class="td num">{{ v.hired }}</div>
+                <div class="td num">{{ v.fired }}</div>
+                <div class="td num">{{ v.changed }}</div>
+                <div class="td {{ v.stCls }}">{{ v.state }}</div>
+                <div style="display: flex; gap: 5px; justify-content: flex-end;">
+                  <button class="btn btn-sm btn-ic" type="button" aria-label="Скачать редакцию">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 3v7.4"></path><path d="M5.2 7.8 8 10.6l2.8-2.8"></path><path d="M3 11.4v1.8h10v-1.8"></path></svg>
+                  </button>
+                  <button class="btn btn-sm btn-ic" type="button" aria-label="Сравнить с действующей">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.4v11.2"></path><path d="M2.6 5.2h3.8M2.6 8h3.8M9.6 8h3.8M9.6 10.8h3.8"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <div class="tbl">
+          <div class="scroll">
+            <div class="t-shr">
+              <div class="thead">
+                <div class="r">
+                  <sc-for list="{{ scols }}" as="c" hint-placeholder-count="12">
+                    <div class="thc">
+                      <button class="thb {{ c.cls }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                      <button class="thm {{ c.mcls }}" type="button" aria-label="Меню графы" aria-haspopup="true" aria-expanded="{{ c.aexp }}" onClick="{{ c.menu }}">
+                        <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.micon }}"></path></svg>
+                      </button>
+                      <sc-if value="{{ c.open }}" hint-placeholder-val="{{ no }}">
+                        <div class="menu" role="group" aria-label="Меню графы">
+                          <button class="mi" type="button" onClick="{{ c.asc }}">Сортировка по возрастанию</button>
+                          <button class="mi" type="button" onClick="{{ c.desc }}">Сортировка по убыванию</button>
+                          <div class="msep"></div>
+                          <button class="mi" type="button" onClick="{{ c.grp }}">{{ c.grpLabel }}</button>
+                          <button class="mi" type="button" onClick="{{ c.clear }}">Снять отбор с графы</button>
+                          <div class="msep"></div>
+                          <div class="mcap">Значения</div>
+                          <div class="mvs">
+                            <sc-for list="{{ c.vals }}" as="v" hint-placeholder-count="5">
+                              <label class="mv"><input type="checkbox" checked="{{ v.on }}" onChange="{{ v.toggle }}"><span>{{ v.t }}</span></label>
+                            </sc-for>
+                          </div>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              <div class="tbody">
+                <sc-for list="{{ sgroups }}" as="g" hint-placeholder-count="3">
+                  <div>
+                    <sc-if value="{{ g.show }}" hint-placeholder-val="{{ no }}">
+                      <div class="grp">
+                        <button class="lnk" type="button" style="color: #17191C; font-weight: 600; font-size: 12.5px;" onClick="{{ g.toggle }}">{{ g.mark }} {{ g.label }}</button>
+                        <div style="flex-grow: 1;"></div>
+                        <span class="sub num">{{ g.count }}</span>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ g.open }}" hint-placeholder-val="{{ yes }}">
+                      <sc-for list="{{ g.rows }}" as="e" hint-placeholder-count="8">
+                        <div class="r">
+                          <div class="td num lft">{{ e.code }}</div>
+                          <div class="td num lft {{ e.tabCls }}">{{ e.tab }}</div>
+                          <div class="td {{ e.fioCls }}">{{ e.fio }}</div>
+                          <div class="td mut">{{ e.pos }}</div>
+                          <div class="td mut">{{ e.dep }}</div>
+                          <div class="td mut">{{ e.emp }}</div>
+                          <div class="td {{ e.catCls }}">{{ e.cat }}</div>
+                          <div class="td num lft mut">{{ e.from }}</div>
+                          <div class="td num lft {{ e.toCls }}">{{ e.to }}</div>
+                          <div class="td num lft mut">{{ e.acc }}</div>
+                          <div class="td num lft mut">{{ e.allow }}</div>
+                          <div class="td num lft mut">{{ e.forbid }}</div>
+                        </div>
+                      </sc-for>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+          <div class="pag">
+            <label class="sub" for="ps1">Строк на странице</label>
+            <select class="inp" id="ps1" style="width: 72px; height: 26px;" value="{{ size }}" onChange="{{ h.size }}">
+              <option>10</option>
+              <option>25</option>
+              <option>50</option>
+            </select>
+            <div class="sub num">{{ pageInfo }}</div>
+            <div style="flex-grow: 1;"></div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Предыдущая страница" onClick="{{ h.prev }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 4 6 8l4 4"></path></svg>
+            </button>
+            <div class="sub num">{{ pageOf }}</div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Следующая страница" onClick="{{ h.next }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 4 4 4-4 4"></path></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isZp }}" hint-placeholder-val="{{ no }}">
+      <div style="padding-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding-bottom: 10px;">
+          <select class="inp" style="width: 92px;" aria-label="Год">
+            <option>2027</option>
+            <option>2026</option>
+          </select>
+          <div style="position: relative; width: 220px;">
+            <label class="sub" for="qz" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Поиск</label>
+            <input class="inp" id="qz" type="text" placeholder="ФИО или код строки…" value="{{ qz }}" onChange="{{ h.qz }}">
+          </div>
+          <label class="sub" for="zm">Изменить с месяца</label>
+          <select class="btn btn-sm" id="zm" style="width: 78px;" value="{{ zFrom }}" onChange="{{ h.zFrom }}">
+            <sc-for list="{{ monList }}" as="m" hint-placeholder-count="12">
+              <option>{{ m.t }}</option>
+            </sc-for>
+          </select>
+          <label class="vh" for="zv">Новая сумма</label>
+          <input class="inp inp-n" id="zv" type="text" style="width: 96px; height: 26px;" placeholder="сумма…" value="{{ zVal }}" onChange="{{ h.zVal }}">
+          <button class="btn btn-sm" type="button" onClick="{{ h.zApply }}">Применить</button>
+          <label style="display: flex; align-items: center; gap: 7px; cursor: pointer;">
+            <input type="checkbox" checked="{{ onlyCh }}" onChange="{{ h.onlyCh }}">
+            <span style="font-size: 12.5px;">Только изменённые</span>
+          </label>
+          <div style="flex-grow: 1;"></div>
+          <div class="sub">руб. в месяц</div>
+        </div>
+
+        <div class="tbl">
+          <div class="t-zp">
+            <div class="thead">
+              <div class="r">
+                <sc-for list="{{ zcols }}" as="c" hint-placeholder-count="14">
+                  <div class="thc">
+                    <button class="thb {{ c.cls }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                    <button class="thm {{ c.mcls }}" type="button" aria-label="Меню графы" aria-haspopup="true" aria-expanded="{{ c.aexp }}" onClick="{{ c.menu }}">
+                      <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.micon }}"></path></svg>
+                    </button>
+                    <sc-if value="{{ c.open }}" hint-placeholder-val="{{ no }}">
+                      <div class="menu" role="group" aria-label="Меню графы">
+                        <button class="mi" type="button" onClick="{{ c.asc }}">Сортировка по возрастанию</button>
+                        <button class="mi" type="button" onClick="{{ c.desc }}">Сортировка по убыванию</button>
+                        <div class="msep"></div>
+                        <button class="mi" type="button" onClick="{{ c.grp }}">{{ c.grpLabel }}</button>
+                        <button class="mi" type="button" onClick="{{ c.clear }}">Снять отбор с графы</button>
+                        <div class="msep"></div>
+                        <div class="mcap">Значения</div>
+                        <div class="mvs">
+                          <sc-for list="{{ c.vals }}" as="v" hint-placeholder-count="5">
+                            <label class="mv"><input type="checkbox" checked="{{ v.on }}" onChange="{{ v.toggle }}"><span>{{ v.t }}</span></label>
+                          </sc-for>
+                        </div>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div class="tbody">
+              <sc-for list="{{ zrows }}" as="z" hint-placeholder-count="8">
+                <div class="r" style="min-height: 36px;">
+                  <div class="td num lft">{{ z.code }}</div>
+                  <div class="td">{{ z.fio }}</div>
+                  <sc-for list="{{ z.cells }}" as="c" hint-placeholder-count="12">
+                    <div><input class="cell {{ c.cls }}" type="text" aria-label="Заработная плата за месяц" value="{{ c.v }}" onChange="{{ c.set }}"></div>
+                  </sc-for>
+                </div>
+              </sc-for>
+              <div class="r tot" style="min-height: 36px;">
+                <div class="td">Итого</div>
+                <div></div>
+                <sc-for list="{{ ztotals }}" as="t" hint-placeholder-count="12">
+                  <div class="td num" style="font-size: 12.5px;">{{ t }}</div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+          <div class="pag">
+            <label class="sub" for="ps2">Строк на странице</label>
+            <select class="inp" id="ps2" style="width: 72px; height: 26px;" aria-label="Строк на странице">
+              <option>25</option>
+              <option>50</option>
+            </select>
+            <div class="sub num">{{ zPageInfo }}</div>
+            <div style="flex-grow: 1;"></div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Предыдущая страница" disabled="{{ yes }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 4 6 8l4 4"></path></svg>
+            </button>
+            <div class="sub num">1 / 1</div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Следующая страница" disabled="{{ yes }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 4 4 4-4 4"></path></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="cap" style="padding: 16px 0 8px;">Изменения заработной платы</div>
+        <div class="tbl">
+          <div class="thead">
+            <div class="r" style="grid-template-columns: 96px minmax(0, 1fr) 210px 190px 210px 120px;">
+              <div class="th">Код строки</div>
+              <div class="th">ФИО</div>
+              <div class="th">Изменение</div>
+              <div class="th">Внесено</div>
+              <div class="th">Планы</div>
+              <div class="th"></div>
+            </div>
+          </div>
+          <div class="tbody">
+            <sc-for list="{{ changes }}" as="c" hint-placeholder-count="3">
+              <div class="r" style="grid-template-columns: 96px minmax(0, 1fr) 210px 190px 210px 120px;">
+                <div class="td num lft">{{ c.code }}</div>
+                <div class="td">{{ c.fio }}</div>
+                <div class="td num lft" style="font-size: 12.5px;">{{ c.diff }}</div>
+                <div class="sub num lft">{{ c.when }}</div>
+                <div class="td {{ c.cls }}" style="font-size: 12.5px;">{{ c.effect }}</div>
+                <div style="display: flex; justify-content: flex-end;">
+                  <a class="btn btn-sm btn-pri" href="Plan.html">Пересчитать</a>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isRef }}" hint-placeholder-val="{{ no }}">
+      <div style="padding-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding-bottom: 10px;">
+          <button class="btn btn-sm" type="button">Загрузить редакцию</button>
+          <div style="flex-grow: 1;"></div>
+          <div class="sub num">Редакция 4 от 01.09.2026</div>
+        </div>
+
+        <div class="tbl">
+          <div class="t-ref">
+            <div class="thead">
+              <div class="r">
+                <sc-for list="{{ rcols }}" as="c" hint-placeholder-count="6">
+                  <div class="thc">
+                    <button class="thb {{ c.cls }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                    <button class="thm {{ c.mcls }}" type="button" aria-label="Меню графы" aria-haspopup="true" aria-expanded="{{ c.aexp }}" onClick="{{ c.menu }}">
+                      <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.micon }}"></path></svg>
+                    </button>
+                    <sc-if value="{{ c.open }}" hint-placeholder-val="{{ no }}">
+                      <div class="menu" role="group" aria-label="Меню графы">
+                        <button class="mi" type="button" onClick="{{ c.asc }}">Сортировка по возрастанию</button>
+                        <button class="mi" type="button" onClick="{{ c.desc }}">Сортировка по убыванию</button>
+                        <div class="msep"></div>
+                        <button class="mi" type="button" onClick="{{ c.grp }}">{{ c.grpLabel }}</button>
+                        <button class="mi" type="button" onClick="{{ c.clear }}">Снять отбор с графы</button>
+                        <div class="msep"></div>
+                        <div class="mcap">Значения</div>
+                        <div class="mvs">
+                          <sc-for list="{{ c.vals }}" as="v" hint-placeholder-count="5">
+                            <label class="mv"><input type="checkbox" checked="{{ v.on }}" onChange="{{ v.toggle }}"><span>{{ v.t }}</span></label>
+                          </sc-for>
+                        </div>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div class="tbody">
+              <sc-for list="{{ rgroups }}" as="g" hint-placeholder-count="3">
+                <div>
+                  <sc-if value="{{ g.show }}" hint-placeholder-val="{{ yes }}">
+                    <div class="grp">
+                      <button class="lnk" type="button" style="color: #17191C; font-weight: 600; font-size: 12.5px;" onClick="{{ g.toggle }}">{{ g.mark }} {{ g.label }}</button>
+                      <div style="flex-grow: 1;"></div>
+                      <span class="sub num">{{ g.count }}</span>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ g.open }}" hint-placeholder-val="{{ yes }}">
+                    <sc-for list="{{ g.rows }}" as="s" hint-placeholder-count="4">
+                      <div class="r">
+                        <div class="td">{{ s.pos }}</div>
+                        <div class="td mut">{{ s.cat }}</div>
+                        <div class="td num">{{ s.zp }}</div>
+                        <div class="td num">{{ s.p2556 }}</div>
+                        <div class="td num">{{ s.p4 }}</div>
+                        <div class="td num">{{ s.bep }}</div>
+                        <div class="td mut" style="font-size: 12.5px;">{{ s.sub }}</div>
+                      </div>
+                    </sc-for>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div class="pag">
+            <label class="sub" for="ps3">Строк на странице</label>
+            <select class="inp" id="ps3" style="width: 72px; height: 26px;" aria-label="Строк на странице">
+              <option>25</option>
+              <option>50</option>
+            </select>
+            <div class="sub num">{{ zpInfo }}</div>
+            <div style="flex-grow: 1;"></div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Предыдущая страница" disabled="{{ yes }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 4 6 8l4 4"></path></svg>
+            </button>
+            <div class="sub num">1 / 1</div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Следующая страница" disabled="{{ yes }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 4 4 4-4 4"></path></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isSub }}" hint-placeholder-val="{{ no }}">
+      <div style="padding-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding-bottom: 10px;">
+          <button class="btn btn-sm btn-pri" type="button" onClick="{{ h.addSub }}">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3 8h10"></path></svg>
+            Добавить правило
+          </button>
+        </div>
+
+        <div class="tbl t-sub">
+          <div class="thead">
+            <div class="r">
+              <sc-for list="{{ ucols }}" as="c" hint-placeholder-count="2">
+                <div class="thc">
+                  <button class="thb {{ c.cls }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                  <button class="thm {{ c.mcls }}" type="button" aria-label="Меню графы" aria-haspopup="true" aria-expanded="{{ c.aexp }}" onClick="{{ c.menu }}">
+                    <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.micon }}"></path></svg>
+                  </button>
+                  <sc-if value="{{ c.open }}" hint-placeholder-val="{{ no }}">
+                    <div class="menu" role="group" aria-label="Меню графы">
+                      <button class="mi" type="button" onClick="{{ c.asc }}">Сортировка по возрастанию</button>
+                      <button class="mi" type="button" onClick="{{ c.desc }}">Сортировка по убыванию</button>
+                      <div class="msep"></div>
+                      <button class="mi" type="button" onClick="{{ c.grp }}">{{ c.grpLabel }}</button>
+                      <button class="mi" type="button" onClick="{{ c.clear }}">Снять отбор с графы</button>
+                      <sc-if value="{{ c.hasVals }}" hint-placeholder-val="{{ yes }}">
+                        <div class="msep"></div>
+                        <div class="mcap">Значения</div>
+                        <div class="mvs">
+                          <sc-for list="{{ c.vals }}" as="v" hint-placeholder-count="5">
+                            <label class="mv"><input type="checkbox" checked="{{ v.on }}" onChange="{{ v.toggle }}"><span>{{ v.t }}</span></label>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+              <div class="th"></div>
+            </div>
+          </div>
+          <div class="tbody">
+            <sc-for list="{{ subs }}" as="u" hint-placeholder-count="10">
+              <div class="r" style="min-height: 33px;">
+                <div>
+                  <select class="cell cell-l" aria-label="Должность" value="{{ u.pos }}" onChange="{{ u.setPos }}">
+                    <sc-for list="{{ posList }}" as="o" hint-placeholder-count="8">
+                      <option>{{ o.t }}</option>
+                    </sc-for>
+                  </select>
+                </div>
+                <div>
+                  <select class="cell cell-l" aria-label="Кем может быть замещена" value="{{ u.by }}" onChange="{{ u.setBy }}">
+                    <sc-for list="{{ posList }}" as="o" hint-placeholder-count="8">
+                      <option>{{ o.t }}</option>
+                    </sc-for>
+                  </select>
+                </div>
+                <div style="display: flex; justify-content: flex-end;">
+                  <button class="btn btn-sm btn-ic" type="button" aria-label="Удалить правило" onClick="{{ u.drop }}">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.2 4.4h9.6"></path><path d="M6.4 4.4V2.8h3.2v1.6"></path><path d="M4.4 4.4v8.8h7.2V4.4"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div class="pag">
+            <div class="sub num">{{ subInfo }}</div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isSec }}" hint-placeholder-val="{{ no }}">
+      <div style="padding-top: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px; padding-bottom: 10px;">
+          <button class="btn btn-sm btn-pri" type="button" onClick="{{ h.addSec }}">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3 8h10"></path></svg>
+            Добавить строку
+          </button>
+        </div>
+
+        <div class="tbl t-sec">
+          <div class="thead">
+            <div class="r">
+              <sc-for list="{{ kcols }}" as="c" hint-placeholder-count="8">
+                <div class="thc">
+                  <button class="thb {{ c.cls }}" type="button" onClick="{{ c.sort }}">{{ c.label }}<sc-if value="{{ c.hasArr }}" hint-placeholder-val="{{ no }}"><span class="ar">{{ c.arr }}</span></sc-if></button>
+                  <button class="thm {{ c.mcls }}" type="button" aria-label="Меню графы" aria-haspopup="true" aria-expanded="{{ c.aexp }}" onClick="{{ c.menu }}">
+                    <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="{{ c.micon }}"></path></svg>
+                  </button>
+                  <sc-if value="{{ c.open }}" hint-placeholder-val="{{ no }}">
+                    <div class="menu" role="group" aria-label="Меню графы">
+                      <button class="mi" type="button" onClick="{{ c.asc }}">Сортировка по возрастанию</button>
+                      <button class="mi" type="button" onClick="{{ c.desc }}">Сортировка по убыванию</button>
+                      <div class="msep"></div>
+                      <button class="mi" type="button" onClick="{{ c.grp }}">{{ c.grpLabel }}</button>
+                      <button class="mi" type="button" onClick="{{ c.clear }}">Снять отбор с графы</button>
+                      <sc-if value="{{ c.hasVals }}" hint-placeholder-val="{{ yes }}">
+                        <div class="msep"></div>
+                        <div class="mcap">Значения</div>
+                        <div class="mvs">
+                          <sc-for list="{{ c.vals }}" as="v" hint-placeholder-count="5">
+                            <label class="mv"><input type="checkbox" checked="{{ v.on }}" onChange="{{ v.toggle }}"><span>{{ v.t }}</span></label>
+                          </sc-for>
+                        </div>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-for>
+              <div class="th"></div>
+            </div>
+          </div>
+          <div class="tbody">
+            <sc-for list="{{ secs }}" as="s" hint-placeholder-count="6">
+              <div class="r">
+                <div class="td num lft">{{ s.code }}</div>
+                <div class="td">{{ s.fio }}</div>
+                <div>
+                  <select class="inp" style="height: 26px;" aria-label="Договор секретности">
+                    <option>{{ s.ctr }}</option>
+                    <option>41-2026 · Справка 12-СБ</option>
+                    <option>44-2026 · Справка 19-СБ</option>
+                  </select>
+                </div>
+                <div><input class="cell" type="text" aria-label="Размер надбавки, процент от оклада" value="{{ s.pct }}" onChange="{{ s.set }}"></div>
+                <div class="td num lft mut">{{ s.from }}</div>
+                <div class="td num lft mut">{{ s.to }}</div>
+                <div class="td {{ s.useCls }}" style="font-size: 12.5px;">{{ s.use }}</div>
+                <div style="display: flex; justify-content: flex-end;">
+                  <button class="btn btn-sm btn-ic" type="button" aria-label="Удалить строку" onClick="{{ s.drop }}">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3.2 4.4h9.6"></path><path d="M6.4 4.4V2.8h3.2v1.6"></path><path d="M4.4 4.4v8.8h7.2V4.4"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </sc-for>
+
+          </div>
+          <div class="pag">
+            <label class="sub" for="ps4">Строк на странице</label>
+            <select class="inp" id="ps4" style="width: 72px; height: 26px;" aria-label="Строк на странице">
+              <option>25</option>
+              <option>50</option>
+            </select>
+            <div class="sub num">{{ secInfo }}</div>
+            <div style="flex-grow: 1;"></div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Предыдущая страница" disabled="{{ yes }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M10 4 6 8l4 4"></path></svg>
+            </button>
+            <div class="sub num">1 / 1</div>
+            <button class="btn btn-sm btn-ic" type="button" aria-label="Следующая страница" disabled="{{ yes }}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m6 4 4 4-4 4"></path></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script>
+// Значения в меню графы — по возрастанию, как отбор в Excel: числа по
+// величине, остальное по алфавиту; «не найдено» и «не заполнено» уходят вниз.
+function sortVals(list, isNum) {
+  function n(v) { return Number(String(v).replace(/[\s\u00A0]/g, '').replace(',', '.')); }
+  // Дата в списке — строка: 31.12.2027 или 12.2027. Сравнивать её как строку
+  // нельзя, иначе порядок пойдёт по дню. Переставляю в год-месяц-день.
+  function d(v) {
+    var m = String(v).match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+    if (m) { return m[3] + m[2] + m[1]; }
+    m = String(v).match(/^(\d{2})\.(\d{4})$/);
+    if (m) { return m[2] + m[1]; }
+    return '';
+  }
+  return list.slice().sort(function (a, b) {
+    var da = d(a), db = d(b);
+    if (da && db) { return da < db ? -1 : (da > db ? 1 : 0); }
+    if (da) { return -1; }
+    if (db) { return 1; }
+    var x = n(a), y = n(b);
+    if (isNum && isFinite(x) && isFinite(y)) { return x - y; }
+    if (isNum && isFinite(x)) { return -1; }
+    if (isNum && isFinite(y)) { return 1; }
+    return String(a).localeCompare(String(b), 'ru');
+  });
+}
+
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      tab: 'shr', q: '', qz: '', hist: false, onlyCh: false, zp: {},
+      sort: 'code', dir: 1, gkey: 'dep', closed: [], page: 1, size: 25,
+      zsort: 'code', zdir: 1, zgkey: '',
+      ksort: 'code', kdir: 1, kgkey: '',
+      usort: 'pos', udir: 1, ugkey: '',
+      zFrom: '04', zVal: '', secDrop: [], secAdd: 0,
+      subRules: [
+        { pos: 'Ведущий инженер-конструктор', by: 'Начальник сектора' },
+        { pos: 'Инженер-конструктор 1 категории', by: 'Ведущий инженер-конструктор' },
+        { pos: 'Инженер-программист', by: 'Аналитик' },
+        { pos: 'Аналитик', by: 'Инженер-программист' },
+        { pos: 'Инженер по качеству', by: 'Инженер-конструктор 1 категории' },
+        { pos: 'Инженер-исследователь', by: 'Инженер-программист' },
+        { pos: 'Техник-испытатель', by: 'Инженер-исследователь' }
+      ],
+      rsort: 'pos', rdir: 1, rgkey: 'cat', rclosed: [],
+      menu: '', filt: {}
+    };
+  }
+  renderVals() {
+    var self = this;
+    var st = this.state;
+
+    function filtOf(pfx, key) { return (st.filt[pfx + '|' + key] || []); }
+    function setFilt(pfx, key, list) {
+      var f = {};
+      for (var q in st.filt) { f[q] = st.filt[q]; }
+      f[pfx + '|' + key] = list;
+      self.setState({ filt: f, page: 1 });
+    }
+    function keep(pfx, rows) {
+      return rows.filter(function (r) {
+        for (var q in st.filt) {
+          var part = q.split('|');
+          if (part[0] !== pfx || !st.filt[q].length) { continue; }
+          if (st.filt[q].indexOf(String(r[part[1]])) >= 0) { return false; }
+        }
+        return true;
+      });
+    }
+    function mkCols(defs, sortKey, dirVal, apply, pfx, src, gkey, setGrp) {
+      return defs.map(function (c) {
+        var on = sortKey === c.key;
+        var hid = filtOf(pfx, c.key);
+        var vals = [];
+        (src || []).forEach(function (r) {
+          var v = String(r[c.key]);
+          if (vals.indexOf(v) < 0) { vals.push(v); }
+        });
+        vals = sortVals(vals, c.num);
+        return {
+          label: c.label,
+          arr: on ? (dirVal > 0 ? '▲' : '▼') : '',
+          hasArr: !!(on ? (dirVal > 0 ? '▲' : '▼') : ''),
+          cls: (c.num ? 'thb-n ' : '') + (on ? 'thb-on' : ''),
+          mcls: hid.length ? 'thm-on' : '',
+          micon: 'M2 3h12l-5 6v4l-2 1V9z',
+          open: st.menu === pfx + '|' + c.key,
+          aexp: (st.menu === pfx + '|' + c.key) ? 'true' : 'false',
+          grpLabel: gkey === c.key ? 'Отменить группировку' : 'Группировать по этой графе',
+          sort: function () { apply(c.key, on ? -dirVal : 1); },
+          menu: function () { self.setState({ menu: st.menu === pfx + '|' + c.key ? '' : pfx + '|' + c.key }); },
+          asc: function () { apply(c.key, 1); self.setState({ menu: '' }); },
+          desc: function () { apply(c.key, -1); self.setState({ menu: '' }); },
+          grp: function () { setGrp(gkey === c.key ? '' : c.key); self.setState({ menu: '' }); },
+          clear: function () { setFilt(pfx, c.key, []); },
+          hasVals: vals.length > 0,
+          vals: vals.map(function (v) {
+            return { t: v === '' ? '(пусто)' : v, on: hid.indexOf(v) < 0,
+                     toggle: function () {
+                       var cur = hid.slice(), i = cur.indexOf(v);
+                       if (i >= 0) { cur.splice(i, 1); } else { cur.push(v); }
+                       setFilt(pfx, c.key, cur);
+                     } };
+          })
+        };
+      });
+    }
+    function dnum(v) { var p = String(v).split('.'); return p.length === 3 ? p[2] + p[1] + p[0] : String(v); }
+    function cmp(a, b, key, dir, dates) {
+      var x = a[key], y = b[key];
+      if (dates.indexOf(key) >= 0) { x = dnum(x); y = dnum(y); }
+      if (typeof x === 'string' && /^[\d\s]+$/.test(x)) {
+        return (Number(x.replace(/\s/g, '')) - Number(String(y).replace(/\s/g, ''))) * dir;
+      }
+      return (String(x) < String(y) ? -1 : (String(x) > String(y) ? 1 : 0)) * dir;
+    }
+    function group(rows, key, closed, onToggle, show) {
+      if (!key) {
+        return [{ show: false, open: true, label: '', mark: '', count: '', rows: rows, toggle: function () {} }];
+      }
+      var seen = [];
+      rows.forEach(function (r) { if (seen.indexOf(r[key]) < 0) { seen.push(r[key]); } });
+      return seen.map(function (label) {
+        var part = rows.filter(function (r) { return r[key] === label; });
+        var open = closed.indexOf(label) < 0;
+        return {
+          show: show, open: open, label: label, mark: open ? '▾' : '▸',
+          count: 'строк ' + part.length, rows: part,
+          toggle: function () { onToggle(label); }
+        };
+      });
+    }
+
+    var SCOLS = [
+      { key: 'code', label: 'Код строки' },
+      { key: 'tab', label: 'Табельный номер' },
+      { key: 'fio', label: 'ФИО' },
+      { key: 'pos', label: 'Должность' },
+      { key: 'dep', label: 'Структурное подразделение' },
+      { key: 'emp', label: 'Тип занятости' },
+      { key: 'cat', label: 'Категория занятости' },
+      { key: 'from', label: 'Дата приёма' },
+      { key: 'to', label: 'Дата увольнения' },
+      { key: 'acc', label: 'Лицевой счёт' },
+      { key: 'allow', label: 'Разрешённые договоры' },
+      { key: 'forbid', label: 'Запрещённые договоры' }
+    ];
+    var all = [
+      { code: 'ШР-1041', tab: '04417', fio: 'Абрамова Т. Н.', pos: 'Ведущий инженер-конструктор', dep: 'Отдел 7', emp: 'Основное место', cat: 'Основной', from: '12.03.2018', to: '—', acc: '21-04-117', allow: '41-2026 · 44-2026', forbid: '—', warn: false, srok: false },
+      { code: 'ШР-2213', tab: '04417', fio: 'Абрамова Т. Н.', pos: 'Аналитик', dep: 'Отдел 12', emp: 'Внутреннее совместительство', cat: 'Основной', from: '01.02.2024', to: '—', acc: '21-04-208', allow: '44-2026', forbid: '—', warn: false, srok: false },
+      { code: 'ШР-1042', tab: '05130', fio: 'Белов С. А.', pos: 'Инженер-конструктор 1 категории', dep: 'Отдел 7', emp: 'Основное место', cat: 'Основной', from: '01.09.2021', to: '—', acc: '21-04-117', allow: '—', forbid: '44-2026', warn: false, srok: false },
+      { code: 'ШР-1208', tab: '04902', fio: 'Виноградов П. И.', pos: 'Инженер-программист', dep: 'Отдел 12', emp: 'Основное место', cat: 'Основной', from: '05.06.2019', to: '—', acc: '21-04-208', allow: '—', forbid: '—', warn: false, srok: false },
+      { code: 'ШР-1005', tab: '02214', fio: 'Гусева М. В.', pos: 'Начальник сектора', dep: 'Отдел 7', emp: 'Основное место', cat: 'Основной', from: '14.02.2011', to: '—', acc: '23-01-044', allow: '—', forbid: '—', warn: false, srok: false },
+      { code: 'ШР-6601', tab: '08815', fio: 'Дорохова Е. К.', pos: 'Инженер-исследователь', dep: 'Отдел 7', emp: 'Основное место', cat: 'Аспирант', from: '03.10.2022', to: '—', acc: '21-04-117', allow: '41-2026', forbid: '—', warn: false, srok: false },
+      { code: 'ШР-3117', tab: '06044', fio: 'Ерёмин А. В.', pos: 'Техник-испытатель', dep: 'Цех 3', emp: 'Основное место', cat: 'Основной', from: '20.01.2020', to: '15.04.2027', acc: '21-04-190', allow: '—', forbid: '—', warn: false, srok: true },
+      { code: 'ШР-4102', tab: 'нет', fio: 'Жукова Н. С.', pos: 'Инженер по качеству', dep: 'ОТК', emp: 'Основное место', cat: 'Студент', from: '08.08.2023', to: '—', acc: '21-04-119', allow: '—', forbid: '—', warn: true, srok: false },
+      { code: 'ШР-1211', tab: '09120', fio: 'Зайцев Р. О.', pos: 'Ведущий инженер-конструктор', dep: 'Отдел 7', emp: 'Основное место', cat: 'Основной', from: '11.01.2025', to: '31.12.2027', acc: '21-04-208', allow: '—', forbid: '—', warn: false, srok: true },
+      { code: 'ШР-1209', tab: '—', fio: 'Вакансия', pos: 'Инженер-программист', dep: 'Отдел 12', emp: 'Основное место', cat: 'Основной', from: '01.01.2027', to: '—', acc: 'не отнесён', allow: '—', forbid: '—', warn: true, srok: false },
+      { code: 'ШР-1210', tab: '02309', fio: 'Ковалёв Д. М.', pos: 'Начальник сектора', dep: 'Отдел 12', emp: 'Основное место', cat: 'Основной', from: '02.02.2009', to: '—', acc: '21-04-208', allow: '—', forbid: '—', warn: false, srok: false },
+      { code: 'ШР-3118', tab: '06077', fio: 'Лапина О. С.', pos: 'Техник-испытатель', dep: 'Цех 3', emp: 'Внутреннее совместительство', cat: 'Основной', from: '12.11.2021', to: '—', acc: '21-04-190', allow: '38-2026', forbid: '—', warn: false, srok: false }
+    ];
+    var q = (st.q || '').toLowerCase();
+    var srows = keep('s', all).filter(function (e) {
+      if (!q) { return true; }
+      return (e.fio + ' ' + e.pos + ' ' + e.code + ' ' + e.tab).toLowerCase().indexOf(q) >= 0;
+    }).slice().sort(function (a, b) { return cmp(a, b, st.sort, st.dir, ['from', 'to']); })
+      .map(function (e) {
+        return {
+          code: e.code, tab: e.tab, fio: e.fio, pos: e.pos, dep: e.dep, emp: e.emp, cat: e.cat,
+          from: e.from, to: e.to, acc: e.acc, allow: e.allow, forbid: e.forbid,
+          catCls: e.cat === 'Основной' ? 'mut' : 'warn',
+          fioCls: e.fio === 'Вакансия' ? 'mut' : '',
+          tabCls: e.warn ? 'warn' : 'mut',
+          toCls: e.srok ? 'warn' : 'mut'
+        };
+      });
+
+    var gk = st.gkey;
+    var size = Number(st.size) || 25;
+    var sgroups, pageInfo, pageOf;
+    if (gk) {
+      sgroups = group(srows, gk, st.closed, function (label) {
+        var s = st.closed.slice();
+        var i = s.indexOf(label);
+        if (i >= 0) { s.splice(i, 1); } else { s.push(label); }
+        self.setState({ closed: s });
+      }, true);
+      pageInfo = 'Групп ' + sgroups.length + ' · строк ' + srows.length;
+      pageOf = '1 / 1';
+    } else {
+      var pages = Math.max(1, Math.ceil(srows.length / size));
+      var page = Math.min(st.page, pages);
+      var from = (page - 1) * size;
+      var slice = srows.slice(from, from + size);
+      sgroups = group(slice, '', [], function () {}, false);
+      pageInfo = 'Строки ' + (from + 1) + '—' + (from + slice.length) + ' из ' + srows.length;
+      pageOf = page + ' / ' + pages;
+    }
+
+    var ZCOLS = [{ key: 'code', label: 'Код строки' }, { key: 'fio', label: 'ФИО' }];
+    var MONTHS = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг', 'Сен', 'Окт', 'Ноя', 'Дек'];
+    MONTHS.forEach(function (m) { ZCOLS.push({ key: 'm' + m, label: m, num: true }); });
+    var zpDef = [
+      { code: 'ШР-1041', fio: 'Абрамова Т. Н.', base: 182400, from: 4, to: 196000 },
+      { code: 'ШР-2213', fio: 'Абрамова Т. Н.', base: 82000, from: 0, to: 0 },
+      { code: 'ШР-1042', fio: 'Белов С. А.', base: 146300, from: 0, to: 0 },
+      { code: 'ШР-1208', fio: 'Виноградов П. И.', base: 168900, from: 7, to: 178000 },
+      { code: 'ШР-1005', fio: 'Гусева М. В.', base: 214000, from: 0, to: 0 },
+      { code: 'ШР-6601', fio: 'Дорохова Е. К.', base: 97500, from: 0, to: 0 },
+      { code: 'ШР-3117', fio: 'Ерёмин А. В.', base: 74000, from: 0, to: 0 },
+      { code: 'ШР-1211', fio: 'Зайцев Р. О.', base: 182400, from: 0, to: 0 }
+    ];
+    function money(n) {
+      var s = String(Math.round(n)), out = '', c = 0;
+      for (var i = s.length - 1; i >= 0; i--) { out = s.charAt(i) + out; c++; if (c % 3 === 0 && i > 0) { out = ' ' + out; } }
+      return out;
+    }
+    var qz = (st.qz || '').toLowerCase();
+    var zfiltered = zpDef.filter(function (z) {
+      if (st.onlyCh && !z.from) { return false; }
+      if (!qz) { return true; }
+      return (z.fio + ' ' + z.code).toLowerCase().indexOf(qz) >= 0;
+    }).slice().sort(function (a, b) { return cmp(a, b, st.zsort, st.zdir, []); });
+    var ztotals = [];
+    for (var m = 1; m <= 12; m++) { ztotals.push(0); }
+    var zrows = zfiltered.map(function (z) {
+      var cells = [];
+      for (var mi = 1; mi <= 12; mi++) {
+        (function (month) {
+          var key = z.code + '|' + month;
+          var changed = z.from > 0 && month >= z.from;
+          var def = changed ? z.to : z.base;
+          var val = st.zp[key] === undefined ? money(def) : st.zp[key];
+          ztotals[month - 1] += Number(String(val).replace(/\s/g, '')) || 0;
+          cells.push({
+            v: val,
+            cls: (changed || st.zp[key] !== undefined) ? 'cell-ch' : '',
+            set: function (e) {
+              var next = {};
+              for (var kk in st.zp) { next[kk] = st.zp[kk]; }
+              next[key] = e.target.value;
+              self.setState({ zp: next });
+            }
+          });
+        })(mi);
+      }
+      return { code: z.code, fio: z.fio, cells: cells };
+    });
+
+    var KCOLS = [
+      { key: 'code', label: 'Код строки' },
+      { key: 'fio', label: 'ФИО' },
+      { key: 'ctr', label: 'Договор секретности' },
+      { key: 'pct', label: 'Размер надбавки, % оклада', num: true },
+      { key: 'from', label: 'Действует с' },
+      { key: 'to', label: 'Действует по' },
+      { key: 'use', label: 'Применяется' }
+    ];
+    // Окно выплат договора секретности — оттуда берётся период надбавки.
+    var SECCTR = {
+      '41-2026 · Справка 12-СБ': { from: '01.01.2027', to: '31.12.2027' },
+      '44-2026 · Справка 19-СБ': { from: '01.03.2027', to: '31.12.2027' }
+    };
+    var secDef = [
+      { code: 'ШР-1208', fio: 'Виноградов П. И.', ctr: '41-2026 · Справка 12-СБ', pct: '25' },
+      { code: 'ШР-1005', fio: 'Гусева М. В.', ctr: '41-2026 · Справка 12-СБ', pct: '25' },
+      { code: 'ШР-1041', fio: 'Абрамова Т. Н.', ctr: '41-2026 · Справка 12-СБ', pct: '25' },
+      { code: 'ШР-2213', fio: 'Абрамова Т. Н.', ctr: '44-2026 · Справка 19-СБ', pct: '15' },
+      { code: 'ШР-1211', fio: 'Зайцев Р. О.', ctr: '44-2026 · Справка 19-СБ', pct: '20' },
+      { code: 'ШР-1042', fio: 'Белов С. А.', ctr: '44-2026 · Справка 19-СБ', pct: '20' },
+      { code: 'ШР-3117', fio: 'Ерёмин А. В.', ctr: '41-2026 · Справка 12-СБ', pct: '0' }
+    ].map(function (r) {
+      var w = SECCTR[r.ctr] || { from: '—', to: '—' };
+      return { code: r.code, fio: r.fio, ctr: r.ctr, pct: r.pct, from: w.from, to: w.to };
+    });
+    // По одному табельному номеру берётся наибольшая ставка.
+    var secTop = {};
+    secDef.forEach(function (r) {
+      var v = Number(String(r.pct).replace(',', '.')) || 0;
+      if (secTop[r.fio] === undefined || v > secTop[r.fio]) { secTop[r.fio] = v; }
+    });
+    // Значение называет причину: иначе «нет» читается как «строка лишняя»,
+    // хотя обе записи настоящие, а правило выбирает между ними наибольшую.
+    secDef.forEach(function (r) {
+      var v = Number(String(r.pct).replace(',', '.')) || 0;
+      if (v <= 0) { r.use = 'нет, ставка 0'; }
+      else if (v === secTop[r.fio]) { r.use = 'да'; }
+      else { r.use = 'нет, применяется ' + String(secTop[r.fio]).replace('.', ',') + ' %'; }
+    });
+    for (var sa = 0; sa < st.secAdd; sa++) {
+      secDef.push({ code: '—', fio: 'Новая строка', ctr: '41-2026 · Справка 12-СБ', pct: '0',
+                    from: SECCTR['41-2026 · Справка 12-СБ'].from, to: SECCTR['41-2026 · Справка 12-СБ'].to,
+                    use: 'нет, ставка 0' });
+    }
+    secDef = secDef.filter(function (r, i) { return st.secDrop.indexOf(i) < 0; });
+    var secRows = keep('k', secDef).slice()
+      .sort(function (a, b) { return cmp(a, b, st.ksort, st.kdir, ['from', 'to']); })
+      .map(function (x) {
+
+        var idx = secDef.indexOf(x);
+        return {
+          code: x.code, fio: x.fio, ctr: x.ctr, pct: x.pct, from: x.from, to: x.to,
+          use: x.use, useCls: x.use === 'да' ? '' : 'mut',
+          set: function () {},
+          drop: function () { self.setState({ secDrop: st.secDrop.concat([idx]) }); }
+        };
+      });
+
+    var RCOLS = [
+      { key: 'pos', label: 'Должность' },
+      { key: 'cat', label: 'Категория персонала' },
+      { key: 'zp', label: 'Оклад, руб.', num: true },
+      { key: 'p2556', label: 'П2556, руб.', num: true },
+      { key: 'p4', label: 'П4, руб.', num: true },
+      { key: 'bep', label: 'БЭП, руб.', num: true }
+    ];
+    var posts = [
+      { pos: 'Ведущий инженер-конструктор', cat: 'Научные работники', zp: '182 400', p2556: '214 000', p4: '186 400', bep: '178 200' },
+      { pos: 'Инженер-конструктор 1 категории', cat: 'Научные работники', zp: '146 300', p2556: '176 000', p4: '152 000', bep: '146 300' },
+      { pos: 'Инженер-программист', cat: 'Научные работники', zp: '168 900', p2556: '198 000', p4: '172 000', bep: '168 900' },
+      { pos: 'Аналитик', cat: 'Научные работники', zp: '164 000', p2556: '188 000', p4: '162 000', bep: '158 400' },
+      { pos: 'Инженер по качеству', cat: 'Научные работники', zp: '132 000', p2556: '152 000', p4: '136 000', bep: '132 000' },
+      { pos: 'Начальник сектора', cat: 'Руководители', zp: '214 000', p2556: '246 000', p4: '214 000', bep: '208 000' },
+      { pos: 'Техник-испытатель', cat: 'Рабочие', zp: '98 700', p2556: '118 000', p4: '102 000', bep: '98 700' },
+      { pos: 'Инженер-исследователь', cat: 'Аспиранты', zp: '130 000', p2556: '148 000', p4: '128 000', bep: '124 600' }
+    ].slice().sort(function (a, b) { return cmp(a, b, st.rsort, st.rdir, []); });
+    var rgroups = group(keep('r', posts), st.rgkey, st.rclosed, function (label) {
+      var s = st.rclosed.slice();
+      var i = s.indexOf(label);
+      if (i >= 0) { s.splice(i, 1); } else { s.push(label); }
+      self.setState({ rclosed: s });
+    }, !!st.rgkey);
+
+    var UCOLS = [
+      { key: 'pos', label: 'Должность' },
+      { key: 'by', label: 'Кем может быть замещена' }
+    ];
+    var subRows = keep('u', st.subRules).slice()
+      .sort(function (a, b) { return cmp(a, b, st.usort, st.udir, []); });
+
+    return {
+      yes: true, no: false,
+      isShr: st.tab === 'shr', isZp: st.tab === 'zp', isRef: st.tab === 'ref', isSec: st.tab === 'sec',
+      isSub: st.tab === 'sub', subCls: st.tab === 'sub' ? 'tab-on' : '',
+      posList: posts.map(function (x) { return { t: x.pos }; }),
+      monList: ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+        .map(function (m) { return { t: m }; }),
+      zFrom: st.zFrom, zVal: st.zVal,
+      subInfo: 'Строки 1—' + subRows.length + ' из ' + st.subRules.length,
+      ucols: mkCols(UCOLS, st.usort, st.udir, function (k, d) { self.setState({ usort: k, udir: d }); },
+                    'u', st.subRules, st.ugkey, function (k) { self.setState({ ugkey: k }); }),
+      subs: subRows.map(function (r) {
+        var i = st.subRules.indexOf(r);
+        function set(key) {
+          return function (e) {
+            var a = st.subRules.map(function (x, j) {
+              if (i !== j) { return x; }
+              return { pos: key === 'pos' ? e.target.value : x.pos,
+                       by: key === 'by' ? e.target.value : x.by };
+            });
+            self.setState({ subRules: a });
+          };
+        }
+        return {
+          pos: r.pos, by: r.by, setPos: set('pos'), setBy: set('by'),
+          drop: function () {
+            var a = st.subRules.slice();
+            a.splice(i, 1);
+            self.setState({ subRules: a });
+          }
+        };
+      }),
+      shrCls: st.tab === 'shr' ? 'tab-on' : '',
+      zpCls: st.tab === 'zp' ? 'tab-on' : '',
+      refCls: st.tab === 'ref' ? 'tab-on' : '',
+      secCls: st.tab === 'sec' ? 'tab-on' : '',
+      q: st.q, qz: st.qz, size: String(st.size), onlyCh: st.onlyCh,
+      hist: st.hist, histLabel: st.hist ? 'Свернуть редакции' : 'Редакции',
+      secs: secRows,
+      zpInfo: 'Строки 1—' + zrows.length + ' из ' + zpDef.length,
+      secInfo: 'Строки 1—' + secRows.length + ' из ' + secDef.length,
+      kcols: mkCols(KCOLS, st.ksort, st.kdir, function (k, d) { self.setState({ ksort: k, kdir: d }); },
+                    'k', secDef, st.kgkey, function (k) { self.setState({ kgkey: k }); }),
+      scols: mkCols(SCOLS, st.sort, st.dir, function (k, d) { self.setState({ sort: k, dir: d, page: 1 }); },
+                    's', all, st.gkey, function (k) { self.setState({ gkey: k, closed: [], page: 1 }); }),
+      zcols: mkCols(ZCOLS, st.zsort, st.zdir, function (k, d) { self.setState({ zsort: k, zdir: d }); },
+                    'z', zpDef, st.zgkey, function (k) { self.setState({ zgkey: k }); }),
+      rcols: mkCols(RCOLS, st.rsort, st.rdir, function (k, d) { self.setState({ rsort: k, rdir: d }); },
+                    'r', posts, st.rgkey, function (k) { self.setState({ rgkey: k, rclosed: [] }); }),
+      sgroups: sgroups, pageInfo: pageInfo, pageOf: pageOf,
+      zrows: zrows, ztotals: ztotals.map(money),
+      zPageInfo: 'Строки 1—' + zrows.length + ' из ' + zrows.length,
+      rgroups: rgroups,
+      vers: [
+        { n: 'Редакция 4', when: '09.09.2026', rows: '118', hired: '4', fired: '2', changed: '11', state: 'действующая', cls: '', stCls: '' },
+        { n: 'Редакция 3', when: '01.07.2026', rows: '116', hired: '2', fired: '1', changed: '23', state: 'архив', cls: 'mut', stCls: 'mut' },
+        { n: 'Редакция 2', when: '12.03.2026', rows: '114', hired: '2', fired: '0', changed: '114', state: 'архив', cls: 'mut', stCls: 'mut' },
+        { n: 'Редакция 1', when: '09.01.2026', rows: '112', hired: '112', fired: '0', changed: '0', state: 'архив', cls: 'mut', stCls: 'mut' }
+      ],
+      changes: [
+        { code: 'ШР-1041', fio: 'Абрамова Т. Н.', diff: '182 400 → 196 000 с 04.2027', when: '17.09 10:48 · Петрова И. С.', effect: 'План 2027 — индексация', cls: 'warn' },
+        { code: 'ШР-1208', fio: 'Виноградов П. И.', diff: '168 900 → 178 000 с 07.2027', when: '16.09 15:02 · Петрова И. С.', effect: 'расчёт не запускался', cls: 'warn' },
+        { code: 'ШР-3117', fio: 'Ерёмин А. В.', diff: '71 000 → 74 000 с 01.2027', when: '12.09 09:20 · Петрова И. С.', effect: 'учтено в расчёте 4', cls: 'mut' }
+      ],
+      h: {
+        shr: function () { self.setState({ tab: 'shr' }); },
+        zp: function () { self.setState({ tab: 'zp' }); },
+        ref: function () { self.setState({ tab: 'ref' }); },
+        sec: function () { self.setState({ tab: 'sec' }); },
+        sub: function () { self.setState({ tab: 'sub' }); },
+        zFrom: function (e) { self.setState({ zFrom: e.target.value }); },
+        zVal: function (e) { self.setState({ zVal: e.target.value }); },
+        zApply: function () {
+          if (!st.zVal) { return; }
+          var next = {};
+          for (var kk in st.zp) { next[kk] = st.zp[kk]; }
+          zpDef.forEach(function (z) {
+            for (var m = Number(st.zFrom); m <= 12; m++) { next[z.code + '|' + m] = st.zVal; }
+          });
+          self.setState({ zp: next, zVal: '' });
+        },
+        addSec: function () { self.setState({ secAdd: st.secAdd + 1 }); },
+        addSub: function () {
+          var a = st.subRules.slice();
+          a.push({ pos: posts[0].pos, by: posts[0].pos });
+          self.setState({ subRules: a });
+        },
+        q: function (e) { self.setState({ q: e.target.value, page: 1 }); },
+        qz: function (e) { self.setState({ qz: e.target.value }); },
+        grp: function (e) { self.setState({ grp: e.target.value === 'Без группировки' ? '' : e.target.value, page: 1 }); },
+        rgrp: function (e) { self.setState({ rgrp: e.target.value }); },
+        size: function (e) { self.setState({ size: Number(e.target.value), page: 1 }); },
+        prev: function () { self.setState({ page: Math.max(1, st.page - 1) }); },
+        next: function () { self.setState({ page: st.page + 1 }); },
+        hist: function () { self.setState({ hist: !st.hist }); },
+        onlyCh: function () { self.setState({ onlyCh: !st.onlyCh }); }
+      }
+    };
+  }
+}
+window.Component = Component;
+</script>
+</body>
+</html>
