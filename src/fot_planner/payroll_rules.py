@@ -6,7 +6,10 @@ from typing import Callable
 
 import pyomo.environ as pyo
 
-from fot_planner.contract_calendar import contract_payment_window_includes_month
+from fot_planner.contract_calendar import (
+    contract_payment_window_includes_month,
+    secret_allowance_active,
+)
 from fot_planner.models import PaymentKind, PlanningContext
 from fot_planner.open_rate_rules import OPEN_RATE_STEP, TOTAL_RATE_MAX_REGULAR
 from fot_planner.position_reference import normalize_position
@@ -57,20 +60,31 @@ def _position_limits_by_code_and_position(ctx: PlanningContext) -> dict[tuple[st
     }
 
 
+def _limit_in(row, month: int | None) -> float | None:
+    """Лимит строки, действующий в месяце (лист «лимиты_по_месяцам», 01.10.2026)."""
+    if row is None:
+        return None
+    by_month = getattr(row, "limit_by_month", None) or {}
+    if month is not None and month in by_month:
+        return by_month[month]
+    return row.limit
+
+
 def _limit_for_rate(limit: float | None, rate: float) -> float | None:
     if limit is None or limit <= 0 or rate <= 0:
         return None
     return float(limit) * rate
 
 
-def _employee_limit_by_code(limit_by_code_position, employee, limit_code: str) -> float | None:
+def _employee_limit_by_code(limit_by_code_position, employee, limit_code: str,
+                            month: int | None = None) -> float | None:
     code = str(limit_code).strip().lower()
     limit_row = limit_by_code_position.get((code, normalize_position(employee.position)))
     if limit_row is None:
         return None
     if code == "p4" and not p4_applies_to_category(limit_row.personnel_category):
         return None
-    return _limit_for_rate(limit_row.limit, employee.rate)
+    return _limit_for_rate(_limit_in(limit_row, month), employee.rate)
 
 
 def _employee_limit_row_by_code(limit_by_code_position, employee, limit_code: str):
@@ -131,20 +145,9 @@ def _active_secret_allowance_rate(
     employee_id: str,
     month: int,
 ) -> float | None:
-    rates: list[float] = []
-    for row in rule_ctx.ctx.secret_allowances:
-        if row.employee_id != employee_id:
-            continue
-        secret_contract = rule_ctx.contracts.get(row.secret_contract_id)
-        if secret_contract is None:
-            continue
-        if contract_payment_window_includes_month(
-            secret_contract,
-            rule_ctx.ctx.year,
-            month,
-            PaymentKind.K120,
-        ):
-            rates.append(row.rate)
+    rates = [row.rate for row in rule_ctx.ctx.secret_allowances
+             if row.employee_id == employee_id
+             and secret_allowance_active(row, rule_ctx.contracts, rule_ctx.ctx.year, month)]
     if not rates:
         return None
     return max(rates)
@@ -253,12 +256,16 @@ def rule_2556_salary_122_staff_total(rule_ctx: PayrollRuleContext) -> None:
     target_records: list[tuple[tuple[str, str, int], object, list]] = []
     for employee in rule_ctx.ctx.employees:
         limit_row = _employee_limit_row_by_code(limit_by_code_position, employee, "2556")
-        if limit_row is None or limit_row.limit is None or limit_row.limit <= 0:
+        if limit_row is None:
             continue
-        base_limit = float(limit_row.limit)
         for month in rule_ctx.months:
             if not rule_ctx.employee_active_in_month(employee, rule_ctx.ctx.year, month):
                 continue
+            # П2556 месяца: приказ вступает с даты (01.10.2026).
+            month_limit = _limit_in(limit_row, month)
+            if month_limit is None or month_limit <= 0:
+                continue
+            base_limit = float(month_limit)
             for contract_id in rule_ctx.contract_list:
                 terms = [
                     rule_ctx.alloc[key]
@@ -299,10 +306,10 @@ def rule_order_incentive_2556_amount(rule_ctx: PayrollRuleContext) -> None:
 
     limit_by_code_position = _position_limits_by_code_and_position(rule_ctx.ctx)
     for employee in rule_ctx.ctx.employees:
-        limit = _employee_limit_by_code(limit_by_code_position, employee, "2556")
-        if limit is None:
-            continue
         for month in rule_ctx.months:
+            limit = _employee_limit_by_code(limit_by_code_position, employee, "2556", month)
+            if limit is None:
+                continue
             if not rule_ctx.employee_active_in_month(employee, rule_ctx.ctx.year, month):
                 continue
             terms = [
@@ -373,7 +380,7 @@ def rule_p4_monthly_staff_limit(rule_ctx: PayrollRuleContext) -> None:
         limit_row = limit_by_code_position.get(("p4", normalize_position(employee.position)))
         if limit_row is None or not p4_applies_to_category(limit_row.personnel_category):
             continue
-        limit = limit_row.limit
+        limit = _limit_in(limit_row, month)
         if limit is None or limit <= 0 or employee.rate <= 0:
             continue
 
@@ -481,11 +488,12 @@ def rule_goz_bep_staff_total(rule_ctx: PayrollRuleContext) -> None:
         return
     limit_by_code_position = _position_limits_by_code_and_position(rule_ctx.ctx)
 
-    def bep_of(employee) -> float:
+    def bep_of(employee, month=None) -> float:
         row = limit_by_code_position.get(("bep", normalize_position(employee.position)))
-        if row is None or row.limit is None or row.limit <= 0:
+        value = _limit_in(row, month)
+        if value is None or value <= 0:
             return bep_limit
-        return float(row.limit)
+        return float(value)
     goz_contract_ids = {
         contract_id
         for contract_id, contract in rule_ctx.contracts.items()
@@ -565,7 +573,7 @@ def rule_goz_bep_staff_total(rule_ctx: PayrollRuleContext) -> None:
                 rate_expr = employee.rate * rule_ctx.model.goz_bep_employee_active[
                     (employee_id, contract_id, month)
                 ]
-            target_terms.append(bep_of(employee) * rate_expr)
+            target_terms.append(bep_of(employee, month) * rate_expr)
         target = rule_ctx.sum_terms(target_terms)
         rule_ctx.model.cons.add(included_total <= target)
         rule_ctx.model.cons.add(

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
+from fot_planner.actuals import frozen_through
 from fot_planner.labor_rules import (
     contract_has_labor_plan,
     employee_compatible_with_labor_row,
@@ -238,8 +239,10 @@ def _labor_payment_without_pm_issues(ctx: PlanningContext, result: PlanningResul
     employees = {e.id: e for e in ctx.employees}
     seen: set[tuple[str, str, str, int, str]] = set()
     issues: list[dict] = []
+    last = frozen_through(ctx)
     for rec in result.labor_payment_attributions:
-        if rec.amount <= 0.005:
+        # Месяц факта — история, а не выбор расчёта (правило 26).
+        if rec.amount <= 0.005 or rec.month <= last:
             continue
         key = (rec.employee_id, rec.contract_id, rec.labor_row_id, rec.month, rec.position or "")
         if key in seen:
@@ -281,9 +284,11 @@ def _labor_attribution_gaps(ctx: PlanningContext, result: PlanningResult) -> lis
         attributed[key] += rec.amount
 
     gaps: list[dict] = []
+    last = frozen_through(ctx)
     for a in result.allocations:
         if (
             a.amount <= 0.005
+            or a.month <= last
             or a.payment_kind not in LABOR_PAYMENT_KINDS
             or not has_labor(ctx, a.contract_id)
         ):
@@ -337,8 +342,9 @@ def _labor_row_issues(ctx: PlanningContext, result: PlanningResult) -> list[dict
 def _split_payment_issues(ctx: PlanningContext, result: PlanningResult) -> list[dict]:
     grouped: dict[tuple[str, int, str], list] = defaultdict(list)
     employees = {e.id: e for e in ctx.employees}
+    last = frozen_through(ctx)
     for a in result.allocations:
-        if not a.payment_kind.is_non_salary or a.amount <= 0.005:
+        if not a.payment_kind.is_non_salary or a.amount <= 0.005 or a.month <= last:
             continue
         grouped[(a.employee_id, a.month, a.payment_kind)].append(a)
 
@@ -371,6 +377,10 @@ def _split_payment_issues(ctx: PlanningContext, result: PlanningResult) -> list[
 def _cash_issues(result: PlanningResult, contracts: dict) -> list[dict]:
     issues: list[dict] = []
     for b in result.contract_balances:
+        # Минус в кассе месяца факта — история: о нём говорит предупреждение
+        # решателя FROZEN_FOT_OVERSPENT_WARNING, а план его не исправит.
+        if b.month <= getattr(result, "frozen_through", 0):
+            continue
         if b.closing_balance < -0.01:
             c = contracts.get(b.contract_id)
             issues.append(
@@ -556,6 +566,10 @@ def build_summary_sheet(
     rows = [
         row("Статус решателя", result.solver_status, "", ""),
         row("Год", result.year, "", ""),
+        # Последний месяц факта (правило 26): 1…F в «Плане выплат» — лист
+        # «факт_выплат», «источник решения» у них fact; 0 — факта нет.
+        # Сервис читает строку по названию показателя.
+        row("Факт по месяц", frozen_through(ctx), "", ""),
         row("Время расчёта, сек", round(result.solve_time_sec, 1), "", ""),
         row("Общий статус", overall, overall, overall_comment),
         row("Всего выплат", round(total_paid, 0), "", ""),
@@ -610,7 +624,8 @@ def build_employee_payments_matrix(ctx: PlanningContext, result: PlanningResult)
         deficit: dict[int, float] = {}
         for m in range(1, 13):
             if employee_active_in_month(e, ctx.year, m):
-                due[m] = employee_monthly_payment_due(e)
+                # «Всего к выплате» — зарплата этого месяца (правило 1).
+                due[m] = employee_monthly_payment_due(e, m)
             paid[m] = sum(a.amount for a in result.allocations if a.employee_id == e.id and a.month == m)
             deficit[m] = sum(d.amount for d in result.deficits if d.employee_id == e.id and d.month == m)
 
@@ -1310,7 +1325,10 @@ def build_plan_payments_sheet(ctx: PlanningContext, result: PlanningResult) -> p
         emp = employees.get(a.employee_id)
         c = contracts.get(a.contract_id)
         status = "ОК"
-        if (a.employee_id, a.month) in deficit_keys:
+        if a.source == "fact":
+            # Начисление прошедшего месяца расчёт не выбирал и не оценивает.
+            status = "факт"
+        elif (a.employee_id, a.month) in deficit_keys:
             status = "дефицит"
         elif a.payment_kind.is_non_salary and a.amount < MIN_FLEX_FRAGMENT_AMOUNT - 0.01:
             status = "ниже минимального фрагмента"
@@ -1638,7 +1656,7 @@ def build_deficit_by_month_matrix(ctx: PlanningContext, result: PlanningResult) 
     cum_def: dict[int, float] = {}
     for m in range(1, 13):
         total_need = sum(
-            employee_monthly_payment_due(e)
+            employee_monthly_payment_due(e, m)
             for e in ctx.employees
             if employee_active_in_month(e, ctx.year, m)
         )

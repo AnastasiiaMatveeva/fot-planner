@@ -26,7 +26,7 @@ MAX_LABOR_TOLERANCE = 0.05
 
 @dataclass
 class Employee:
-    """Сотрудник: месячная зарплата (итого в месяц), договоры, запреты."""
+    """Сотрудник: месячная зарплата (итого в месяц, может меняться по месяцам), договоры, запреты."""
 
     id: str
     full_name: str
@@ -42,6 +42,9 @@ class Employee:
     end_date: date | None = None
     allowed_contracts: list[str] = field(default_factory=list)
     forbidden_contracts: list[str] = field(default_factory=list)
+    # Лицевой счёт из штатного расписания: справка о текущем положении, в
+    # ограничения решателя не входит (28.09.2026).
+    account: str | None = None
     equivalence_group: str | None = None
     # Должности, которые этому сотруднику можно дать дополнительно к его
     # собственной (нормализованные названия). Правила направленные: директор
@@ -56,6 +59,14 @@ class Employee:
     # regular — до 1.5 в сумме; student — входная ставка фиксируется без открытия доп. ставок;
     # graduate_student — до 0.75.
     employment_category: EmploymentCategory = "regular"
+    # Зарплата по месяцам года плана: месяц → сумма (лист «зарплата_по_месяцам»).
+    # Зарплата меняется в течение года (решение пользователя 19.09.2026), а в
+    # штатном расписании у строки одна сумма. Здесь только месяцы со своей
+    # суммой; в остальных действует monthly_wage.
+    monthly_wages: dict[int, float] = field(default_factory=dict)
+    # Оклад за 1,0 ставки по месяцам, где он не равен reference_salary_for_rate
+    # (лист «лимиты_по_месяцам», 01.10.2026): индексация с сентября.
+    reference_salary_by_month: dict[int, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -137,6 +148,12 @@ class SecretAllowance:
     employee_id: str
     secret_contract_id: str
     rate: float = 0.05
+    # Окно выплаты: пусто — окно 120 договора секретности (правило 10).
+    start_date: date | None = None
+    end_date: date | None = None
+    # Закреплённый договор выплаты: только с него платится 120 этой строки;
+    # не счёт на 23 — оклад в эти месяцы тоже на нём (дополнение 18.09.2026).
+    pay_contract_id: str | None = None
 
 
 @dataclass
@@ -211,15 +228,48 @@ class LaborPaymentAttribution:
 
 @dataclass
 class ManualAssignment:
-    """Фиксация: сотрудник на договоре в периоде (оклад и/или 122/124)."""
+    """Фиксация: сотрудник на договоре в периоде (оклад и/или 122/124).
+
+    Вид выплаты None — закрепление без вида (карточка MANUAL-ANY-001, решение
+    пользователя 19.09.2026): экономисту важно, чтобы сотруднику с этого
+    договора платили, а каким видом — решает расчёт. Суммы у такого
+    закрепления нет: она бывает только у конкретного вида.
+    """
 
     employee_id: str
     contract_id: str
     year: int
     month_from: int
     month_to: int
-    payment_kind: PaymentKind = PaymentKind.SALARY
+    payment_kind: PaymentKind | None = PaymentKind.SALARY
     fixed_amount: float | None = None
+    # «По возможности вся» зарплата с этого договора (члены рабочей группы):
+    # владелец продукта 30.09.2026 — «какую выплату ему дать, решает расчёт
+    # … если не задано — то по возможности ВСЮ». Не запрет, а стадия цели:
+    # деньги этому сотруднику с других договоров в месяцы закрепления
+    # минимизируются, но при нехватке денег договора остаток идёт с других.
+    whole_if_possible: bool = False
+
+
+@dataclass
+class ActualPayment:
+    """Начисление прошедшего месяца — лист «факт_выплат».
+
+    Пересчёт с текущими вводными (владелец продукта 30.09.2026): месяцы до
+    «факт по месяц» включительно уже прошли, их суммы, ставки и основное
+    место известны, и расчёт их не меняет, а учитывает в правилах, которые
+    тянутся через месяцы. Ставка — открытая на договоре в месяце, только у
+    оклада; в истории она бывает и не кратной четверти (0,3).
+    """
+
+    employee_id: str      # код строки штатного расписания
+    contract_id: str
+    month: int            # 1–12 года плана
+    payment_kind: PaymentKind
+    amount: float         # начислено за месяц, ₽
+    rate: float | None = None
+    is_main: bool | None = None   # «основное место»: да/нет/пусто
+    rate_derived: bool = False    # ставки во входе не было: оклад ÷ оклад должности
 
 
 @dataclass
@@ -334,6 +384,13 @@ class PlanningContext:
     baseline_plan: list[AllocationRecord] | None = None
     # Диагностический режим: разрешить недоплату с большим штрафом (см. allow_deficit)
     allow_deficit: bool = False
+    # Пересчёт с факта (владелец продукта 30.09.2026): месяцы 1…frozen_through
+    # прошли и в плане равны факту ``actuals``; 0 — факта нет, расчёт как
+    # прежде. В ``actuals`` лежит весь лист «факт_выплат», и строки после
+    # последнего месяца факта или по чужому договору тоже: что расчёт не
+    # учёл, называет проверка входа.
+    frozen_through: int = 0
+    actuals: list[ActualPayment] = field(default_factory=list)
 
 
 @dataclass
@@ -347,6 +404,9 @@ class AllocationRecord:
     payment_kind: PaymentKind  # оклад, 122, 124, 120, 152
     amount: float  # сумма с этого договора
     is_manual: bool = False  # зафиксировано вручную через «ручные_назначения» или «План выплат»
+    # optimizer — выбрал расчёт; manual — закрепление экономиста; fact —
+    # начисление прошедшего месяца с листа «факт_выплат» (пересчёт с факта,
+    # 30.09.2026): сумма зафиксирована, но не закреплением.
     source: str = "optimizer"
 
 
@@ -426,3 +486,6 @@ class PlanningResult:
     audit_violations: list[AuditViolation] = field(default_factory=list)
     # Состояние каждой проверки: passed | failed | not_applicable | not_run.
     audit_checks: list[dict] = field(default_factory=list)
+    # Последний месяц факта, с которым считался план (0 — факта нет): месяцы
+    # 1…frozen_through в плане — начисления листа «факт_выплат».
+    frozen_through: int = 0

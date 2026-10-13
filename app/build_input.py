@@ -54,8 +54,42 @@ def _yes(value):
     return "да" if str(value or "").strip().lower() in ("да", "true", "1", "+") else "нет"
 
 
-def fill_employees(ws, rows, warn, year=None):
-    """Лист «сотрудники» из штатного расписания реестра."""
+def _codes(text):
+    return [c.strip() for c in str(text or "").replace(";", ",").split(",") if c.strip()]
+
+
+def group_contracts(rows, groups):
+    """Разрешённые и запрещённые договоры строк с учётом рабочих групп.
+
+    Член рабочей группы получает с договора группы выплату (закрепление), и
+    договор ему разрешён приказом, какой бы ни была графа штатного
+    расписания (пользователь 01.10.2026: «если он есть в рабочем приказе, он
+    должен сразу галочку ставить»). Иначе закрепление и разрешение спорили, и
+    расчёт кончался «решения нет». Возвращает {код строки: (разрешены,
+    запрещены, [добавленные договоры])}; строки без групп — как есть."""
+    by_emp = {}
+    for g in groups or []:
+        if g.get("сотрудник") and g.get("договор"):
+            by_emp.setdefault(g["сотрудник"], []).append(g["договор"])
+    out = {}
+    for e in rows:
+        allowed, forbidden = _codes(e.allowed_contracts), _codes(e.forbidden_contracts)
+        added = []
+        for code in by_emp.get(e.code, []):
+            if code in forbidden:
+                forbidden.remove(code)
+                added.append(code)
+            if allowed and code not in allowed:
+                allowed.append(code)
+                if code not in added:
+                    added.append(code)
+        out[e.code] = (", ".join(allowed) or None, ", ".join(forbidden) or None, added)
+    return out
+
+
+def fill_employees(ws, rows, warn, year=None, groups=None):
+    """Лист «сотрудники» из штатного расписания реестра. groups — действующий
+    состав рабочих групп: договор группы члену разрешён (group_contracts)."""
     if not rows:
         warn.append("Штатного расписания в реестре нет — сотрудники в расчете "
                     "остались от шаблона.")
@@ -71,6 +105,12 @@ def fill_employees(ws, rows, warn, year=None):
         ws.cell(1, 2).value = "табельный номер"
         headers = [str(c.value or "").strip().lower() for c in ws[1]]
     _clear(ws)
+    access = group_contracts(rows, groups)
+    opened = ["%s — %s" % (e.fio or e.code, ", ".join(access[e.code][2]))
+              for e in rows if access[e.code][2]]
+    if opened:
+        warn.append("Договоры рабочих групп разрешены членам групп по приказу: %s."
+                    % "; ".join(opened))
     for e in rows:
         values = {
             "код строки": e.code,
@@ -84,11 +124,14 @@ def fill_employees(ws, rows, warn, year=None):
             # так выразить нельзя, а на нем держится половина модели.
             "тип занятости": e.employment_type or "по расчету",
             "категория занятости": e.employment_category or "основной",
-            "зарплата": e.salary,
+            # Зарплаты в штатном расписании нет (решение пользователя
+            # 19.09.2026): графу заполняет fill_salary_months из таблицы
+            # «Заработная плата по месяцам».
+            "зарплата": None,
             "дата начала": e.date_from or ("01.01.%d" % year if year else ""),
             "дата окончания": e.date_to or ("31.12.%d" % year if year else ""),
-            "разрешенные договоры": e.allowed_contracts or None,
-            "запрещенные договоры": e.forbidden_contracts or None,
+            "разрешенные договоры": access[e.code][0],
+            "запрещенные договоры": access[e.code][1],
         }
         ws.append([values.get(name) for name in headers])
 
@@ -168,52 +211,6 @@ def _months_of(contract, year):
     return list(range(first, last + 1))
 
 
-def fill_inflows(ws, rows, contracts, warn, year=None):
-    """Лист «фот_по_месяцам»: поступления как есть.
-
-    Договору без графика фонд раскладывается ровно по месяцам его действия.
-    Оставить его без кассы нельзя: решатель не может потратить деньги раньше,
-    чем они поступили, и задача становится нерешаемой из-за отсутствующих
-    данных, а не из-за существа. Раскладку называем вслух — это допущение
-    сервиса, а не факт из документа.
-    """
-    by_code = {}
-    for r in rows:
-        by_code.setdefault(r.contract_code, {})[int(r.month or 0)] = r.amount
-
-    guessed = []
-    for c in contracts:
-        if c.code in by_code or not c.fund:
-            continue
-        months = _months_of(c, year) if year else list(range(1, 13))
-        share = round(float(c.fund) / len(months))
-        plan = {m: share for m in months}
-        # Остаток от деления кладем в последний месяц, чтобы сумма сошлась
-        # с фондом до рубля.
-        plan[months[-1]] = round(float(c.fund) - share * (len(months) - 1))
-        by_code[c.code] = plan
-        guessed.append(c.code)
-
-    if not by_code:
-        warn.append("Графика поступлений нет и фонды договоров не заданы — "
-                    "помесячная разбивка в расчете осталась от шаблона.")
-        return
-    _clear(ws)
-    for code, months in by_code.items():
-        ws.append([code] + [months.get(m) for m in range(1, 13)])
-
-    if guessed:
-        warn.append("Графика поступлений по договорам %s в реестре нет — фонд "
-                    "разложен ровно по месяцам действия. Это допущение сервиса: "
-                    "приложите график, если деньги приходят иначе."
-                    % ", ".join(sorted(guessed)))
-    known = {c.code for c in contracts}
-    lost = [c for c in by_code if c not in known]
-    if lost:
-        warn.append("Поступления есть по договорам, которых нет в реестре: %s."
-                    % ", ".join(sorted(lost)))
-
-
 def _put(ws, values):
     """Дописать строку, раскладывая значения по именам граф шаблона.
 
@@ -284,6 +281,11 @@ def fill_labor(ws, rows, warn, contracts=None, year=None):
                 months = {}
         months = {int(k): float(v) for k, v in months.items() if v}
         window = windows.get(r.contract_code)
+        # Строка другого года (РКМ на 2026–2027) решателю этого года не нужна —
+        # он берёт год плана, — а окно выплат этого года к ней не относится:
+        # её январь не «после предела», а другой январь.
+        if year and getattr(r, "year", None) and int(r.year) != int(year):
+            window = None
         late = {m: v for m, v in months.items() if window is not None and m not in window}
         if late:
             keep = {m: v for m, v in months.items() if m not in late}
@@ -316,22 +318,45 @@ def fill_secret(ws, rows, warn):
     if not rows:
         return
     _clear(ws)
+    # Окно и договор выплаты появились 18.09.2026 (правило 10): в шаблонах
+    # прежней редакции этих граф нет — дописываем шапку, а не теряем значения.
+    hdr = _headers(ws)
+    for name in ("начало 120", "окончание 120", "договор выплаты 120"):
+        if name not in hdr:
+            ws.cell(1, len(hdr) + 1, name)
+            hdr.append(name)
     for r in rows:
         _put(ws, [(("сотрудник",), r.employee_code),
                   (("договор секретности",), r.secret_contract_code or ""),
-                  (("ставка 120",), r.rate)])
+                  (("ставка 120",), r.rate),
+                  (("начало 120",), getattr(r, "date_from", None) or None),
+                  (("окончание 120",), getattr(r, "date_to", None) or None),
+                  (("договор выплаты 120",), getattr(r, "pay_contract_code", None) or None)])
 
 
 def fill_manual(ws, rows, prohibit=False):
     """Листы «ручные_назначения» и «ручные_запреты» — переменные решателя,
     зафиксированные экономистом в чате."""
     _clear(ws)
+    # «По возможности вся» — член рабочей группы без выбранной выплаты
+    # (30.09.2026): решатель стремится платить ему всё с этого договора.
+    # Графы нет в старых шаблонах — дописываем справа, загрузчик читает лист
+    # по заголовкам.
+    flag = "по возможности вся"
+    if not prohibit and any(r.get(flag) for r in rows or []) and _col(ws, flag) is None:
+        ws.cell(1, ws.max_column + 1).value = flag
     for r in rows or []:
+        # «любой» — вид не задан (решение пользователя 19.09.2026): у
+        # закрепления — хотя бы одна выплата с договора любого вида, у
+        # запрета — все виды. Решатель читает пустую графу именно так.
+        kind = r.get("вид") or "оклад"
+        kind = None if kind == "любой" else kind
         vals = [(("сотрудник",), r["сотрудник"]), (("договор",), r["договор"]),
                 (("год",), r.get("год")), (("месяц с",), r["с"]), (("месяц по",), r["по"]),
-                (("вид выплаты",), r.get("вид") or "оклад")]
+                (("вид выплаты",), kind)]
         if not prohibit:
-            vals.append((("фикс сумма",), r.get("сумма")))
+            vals.append((("фикс сумма",), r.get("сумма") if kind else None))
+            vals.append((("по возможности вся",), "да" if r.get("по возможности вся") else None))
         _put(ws, vals)
 
 
@@ -350,16 +375,197 @@ def fill_substitutions(wb, pairs):
             ws.append([position, replaced_by or ""])
 
 
+def active_months(date_from, date_to, year):
+    """Месяцы года, в которых строка штатного расписания действует: с месяца
+    приёма по месяц увольнения; без даты — с начала или до конца года."""
+    def index(text, default):
+        parts = str(text or "").strip().split(".")
+        try:
+            return int(parts[2]) * 12 + int(parts[1]) - 1
+        except (ValueError, IndexError):
+            return default
+    first, last = index(date_from, year * 12), index(date_to, year * 12 + 11)
+    return [m for m in range(1, 13) if first <= year * 12 + m - 1 <= last]
+
+
+def salary_gaps(employees, rows, year, fact_through=0):
+    """Строки, у которых в месяцах срока нет зарплаты: [(строка, [месяцы])].
+
+    Зарплата — только из таблицы «Заработная плата по месяцам»: в штатном
+    расписании её нет (решение пользователя 19.09.2026), подставить нечего.
+    Месяцы факта (по fact_through включительно) не нужны: их расчёт берёт как
+    были начислены (30.09.2026)."""
+    have = {(code, month) for code, month, _ in rows or []}
+    out = []
+    for e in employees or []:
+        missing = [m for m in active_months(e.date_from, e.date_to, year)
+                   if (e.code, m) not in have and m > (fact_through or 0)]
+        if missing:
+            out.append((e, missing))
+    return out
+
+
+def _spans(months):
+    """[3, 4, 5, 9] → «март–май, сентябрь»."""
+    parts, start = [], None
+    for i, m in enumerate(months):
+        if start is None:
+            start = m
+        if i + 1 == len(months) or months[i + 1] != m + 1:
+            parts.append(MONTH_NAMES[start - 1].lower() if start == m else
+                         "%s–%s" % (MONTH_NAMES[start - 1].lower(), MONTH_NAMES[m - 1].lower()))
+            start = None
+    return ", ".join(parts)
+
+
+def gaps_text(gaps):
+    """Сообщение о строках без зарплаты: кто и в какие месяцы."""
+    shown = ["%s (%s) — %s" % (e.fio or e.code, e.code,
+                               "весь год" if len(months) == 12 else _spans(months))
+             for e, months in gaps[:6]]
+    more = " и ещё %d" % (len(gaps) - 6) if len(gaps) > 6 else ""
+    return ("Не задана зарплата по месяцам: %s%s. Заполните вкладку реестра "
+            "«Заработная плата по месяцам»." % ("; ".join(shown), more))
+
+
+def fill_salary_months(wb, rows, employees=None, year=None, fact_through=0):
+    """Лист «зарплата_по_месяцам» и графа «зарплата» листа сотрудников — из
+    таблицы «Заработная плата по месяцам» (правило 1, SALARY-001).
+
+    Зарплаты в штатном расписании нет, подставить её нечем: если у строки в
+    месяце срока нет суммы, вход не собирается, а ошибка называет строки и
+    месяцы. В лист попадают только строки листа сотрудников: сумма строки,
+    не ушедшей в расчёт, остановила бы загрузку входа. Графа «зарплата»
+    обязательна загрузчику, а месяцы срока все заданы листом, поэтому в ней —
+    первая сумма строки."""
+    name = "зарплата_по_месяцам"
+    if name in wb.sheetnames:
+        del wb[name]
+    staff = wb["сотрудники"]
+    col = _col(staff, "код строки")
+    codes = {str(staff.cell(r, col).value).strip() for r in range(2, staff.max_row + 1)
+             if col and staff.cell(r, col).value not in (None, "")}
+    if employees is not None:
+        gaps = salary_gaps(employees, rows, year, fact_through)
+        if gaps:
+            raise ValueError(gaps_text(gaps))
+        first = {}
+        for code, _month, amount in sorted(rows or [], key=lambda r: (r[0], r[1])):
+            first.setdefault(code, amount)
+        wage = _col(staff, "зарплата")
+        if col and wage:
+            for r in range(2, staff.max_row + 1):
+                code = str(staff.cell(r, col).value or "").strip()
+                if code:
+                    staff.cell(r, wage).value = first.get(code, 0)
+    if not rows:
+        return
+    ws = wb.create_sheet(name)
+    ws.append(["код строки", "месяц", "зарплата"])
+    for code, month, amount in rows:
+        if code in codes:
+            ws.append([code, month, amount])
+
+
+#: Графы величин справочника — в листе «лимиты_по_должностям» и в
+#: «лимиты_по_месяцам» (app/reference.COLS).
+REF_FIELDS = ("оклад", "П2556", "П4", "БЭП")
+REF_MONTHLY_SHEET = "лимиты_по_месяцам"
+MONTH_GEN = ("января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа",
+             "сентября", "октября", "ноября", "декабря")
+
+
+def fill_reference_months(wb, year, warn=None):
+    """Величины справочника, действующие не весь год (01.10.2026).
+
+    Шаблон входа — сам справочник, и в нём лист истории: величина должности
+    с даты. Строка «лимиты_по_должностям» становится величиной января года
+    плана, а месяцы, где действует другая, — строками листа
+    «лимиты_по_месяцам» (должность, месяц и только отличающиеся графы). Без
+    истории — листа нет, и весь год действует строка справочника."""
+    import reference
+    if not year:
+        return
+    months = reference.month_values(year, wb)
+    if not months:
+        if REF_MONTHLY_SHEET in wb.sheetnames:
+            del wb[REF_MONTHLY_SHEET]
+        return
+    ws = wb[reference.SHEET]
+    rows = {}
+    for r in range(2, ws.max_row + 1):
+        if ws.cell(r, 1).value:
+            rows[str(ws.cell(r, 1).value)] = r
+    cells = {}
+    said = []
+    for (pos, field), by_month in sorted(months.items()):
+        r = rows.get(pos)
+        if r is None or not by_month:
+            continue
+        col = reference.COLS[field]
+        base = by_month.get(1)
+        if base is not None:
+            ws.cell(r, col).value = base
+        else:
+            base = reference._num(ws.cell(r, col).value)
+        changed = sorted(m for m, v in by_month.items() if base is None or abs(v - base) > 0.005)
+        for m in changed:
+            cells.setdefault((pos, m), {})[field] = by_month[m]
+        if changed:
+            said.append("%s — %s с %s" % (pos, field, MONTH_GEN[changed[0] - 1]))
+    if REF_MONTHLY_SHEET in wb.sheetnames:
+        del wb[REF_MONTHLY_SHEET]
+    if not cells:
+        return
+    out = wb.create_sheet(REF_MONTHLY_SHEET)
+    out.append(["должность", "месяц"] + list(REF_FIELDS))
+    for (pos, m), got in sorted(cells.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+        out.append([pos, m] + [got.get(f) for f in REF_FIELDS])
+    if warn is not None:
+        warn.append("Справочник в году плана меняется: %s." % "; ".join(said))
+
+
+MGMT_SHEET = "управленческие_подразделения"
+
+
+def fill_mgmt(wb, rows):
+    """Лист «управленческие_подразделения» (01.10.2026): строки зарплаты с
+    подразделением — снимок для раздела 16 отчёта. Решатель его не читает:
+    подразделение на план не влияет, только делит выплаты в отчёте."""
+    if MGMT_SHEET in wb.sheetnames:
+        del wb[MGMT_SHEET]
+    if not rows:
+        return
+    ws = wb.create_sheet(MGMT_SHEET)
+    ws.append(["код строки", "подразделение", "порядок", "месяц", "сумма"])
+    for code, dept, order, month, amount in rows:
+        ws.append([code, dept, order, month, amount])
+
+
 def build(template_path, out_path, data, warn):
     """Собрать входной файл. ``data`` — то, что лежит в реестре организации."""
     wb = openpyxl.load_workbook(template_path)
+    # Величины справочника по датам — по месяцам года плана (01.10.2026).
+    fill_reference_months(wb, data.get("year"), warn)
 
     fill_employees(wb["сотрудники"], data.get("employees") or [], warn,
-                   data.get("year"))
+                   data.get("year"), data.get("workgroups"))
+    if data.get("employees"):
+        fill_salary_months(wb, data.get("salary_months") or [], data["employees"],
+                           data.get("year"), data.get("fact_through") or 0)
+    fill_mgmt(wb, data.get("mgmt_rows") or [])
     fill_contracts(wb["договоры"], data.get("contracts") or [], warn,
                    data.get("year"))
-    fill_inflows(wb["фот_по_месяцам"], data.get("inflows") or [],
-                 data.get("contracts") or [], warn, data.get("year"))
+    # Поступления в расчёт не подаются (ПРАВИЛА_РЕШАТЕЛЯ, правило 21;
+    # ИСТОЧНИКИ, SOURCE-009; решение пользователя 18.09.2026). Без листа
+    # «фот_по_месяцам» загрузчик решателя сам считает весь ФОТ договора
+    # поступившим в первый месяц его выплат (fot_schedule.
+    # default_fot_inflow_at_start): раньше начала договора тратить нельзя, а
+    # ровная разбивка по месяцам остаётся планом освоения, а не потолком.
+    # Фиксации сумм живут на том же листе и уходят вместе с ним.
+    for name in ("фот_по_месяцам", "фиксация_фот_по_месяцам"):
+        if name in wb.sheetnames:
+            del wb[name]
     if "трудоемкость_по_договорам" in wb.sheetnames:
         fill_labor(wb["трудоемкость_по_договорам"], data.get("labor") or [], warn,
                    data.get("contracts") or [], data.get("year"))
@@ -406,5 +612,43 @@ def build(template_path, out_path, data, warn):
                         % ("; ".join(key) or "%d параметров" % len(taken),
                            (" и еще %d" % rest) if key and rest else ""))
 
+    fill_facts(wb, data.get("facts") or [], data.get("fact_through") or 0, warn)
     wb.save(out_path)
     return out_path
+
+
+#: Лист факта начислений во входе решателя (30.09.2026) — договорённость о
+#: входе: месяцы по «факт по месяц» расчёт берёт как были, не пересчитывая.
+FACT_SHEET = "факт_выплат"
+FACT_HEAD = ["код строки", "договор", "месяц", "вид выплаты", "сумма", "ставка",
+             "основное место"]
+FACT_MONTHS = ("январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август",
+               "сентябрь", "октябрь", "ноябрь")
+
+
+def fill_facts(wb, rows, through, warn):
+    """Лист «факт_выплат» и «факт по месяц» в «настройках».
+
+    Без выбора в плане (through = 0) листа нет и графа пустая — расчёт идёт,
+    как шёл. Строка — сотрудник, договор, месяц и вид выплаты; ставка — у
+    оклада; основное место — да/нет, пусто — решатель определит сам."""
+    if FACT_SHEET in wb.sheetnames:
+        del wb[FACT_SHEET]
+    if "настройки" in wb.sheetnames:
+        ws = wb["настройки"]
+        col = _col(ws, "факт по месяц")
+        if col is None and through:
+            col = ws.max_column + 1
+            ws.cell(1, col).value = "факт по месяц"
+        if col is not None:
+            ws.cell(2, col).value = int(through or 0)
+    if not through:
+        return
+    ws = wb.create_sheet(FACT_SHEET)
+    ws.append(FACT_HEAD)
+    for r in rows:
+        ws.append([r.employee_code, r.contract_code, r.month, r.kind, r.amount,
+                   r.rate if r.kind == "оклад" else None,
+                   None if r.is_main is None else ("да" if r.is_main else "нет")])
+    warn.append("Факт начислений по %s включительно: строк %d; эти месяцы расчёт не "
+                "пересчитывает." % (FACT_MONTHS[through - 1], len(rows)))

@@ -39,7 +39,8 @@ def position_control_dataframe(ctx: PlanningContext, result: PlanningResult) -> 
             compatible = True
 
         if compatible_rules:
-            salary_cap_1_rate = employee.reference_salary_for_rate
+            salary_cap_1_rate = (getattr(employee, "reference_salary_by_month", None)
+                                 or {}).get(allocation.month, employee.reference_salary_for_rate)
             contract_position_names = "; ".join(sorted({pr.position for pr in compatible_rules}))
             contract_groups = "; ".join(
                 sorted({pr.equivalence_group or "" for pr in compatible_rules if pr.equivalence_group})

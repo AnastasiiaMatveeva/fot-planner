@@ -10,6 +10,15 @@ from collections import defaultdict
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
 
+from fot_planner.actuals import (
+    clip_to_future,
+    fact_amounts,
+    fact_main_flags,
+    fact_rates,
+    frozen_facts,
+    frozen_through,
+    relaxed_labor_band,
+)
 from fot_planner.fot_schedule import (
     active_months_in_year,
     min_balance_for_month,
@@ -34,7 +43,7 @@ from fot_planner.payment_split import (
     salary_position_options,
 )
 from fot_planner.payment_kind import LABOR_PAYMENT_KINDS
-from fot_planner.result_audit import audit as audit_result
+from fot_planner.result_audit import MONTHS as MONTH_NAMES, audit as audit_result
 from fot_planner.models import (
     ADMIN_COMPLEXITY_FRAGMENT_FACTOR,
     ADMIN_COMPLEXITY_SCHEME_CHANGE_FACTOR,
@@ -75,7 +84,10 @@ from fot_planner.contract_calendar import (
     contract_allows_month,
     contract_allows_payment_month,
     contract_payment_window_includes_month,
+    payment_deadline_date,
     payment_kind_enabled,
+    secret_allowance_active,
+    secret_allowance_pay_contracts,
 )
 from fot_planner.validation import employee_active_in_month
 
@@ -103,7 +115,7 @@ MIP_REL_GAP = 0.005
 CONTRACT_REMAINDER_EPS = 0.01
 
 
-def _add_contract_remainder_rules(model, contracts, alloc):
+def _add_contract_remainder_rules(model, contracts, alloc, spent_before=None, overspend=None):
     """Признак «на договоре остаётся ФОТ» для стадии, которая минимизирует число
     таких договоров.
 
@@ -112,9 +124,21 @@ def _add_contract_remainder_rules(model, contracts, alloc):
     размещение оставляет на договоре хвост меньше порога, а делового смысла в
     нём не нашлось. Осталась цель: чем меньше
     договоров с неосвоенным ФОТ, тем лучше.
+
+    ``spent_before`` — сколько договор потратил в месяцах факта (пересчёт с
+    факта, правило 26): предел ФОТ — на весь год, и прошедшие месяцы его
+    уменьшают. История, потратившая больше ФОТ, план нерешаемым не делает:
+    будущим месяцам с такого договора не остаётся ничего, но и перерасход
+    больше не растёт. ``overspend`` — запас сверх остатка для договоров, с
+    которых платил факт (frozen_fot_slack): его берёт первая стадия, только
+    если иначе плана нет.
     """
+    spent_before = spent_before or {}
     model.has_contract_remainder = pyo.Var(list(contracts), domain=pyo.Binary)
     for cid, contract in contracts.items():
+        left = float(contract.total_fot) - float(spent_before.get(cid, 0.0))
+        if cid in spent_before:
+            left = max(0.0, left)
         alloc_terms = [alloc[k] for k in alloc if k[1] == cid]
         # Для пустого договора ``remaining`` — обычное число. Сравнение
         # такого числа с Pyomo-выражением даёт Python-булево ``True`` и
@@ -123,15 +147,41 @@ def _add_contract_remainder_rules(model, contracts, alloc):
         # ФОТ всегда имеет остаток.
         if not alloc_terms:
             model.cons.add(model.has_contract_remainder[cid] ==
-                           int(float(contract.total_fot) > CONTRACT_REMAINDER_EPS))
+                           int(left > CONTRACT_REMAINDER_EPS))
             continue
         spent = _sum_terms(alloc_terms)
-        remaining = contract.total_fot - spent
+        remaining = left - spent
         flag = model.has_contract_remainder[cid]
-        model.cons.add(remaining >= -CONTRACT_REMAINDER_EPS)
+        if overspend is not None and cid in overspend:
+            model.cons.add(remaining + overspend[cid] >= -CONTRACT_REMAINDER_EPS)
+        else:
+            model.cons.add(remaining >= -CONTRACT_REMAINDER_EPS)
         model.cons.add(remaining <= CONTRACT_REMAINDER_EPS
-                       + max(0.0, contract.total_fot) * flag)
+                       + max(0.0, left) * flag)
     return _sum_terms(model.has_contract_remainder.values())
+
+
+def _relevel_spend_targets(targets: dict[int, float], contract, frozen: int,
+                           spent_before: float) -> dict[int, float]:
+    """План равномерного освоения на месяцы после факта (правило 26).
+
+    Прошедшие месяцы в цели уже не участвуют: их выплаты — факт. Договор,
+    который в месяцах факта платил или мог платить, раскладывает остаток ФОТ
+    (ФОТ минус факт) на оставшиеся месяцы выплат в тех же долях, что и
+    прежний план; если прежний план на них пуст — поровну. Договор, который
+    начинается после факта и ничего не потратил, план не меняет.
+    """
+    future = {m: v for m, v in targets.items() if m > frozen}
+    if len(future) == len(targets) and spent_before <= 0.005:
+        return future
+    if not future:
+        return {}
+    remaining = max(0.0, float(contract.total_fot) - spent_before)
+    base = sum(v for v in future.values() if v > 0)
+    if base > 0:
+        return {m: v * remaining / base for m, v in future.items()}
+    share = remaining / len(future)
+    return {m: share for m in future}
 
 
 def _month_inflow(ctx: PlanningContext, contract_id: str, month: int) -> float:
@@ -228,21 +278,9 @@ def _active_secret_allowance_rates(
     year: int,
     month: int,
 ) -> list[float]:
-    rates: list[float] = []
-    for row in ctx.secret_allowances:
-        if row.employee_id != employee_id:
-            continue
-        secret_contract = contracts.get(row.secret_contract_id)
-        if secret_contract is None:
-            continue
-        if contract_payment_window_includes_month(
-            secret_contract,
-            year,
-            month,
-            PaymentKind.K120,
-        ):
-            rates.append(row.rate)
-    return rates
+    return [row.rate for row in ctx.secret_allowances
+            if row.employee_id == employee_id
+            and secret_allowance_active(row, contracts, year, month)]
 
 
 def _employee_has_active_secret_allowance(
@@ -282,17 +320,23 @@ def _contract_can_pay_secret_allowance(contract, year: int, month: int) -> bool:
     return False
 
 
-def _payment_ub(employee, contract, kind: PaymentKind) -> float | None:
-    """Верхняя граница alloc по виду выплаты; None — переменную не создавать."""
+def _payment_ub(employee, contract, kind: PaymentKind, month: int) -> float | None:
+    """Верхняя граница alloc по виду выплаты в месяце; None — переменную не создавать.
+
+    Граница — зарплата этого месяца: она меняется по месяцам (правило 1,
+    решение пользователя 19.09.2026), и с годовой суммой граница месяца с
+    повышением резала бы новую зарплату.
+    """
     if kind == PaymentKind.SALARY:
-        amount = max_salary_amount_if_contract_used(contract, employee)
+        amount = max_salary_amount_if_contract_used(contract, employee, month)
         if amount <= 0:
             return None
         return amount
     if kind.is_non_salary:
-        if employee.monthly_wage <= 0:
+        due = employee_monthly_payment_due(employee, month)
+        if due <= 0:
             return None
-        return employee.monthly_wage
+        return due
     return None
 
 
@@ -361,6 +405,247 @@ def _must_use_pair(
         ):
             return True
     return False
+
+
+def _kindless_pin_months(assignments: list[ManualAssignment]) -> list[tuple[str, str, int]]:
+    """(сотрудник, договор, месяц) закреплений без вида выплаты, без повторов.
+
+    Закрепление без вида (MANUAL-ANY-001, решение пользователя 19.09.2026):
+    экономист хочет, чтобы сотруднику с договора платили, а вид выбирает
+    расчёт. Год закрепления, как и у закреплений с видом, не сверяется.
+    """
+    pins: dict[tuple[str, str, int], None] = {}
+    for a in assignments:
+        if a.payment_kind is not None:
+            continue
+        for m in range(max(1, a.month_from), min(12, a.month_to) + 1):
+            pins.setdefault((a.employee_id, a.contract_id, m), None)
+    return list(pins)
+
+
+def _kindless_pin_gap_reason(ctx: PlanningContext, employees: dict, contracts: dict,
+                             e_id: str, c_id: str, month: int) -> str:
+    """Почему у пары «сотрудник — договор» в месяце нет ни одного вида выплаты.
+
+    Условия идут в том же порядке, в каком solve отбирает ключи выплат:
+    экономист видит ту причину, из-за которой выплаты нет, а не общее
+    «решения нет».
+    """
+    e, c = employees.get(e_id), contracts.get(c_id)
+    if e is None:
+        return f"сотрудника «{e_id}» нет в листе сотрудников"
+    if c is None:
+        return f"договора «{c_id}» нет в листе договоров"
+    if contract_has_labor_plan(ctx, c_id) and not employee_can_place_on_contract(e, c, ctx):
+        return "его должность не подходит ни к одной строке трудоёмкости договора"
+    if not employee_active_in_month(e, ctx.year, month):
+        return "сотрудник в это время не работает"
+    if e.allowed_contracts and c_id not in e.allowed_contracts:
+        return "договора нет среди разрешённых сотруднику"
+    if c_id in e.forbidden_contracts:
+        return "договор запрещён сотруднику"
+    enabled = [k for k in PAYMENT_KINDS if payment_kind_enabled(c, k)]
+    if not enabled:
+        return "договор не разрешает ни одного вида выплаты"
+    in_window = [k for k in enabled
+                 if contract_payment_window_includes_month(c, ctx.year, month, k)]
+    if not in_window:
+        last = max(payment_deadline_date(c, k) for k in enabled)
+        return "договор платит только с %s по %s" % (
+            c.start_date.strftime("%d.%m.%Y"), last.strftime("%d.%m.%Y"))
+    if all(_is_forbidden(ctx.manual_prohibitions, e_id, c_id, month, k) for k in in_window):
+        return "выплаты с договора в это время запрещены ручным запретом"
+    return "ни один разрешённый договором вид выплаты сотруднику в это время не положен"
+
+
+def _kindless_pin_conflicts(ctx: PlanningContext, employees: dict, contracts: dict,
+                            unmet: list[tuple[str, str, int]]) -> list[ConflictRecord]:
+    """Невыполнимые закрепления без вида — по записи на пару и причину.
+
+    Первая скобка сообщения — вся причина целиком, без вложенных скобок:
+    разбор отказа в сервисе показывает экономисту именно её.
+    """
+    months_by_gap: dict[tuple[str, str, str], list[int]] = defaultdict(list)
+    for e_id, c_id, m in unmet:
+        reason = _kindless_pin_gap_reason(ctx, employees, contracts, e_id, c_id, m)
+        months_by_gap[(e_id, c_id, reason)].append(m)
+    out = []
+    for (e_id, c_id, reason), pin_months in months_by_gap.items():
+        e = employees.get(e_id)
+        name = (getattr(e, "full_name", "") or "").strip() if e is not None else ""
+        who = f"сотрудник {name}, {e_id}," if name and name != e_id else f"сотрудник {e_id}"
+        out.append(ConflictRecord(
+            code="MANUAL_ASSIGNMENT_NO_PAYMENT",
+            message=(f"Закрепление без вида выплаты не выполнить ({who} закреплён за "
+                     f"договором {c_id} на {_month_span(pin_months)}, а {reason})"),
+            employee_id=e_id, contract_id=c_id, year=ctx.year, month=min(pin_months),
+        ))
+    return out
+
+
+def _month_span(months: list[int]) -> str:
+    """«июль», «июль–август», «март, июль–август» — месяцы подряд диапазоном."""
+    runs: list[list[int]] = []
+    for m in sorted(set(months)):
+        if runs and m == runs[-1][-1] + 1:
+            runs[-1].append(m)
+        else:
+            runs.append([m])
+    return ", ".join(
+        MONTH_NAMES[r[0] - 1] if len(r) == 1 else f"{MONTH_NAMES[r[0] - 1]}–{MONTH_NAMES[r[-1] - 1]}"
+        for r in runs)
+
+
+def _rub(value: float) -> str:
+    """Рубли по-русски: «1 200 000»."""
+    return f"{value:,.0f}".replace(",", " ")
+
+
+def _pm(value: float) -> str:
+    """Человеко-месяцы по-русски: «11,4», «2»."""
+    return ("%.2f" % value).rstrip("0").rstrip(".").replace(".", ",")
+
+
+def _frozen_money_notes(contracts: dict, frozen: int, spent_before: dict,
+                        cash_close: dict) -> list[ConflictRecord]:
+    """Договоры, где факт один уже потратил больше, чем можно (правила 21, 23).
+
+    Расчёт такой договор не останавливает — история не исправляется, — но
+    экономист должен знать, почему после факта с договора не платят ничего
+    или только новые поступления.
+    """
+    notes = []
+    span = _month_span(range(1, frozen + 1))
+    for c_id, contract in contracts.items():
+        spent, fot = spent_before.get(c_id, 0.0), float(contract.total_fot)
+        if spent > fot + 0.5:
+            notes.append(ConflictRecord(
+                code="FROZEN_FOT_OVERSPENT_WARNING",
+                message=(f"Договор {c_id}: по факту за {span} выплачено {_rub(spent)} ₽ — "
+                         f"больше ФОТ {_rub(fot)} ₽; после факта с договора не платится "
+                         f"ничего, перерасход не растёт"),
+                contract_id=c_id, month=frozen))
+        elif cash_close.get(c_id, 0.0) < -0.5:
+            notes.append(ConflictRecord(
+                code="FROZEN_FOT_OVERSPENT_WARNING",
+                message=(f"Договор {c_id}: по факту за {span} выплачено на "
+                         f"{_rub(-cash_close[c_id])} ₽ больше, чем поступило; после факта "
+                         f"договор тратит только новые поступления"),
+                contract_id=c_id, month=frozen))
+    return notes
+
+
+def _frozen_labor_note(lp, frozen: int, fz_pm: float, fz_amt: float, pm_was, pm_now,
+                       amt_was, amt_now, year: int) -> ConflictRecord:
+    """Строка РКМ, чей годовой коридор ослаблен фактом (правило 26)."""
+    parts = [f"по факту за {_month_span(range(1, frozen + 1))} закрыто "
+             f"{_pm(fz_pm)} чел.-мес. на {_rub(fz_amt)} ₽"]
+    if pm_now != pm_was:
+        parts.append(f"коридор человеко-месяцев {_pm(pm_was[0])}–{_pm(pm_was[1])} "
+                     f"ослаблен до {_pm(pm_now[0])}–{_pm(pm_now[1])}")
+    if amt_was is not None and amt_now != amt_was:
+        parts.append(f"коридор суммы {_rub(amt_was[0])}–{_rub(amt_was[1])} ₽ ослаблен до "
+                     f"{_rub(amt_now[0])}–{_rub(amt_now[1])} ₽")
+    what = lp.position or lp.equivalence_group or "без должности"
+    return ConflictRecord(
+        code="FROZEN_LABOR_BAND_WARNING",
+        message=f"Строка РКМ {lp.contract_id} / {what}: " + "; ".join(parts),
+        contract_id=lp.contract_id, year=year)
+
+
+def _forced_notes(model, frozen: int, year: int, windows, salary_change_key_set,
+                  person_rows, person_contract_keys, frozen_person_contracts,
+                  max_contracts_per_year, labor_slack_info,
+                  cash_shift: dict[str, float]) -> list[ConflictRecord]:
+    """Вынужденные отступления из-за факта, которые план всё же взял.
+
+    Первая стадия берёт запас только тогда, когда без него плана нет, —
+    экономист должен знать, какое правило и где отступило (правило 26).
+    """
+    notes: list[ConflictRecord] = []
+    block = getattr(model, "frozen_block_slack", None)
+    if block is not None:
+        forced: dict[str, tuple[set[int], set[int]]] = {}
+        for e_id, start_m, _changes, _cap, done in windows:
+            if (e_id, start_m) not in block or _value(block[(e_id, start_m)]) <= 0.5:
+                continue
+            past, ahead = forced.setdefault(e_id, (set(), set()))
+            past.update(done)
+            ahead.update(m for m in range(start_m, start_m + MIN_SALARY_BLOCK_MONTHS)
+                         if m > frozen and (e_id, m) in salary_change_key_set
+                         and _value(model.salary_change[(e_id, m)]) > 0.5)
+        for e_id, (past, ahead) in forced.items():
+            history = (f"по факту договор оклада сменился — {_month_span(sorted(past))}; "
+                       if past else "")
+            notes.append(ConflictRecord(
+                code="FROZEN_SALARY_BLOCK_WARNING",
+                message=(f"Сотрудник {e_id}: {history}после факта смены договора оклада — "
+                         f"{_month_span(sorted(ahead))}; без них плана нет, правило "
+                         f"«не чаще раза в три месяца» нарушено вынужденно"),
+                employee_id=e_id, year=year, month=min(ahead) if ahead else None))
+    contract = getattr(model, "frozen_contract_slack", None)
+    if contract is not None:
+        for person in contract:
+            if _value(contract[person]) <= 0.5:
+                continue
+            new = sorted(c_id for p, c_id in person_contract_keys
+                         if p == person and _value(model.person_year_use[(p, c_id)]) > 0.5)
+            notes.append(ConflictRecord(
+                code="FROZEN_MAX_CONTRACTS_WARNING",
+                message=(f"Сотрудник {', '.join(person_rows[person])}: по факту оклад шёл с "
+                         f"{', '.join(sorted(frozen_person_contracts.get(person, ())))} — предел "
+                         f"{max_contracts_per_year} в год выбран; после факта оклад и с "
+                         f"{', '.join(new)}: без этого плана нет, предел нарушен вынужденно"),
+                employee_id=person_rows[person][0], year=year))
+    cash = getattr(model, "frozen_cash_slack", None)
+    fot = getattr(model, "frozen_fot_slack", None)
+    span = _month_span(range(1, frozen + 1)) if frozen else ""
+    # Минус называется по настоящему остатку месяца (переменная остатка
+    # минус сдвиг на потраченное фактом), а не по запасу: запас берётся с
+    # допуском стадии и бывает на рубли больше.
+    minus_by_contract: dict[str, dict[int, float]] = defaultdict(dict)
+    for (c_id, m) in (cash if cash is not None else ()):
+        if _value(cash[(c_id, m)]) <= 0.5 or (c_id, m) not in model.close:
+            continue
+        balance = _value(model.close[(c_id, m)]) - cash_shift.get(c_id, 0.0)
+        if balance < -0.5:
+            minus_by_contract[c_id][m] = -balance
+    for c_id in (fot if fot is not None else ()):
+        minus = minus_by_contract.get(c_id, {})
+        if minus:
+            notes.append(ConflictRecord(
+                code="FROZEN_FOT_OVERSPENT_WARNING",
+                message=(f"Договор {c_id}: после факта касса в минусе — "
+                         f"{_month_span(minus)}, до {_rub(max(minus.values()))} ₽: факт за "
+                         f"{span} потратил деньги, нужные дальше; без этого плана нет, "
+                         f"правило кассы нарушено вынужденно"),
+                contract_id=c_id, year=year, month=min(minus)))
+        over = _value(fot[c_id])
+        if over > 0.5:
+            notes.append(ConflictRecord(
+                code="FROZEN_FOT_OVERSPENT_WARNING",
+                message=(f"Договор {c_id}: ФОТ превышен на {_rub(over)} ₽ — факт за {span} "
+                         f"потратил ФОТ, нужный дальше; без этого плана нет, предел ФОТ "
+                         f"нарушен вынужденно"),
+                contract_id=c_id, year=year))
+    labor = getattr(model, "frozen_labor_pm_slack", None)
+    if labor is not None:
+        amount = model.frozen_labor_amount_slack
+        for lp_idx in labor:
+            short_pm, short_amount = _value(labor[lp_idx]), _value(amount[lp_idx])
+            if (short_pm <= 1e-3 and short_amount <= 1.0) or lp_idx not in labor_slack_info:
+                continue
+            lp, fz_pm, fz_amount, low_pm, low_amount = labor_slack_info[lp_idx]
+            what = lp.position or lp.equivalence_group or "без должности"
+            notes.append(ConflictRecord(
+                code="FROZEN_LABOR_BAND_WARNING",
+                message=(f"Строка РКМ {lp.contract_id} / {what}: по факту за "
+                         f"{_month_span(range(1, frozen + 1))} закрыто {_pm(fz_pm)} чел.-мес. на "
+                         f"{_rub(fz_amount)} ₽; после факта до нижней границы {_pm(low_pm)} "
+                         f"чел.-мес. и {_rub(low_amount)} ₽ не добрать — недобор {_pm(short_pm)} "
+                         f"чел.-мес. и {_rub(short_amount)} ₽"),
+                contract_id=lp.contract_id, year=year))
+    return notes
 
 
 def _create_solver(time_limit_sec: int):
@@ -574,7 +859,7 @@ def _goal_metrics(stage_values: dict[str, float], taste: list[dict]) -> list:
     from fot_planner.models import GoalMetric
 
     goals = []
-    rubles = {"сумма приказов"}
+    rubles = {"сумма приказов", WHOLE_GROUP_STAGE}
     for no, (label, value) in enumerate(stage_values.items(), start=1):
         goals.append(GoalMetric(
             code="stage%d" % no, name=label, value=round(value, 2),
@@ -592,6 +877,38 @@ def _goal_metrics(stage_values: dict[str, float], taste: list[dict]) -> list:
             contribution=round((t["weight"] or 0.0) * norm, 4),
         ))
     return goals
+
+
+#: Стадия «по возможности вся зарплата с договора рабочей группы» (30.09.2026).
+WHOLE_GROUP_STAGE = "выплаты членам рабочих групп с других договоров"
+#: Первая стадия пересчёта с факта: отступления от правил, которые история
+#: уже выбрала, — только если иначе плана нет (правило 26).
+FROZEN_FORCED_STAGE = "вынужденные отступления из-за факта"
+
+
+def _whole_group_contracts(assignments) -> dict[tuple[str, int], set[str]]:
+    """(строка, месяц) → договоры, с которых зарплата «по возможности вся».
+
+    Человек бывает в двух группах сразу: тогда «свои» — оба договора.
+    Год закрепления, как и у прочих закреплений, не сверяется.
+    """
+    out: dict[tuple[str, int], set[str]] = defaultdict(set)
+    for a in assignments:
+        if not getattr(a, "whole_if_possible", False):
+            continue
+        for m in range(max(1, a.month_from), min(12, a.month_to) + 1):
+            out[(a.employee_id, m)].add(a.contract_id)
+    return out
+
+
+def _expr_whole_from_group(assignments, alloc_keys, alloc):
+    """Деньги членам рабочих групп с договоров не своей группы, ₽."""
+    groups = _whole_group_contracts(assignments)
+    if not groups:
+        return None
+    terms = [alloc[k] for k in alloc_keys
+             if (k[0], k[2]) in groups and k[1] not in groups[(k[0], k[2])]]
+    return _sum_terms(terms) if terms else None
 
 
 def _expr_non_anchor_salary_penalty(
@@ -820,6 +1137,45 @@ def solve(
     contracts = {c.id: c for c in ctx.contracts}
     contract_list = list(contracts.keys())
 
+    # Пересчёт с факта (правило 26, владелец продукта 30.09.2026): «не
+    # трогая январь и февраль, пересчитал… Но учесть все правила про условия
+    # в квартал итд». Месяцы 1…F — история: переменных у них нет, выплаты
+    # равны листу «факт_выплат», правила одного месяца к ним не применяются
+    # (история может их нарушать и не должна делать план нерешаемым). Правила,
+    # которые тянутся через месяцы, — блок оклада, договоры оклада за год,
+    # касса и ФОТ, годовая трудоёмкость, переходы F→F+1 — получают факт
+    # числами. При F = 0 всё ниже совпадает с расчётом без факта.
+    frozen = frozen_through(ctx)
+    future_months = [m for m in months if m > frozen]
+    facts = frozen_facts(ctx)
+    # Деньги факта по договору считаются и у тех, кого в листе сотрудников
+    # нет (уволен или снят с расчёта): они с договора уже ушли.
+    fact_pay = fact_amounts(facts)
+    fact_spent: dict[tuple[str, int], float] = defaultdict(float)
+    for (_e, c_id, m, _kind), value in fact_pay.items():
+        fact_spent[(c_id, m)] += value
+    fact_spent_total: dict[str, float] = defaultdict(float)
+    for (c_id, _m), value in fact_spent.items():
+        fact_spent_total[c_id] += value
+    known_fact_pay = {k: v for k, v in fact_pay.items() if k[0] in employees}
+    fact_salary: dict[tuple[str, int], set[str]] = defaultdict(set)  # (строка, месяц) → договоры оклада
+    fact_used: set[tuple[str, str, int]] = set()  # (строка, договор, месяц) — любая выплата
+    for (e_id, c_id, m, kind), value in known_fact_pay.items():
+        if value <= 0.005:
+            continue
+        fact_used.add((e_id, c_id, m))
+        if kind is PaymentKind.SALARY:
+            fact_salary[(e_id, m)].add(c_id)
+    fact_pairs = {(e_id, c_id) for (e_id, c_id, _m) in fact_used}
+    # Закрепления и запреты прошедших месяцев не выполнить и не нарушить:
+    # месяц уже равен факту. Сервис урезает срок сам; здесь то же для входа
+    # не из сервиса.
+    assignments = clip_to_future(ctx.manual_assignments, frozen)
+    prohibitions = clip_to_future(ctx.manual_prohibitions, frozen)
+    # Где история одна уже нарушила правило через месяцы — предупреждение с
+    # названием правила и месяцев; ослабление ровно на эту величину.
+    frozen_notes: list[ConflictRecord] = []
+
     labor_row_indices_pre = [
         idx
         for idx, lp in enumerate(ctx.labor_plans)
@@ -839,7 +1195,8 @@ def solve(
                 e, c, ctx
             ):
                 continue
-            for m in months:
+            # Месяцы факта переменных не получают: в них ровно факт.
+            for m in future_months:
                 if not employee_active_in_month(e, year, m):
                     continue
                 if e.allowed_contracts and c_id not in e.allowed_contracts:
@@ -858,14 +1215,19 @@ def solve(
                             continue
                         if not _contract_can_pay_secret_allowance(c, year, m):
                             continue
+                        # Закреплённый экономистом договор выплаты — только он.
+                        pinned = secret_allowance_pay_contracts(
+                            ctx.secret_allowances, contracts, e.id, year, m)
+                        if pinned and c_id not in pinned:
+                            continue
                     else:
                         if not contract_allows_payment_month(c, year, m, kind):
                             continue
                         if not _contract_allows_payment(c, kind):
                             continue
-                    if _is_forbidden(ctx.manual_prohibitions, e.id, c_id, m, kind):
+                    if _is_forbidden(prohibitions, e.id, c_id, m, kind):
                         continue
-                    ub = _payment_ub(e, c, kind)
+                    ub = _payment_ub(e, c, kind, m)
                     if ub is None or ub <= 0:
                         continue
 
@@ -873,12 +1235,44 @@ def solve(
                     alloc_keys.append(key)
                     alloc_ub[key] = ub
 
+    # Закрепление без вида (MANUAL-ANY-001): в каждом месяце срока — хотя бы
+    # одна выплата пары «сотрудник — договор» любого вида. Месяц, где у пары
+    # нет ни одного допустимого вида, закрепление не выполнит: причина
+    # называется сразу, до модели. Пропустить такой месяц молча нельзя, а
+    # «INFEASIBLE» решателя экономисту не говорит, что не так.
+    keys_by_pair_month: dict[tuple[str, str, int], list] = defaultdict(list)
+    for key in alloc_keys:
+        keys_by_pair_month[key[:3]].append(key)
+    kindless_pins: dict[tuple[str, str, int], list] = {}
+    unmet_pins: list[tuple[str, str, int]] = []
+    for pin in _kindless_pin_months(assignments):
+        if keys_by_pair_month.get(pin):
+            kindless_pins[pin] = keys_by_pair_month[pin]
+        else:
+            unmet_pins.append(pin)
+    if unmet_pins:
+        return PlanningResult(
+            year=year,
+            allocations=[],
+            deficits=[],
+            conflicts=_kindless_pin_conflicts(ctx, employees, contracts, unmet_pins),
+            contract_balances=[],
+            solver_status="INFEASIBLE",
+            objective_value=0.0,
+            solve_time_sec=round(time.perf_counter() - t0, 3),
+            payroll_limit_mode=payroll_limit_mode,
+            frozen_through=frozen,
+        )
+
+    # Касса месяцев факта — числа, а не переменные: история могла уйти в
+    # минус, и переменная с неотрицательным остатком сделала бы план
+    # нерешаемым.
     close_keys: list[tuple[str, int]] = [
-        (c_id, m) for c_id in contract_list for m in months
+        (c_id, m) for c_id in contract_list for m in future_months
     ]
 
     carry_keys: list[tuple[str, int]] = [
-        (c_id, m) for c_id in contract_list for m in months if m < 12
+        (c_id, m) for c_id in contract_list for m in future_months if m < 12
     ]
     year_contract_keys = []
     for e in ctx.employees:
@@ -895,7 +1289,7 @@ def solve(
     employee_contract_month_keys: list[tuple[str, str, int]] = []
     for e in ctx.employees:
         for c_id in contract_list:
-            for m in months:
+            for m in future_months:
                 if any(k[0] == e.id and k[1] == c_id and k[2] == m for k in alloc_keys):
                     employee_contract_month_keys.append((e.id, c_id, m))
 
@@ -913,16 +1307,19 @@ def solve(
         for opt in salary_position_options(c, e):
             k = (e_id, c_id, m, opt.position_rule_index)
             salary_position_keys.append(k)
-            salary_position_cap[k] = employee_reference_salary_cap(e)
+            salary_position_cap[k] = employee_reference_salary_cap(e, m)
             salary_position_specs[k] = (opt.position, opt.equivalence_group)
     salary_position_key_set = set(salary_position_keys)
 
     stab = ctx.salary_stability
     month_used_set = set(employee_contract_month_keys)
 
+    # Смена договора оклада в месяце m — переход от m−1 к m. Смены внутри
+    # факта — история (числа ниже, frozen_salary_change); переход F→F+1 —
+    # настоящее решение: месяц F — факт, месяц F+1 — план.
     salary_change_keys: list[tuple[str, int]] = []
     for e in ctx.employees:
-        for m in range(2, 13):
+        for m in range(max(2, frozen + 1), 13):
             if not employee_active_in_month(e, year, m) and not employee_active_in_month(
                 e, year, m - 1
             ):
@@ -931,18 +1328,24 @@ def solve(
                 (e.id, c_id, m, PaymentKind.SALARY) in alloc_key_set
                 or (e.id, c_id, m - 1, PaymentKind.SALARY) in alloc_key_set
                 for c_id in contract_list
-            ):
+            ) or (m - 1 <= frozen and fact_salary.get((e.id, m - 1))):
                 salary_change_keys.append((e.id, m))
+    # Смены в самом факте: набор договоров оклада месяца отличается от
+    # прошлого. Приход на работу — тоже смена, как и в модели.
+    frozen_salary_change: dict[tuple[str, int], int] = {
+        (e.id, m): int(fact_salary.get((e.id, m - 1), set()) != fact_salary.get((e.id, m), set()))
+        for e in ctx.employees for m in range(2, frozen + 1)
+    }
 
     scheme_change_keys: list[tuple[str, int]] = []
     for e in ctx.employees:
-        for m in range(2, 13):
+        for m in range(max(2, frozen + 1), 13):
             if not employee_active_in_month(e, year, m) and not employee_active_in_month(
                 e, year, m - 1
             ):
                 continue
             if any(
-                (e.id, c_id, mo) in month_used_set
+                (e.id, c_id, mo) in month_used_set or (e.id, c_id, mo) in fact_used
                 for c_id in contract_list
                 for mo in (m, m - 1)
             ):
@@ -952,6 +1355,9 @@ def solve(
     uniform_penalty_params: dict[tuple[str, int], tuple[float, float, float]] = {}
     for c in ctx.contracts:
         targets = monthly_spend_targets(c, year)
+        if frozen:
+            targets = _relevel_spend_targets(
+                targets, c, frozen, fact_spent_total.get(c.id, 0.0))
 
         for m, ideal in targets.items():
             if ideal <= 0:
@@ -986,7 +1392,7 @@ def solve(
             c = contracts.get(c_id)
             if c is None:
                 continue
-            for m in months:
+            for m in future_months:
                 if not employee_active_in_month(e, year, m):
                     continue
                 if not contract_allows_month(c, year, m):
@@ -1011,17 +1417,51 @@ def solve(
     labor_pm_key_set = set(labor_pm_keys)
     labor_payment_key_set = set(labor_payment_keys)
 
+    # Трудоёмкость месяцев факта входит в год строки РКМ числом (правило 26):
+    # человеко-месяцы даёт открытая ставка оклада факта на договоре, деньги —
+    # оклад и надбавки строки сотрудника с этого договора в этом месяце
+    # (правила 17 и 18). Строку РКМ выбирает не решатель: подходящая по
+    # должности или замещению, своя должность раньше чужой, одна строка на
+    # человека, договор и месяц — как в плане.
+    frozen_labor_pm: dict[tuple[str, str, int, int], float] = {}
+    frozen_labor_pay: dict[tuple[str, str, int, PaymentKind, int], float] = {}
+    for (e_id, c_id, m), rate in sorted(fact_rates(facts).items()):
+        e = employees.get(e_id)
+        if e is None:
+            continue
+        rows = [idx for idx in labor_row_indices
+                if ctx.labor_plans[idx].contract_id == c_id
+                and labor_row_allows_month(ctx.labor_plans[idx], m)
+                and employee_compatible_with_labor_row(e, ctx.labor_plans[idx])]
+        if not rows:
+            continue
+        own = [idx for idx in rows if normalize_position(ctx.labor_plans[idx].position)
+               == normalize_position(e.position)]
+        lp_idx = (own or rows)[0]
+        frozen_labor_pm[(e_id, c_id, m, lp_idx)] = rate
+        for kind in LABOR_PAYMENT_KINDS:
+            value = known_fact_pay.get((e_id, c_id, m, kind), 0.0)
+            if value > 0.005:
+                frozen_labor_pay[(e_id, c_id, m, kind, lp_idx)] = value
+    frozen_row_pm: dict[int, float] = defaultdict(float)
+    frozen_row_amount: dict[int, float] = defaultdict(float)
+    for key, value in frozen_labor_pm.items():
+        frozen_row_pm[key[3]] += value
+    for key, value in frozen_labor_pay.items():
+        frozen_row_amount[key[4]] += value
+
     baseline_dev_keys = alloc_keys if ctx.baseline_plan else []
     labor_dev_keys = list(labor_row_indices)
     labor_amount_dev_keys = list(labor_dev_keys)
     labor_balance_dev_keys = list(labor_dev_keys)
     # План по месяцам: отклонение считается и в каждом месяце — иначе 4
-    # чел.-мес. на июнь–сентябрь закрылись бы как 2+2+0+0.
+    # чел.-мес. на июнь–сентябрь закрылись бы как 2+2+0+0. Месяц факта —
+    # история: его коридор не проверяется.
     labor_month_dev_keys = [
         (lp_idx, m)
         for lp_idx in labor_row_indices
         if ctx.labor_plans[lp_idx].monthly
-        for m in months
+        for m in future_months
         if ctx.labor_plans[lp_idx].monthly.get(m, 0.0) > 0
     ]
     labor_month_dev_key_set = set(labor_month_dev_keys)
@@ -1039,10 +1479,11 @@ def solve(
     deficit_agg_keys: list[tuple[str, int]] = []
     if allow_deficit:
         for e in ctx.employees:
-            for m in months:
+            # Недоплату прошедшего месяца уже не покрыть: дефицит только после факта.
+            for m in future_months:
                 if not employee_active_in_month(e, year, m):
                     continue
-                total_due = employee_monthly_payment_due(e)
+                total_due = employee_monthly_payment_due(e, m)
                 if total_due <= 0:
                     continue
                 agg_key = (e.id, m)
@@ -1077,6 +1518,14 @@ def solve(
         (e_id, c_id, kind, m)
         for (e_id, c_id, m, kind) in alloc_keys
         if m > 1 and (e_id, c_id, m - 1, kind) in alloc_key_set
+    ]
+    # Переход F→F+1: та же выплата в месяце F — факт, и её изменение в
+    # первом месяце плана стоит столько же, сколько между месяцами плана.
+    payment_change_keys += [
+        (e_id, c_id, kind, m)
+        for (e_id, c_id, m, kind) in alloc_keys
+        if m == frozen + 1 and m > 1
+        and known_fact_pay.get((e_id, c_id, m - 1, kind), 0.0) > 0.005
     ]
     model = pyo.ConcreteModel()
     model.alloc = pyo.Var(
@@ -1200,11 +1649,11 @@ def solve(
     labor_pay = getattr(model, "labor_pay", {})
 
     for key in alloc_keys:
-        e_id, _c_id, _m, kind = key
+        e_id, _c_id, m, kind = key
         ub = alloc_ub[key]
         model.cons.add(alloc[key] <= ub * uses[key])
         e = employees[e_id]
-        if kind == PaymentKind.SALARY and employee_monthly_payment_due(e) > 0:
+        if kind == PaymentKind.SALARY and employee_monthly_payment_due(e, m) > 0:
             # Конкретная сумма оклада задаётся ниже выбранной должностью и открытой ставкой.
             # Остаток полной зарплаты добирается надбавками/приказными выплатами.
             model.cons.add(alloc[key] >= MIN_USE_ALLOC * uses[key])
@@ -1219,8 +1668,10 @@ def solve(
             prev_key = (e_id, c_id, month - 1, kind)
             curr_key = (e_id, c_id, month, kind)
             change = model.payment_change[(e_id, c_id, kind, month)]
-            model.cons.add(change >= alloc[curr_key] - alloc[prev_key])
-            model.cons.add(change >= alloc[prev_key] - alloc[curr_key])
+            prev = (alloc[prev_key] if prev_key in alloc_key_set
+                    else known_fact_pay.get(prev_key, 0.0))
+            model.cons.add(change >= alloc[curr_key] - prev)
+            model.cons.add(change >= prev - alloc[curr_key])
 
     if salary_position_keys:
         # Связываем бинарный выбор позиции с использованием salary.
@@ -1277,6 +1728,9 @@ def solve(
                     )
                 )
 
+    # Правила одного месяца (П2556, П4, БЭП, 120/122/152, приоритет, приказ
+    # раз в месяц) — только месяцам плана: в месяцах факта переменных нет, а
+    # история может эти правила нарушать.
     apply_payroll_rules(
         PayrollRuleContext(
             ctx=ctx,
@@ -1287,7 +1741,7 @@ def solve(
             alloc_key_set=alloc_key_set,
             contracts=contracts,
             employees=employees,
-            months=months,
+            months=future_months,
             contract_list=contract_list,
             sum_terms=_sum_terms,
             contract_allows_month=contract_allows_month,
@@ -1299,11 +1753,16 @@ def solve(
 
     for key in alloc_keys:
         e_id, c_id, m, kind = key
-        fixed = _manual_fixed_amount(ctx.manual_assignments, e_id, c_id, m, kind)
+        fixed = _manual_fixed_amount(assignments, e_id, c_id, m, kind)
         if fixed is not None and fixed > 0:
             model.cons.add(alloc[key] == fixed)
-        elif _must_use_pair(ctx.manual_assignments, e_id, c_id, m, kind):
+        elif _must_use_pair(assignments, e_id, c_id, m, kind):
             model.cons.add(uses[key] == 1)
+    # Закрепление без вида: какой выплатой платить, решает расчёт, но хотя бы
+    # одна выплата пары в месяце обязательна. use=1 даёт положительную сумму —
+    # нижняя граница alloc при use задана выше для всех видов.
+    for keys in kindless_pins.values():
+        model.cons.add(_sum_terms(uses[k] for k in keys) >= 1)
 
     # У кого из людей есть строка, которая может быть основным местом.
     persons_with_main_row = {
@@ -1339,7 +1798,7 @@ def solve(
                 model.cons.add(q <= PART_QUARTERS_MAX)
 
             # Бизнес-правило: открытая ставка на договоре подразумевает оклад с этого договора.
-            if employee_monthly_payment_due(e) > 0:
+            if employee_monthly_payment_due(e, m) > 0:
                 salary_key = (e_id, c_id, m, PaymentKind.SALARY)
                 if salary_key in alloc_key_set:
                     model.cons.add(q <= MAIN_QUARTERS_MAX * uses[salary_key])
@@ -1360,7 +1819,7 @@ def solve(
                 if not keys_em:
                     continue
                 main_keys = [k for k in keys_em if k in main_eligible_keys]
-                has_salary_month = bool(main_keys) and employee_monthly_payment_due(e) > 0
+                has_salary_month = bool(main_keys) and employee_monthly_payment_due(e, m) > 0
 
                 model.cons.add(
                     _sum_terms(open_rate_q[k] for k in keys_em) <= max_q
@@ -1413,7 +1872,7 @@ def solve(
                     # этом месяце получает оклад, ровно одна его ставка —
                     # основное место, остальные идут сверх неё.
                     needs_main = any(
-                        employee_monthly_payment_due(employee) > 0
+                        employee_monthly_payment_due(employee, m) > 0
                         and any(k[0] == employee.id for k in person_main_keys)
                         for employee in person_employees
                     )
@@ -1567,11 +2026,16 @@ def solve(
             model.cons.add(dev >= target_expr - amount_expr)
 
     for e in ctx.employees:
-        total_due = employee_monthly_payment_due(e)
-        if total_due <= 0:
-            continue
-        for m in months:
+        # Месяц факта выплачен так, как выплачен: сверка с зарплатой месяца —
+        # правило одного месяца, и история его не держит.
+        for m in future_months:
             if not employee_active_in_month(e, year, m):
+                continue
+            # Зарплата у каждого месяца своя (правило 1, решение пользователя
+            # 19.09.2026): одна сумма до цикла по месяцам закрывала бы весь год
+            # прежней зарплатой.
+            total_due = employee_monthly_payment_due(e, m)
+            if total_due <= 0:
                 continue
             all_allocs = [
                 alloc[k] for k in alloc_keys if k[0] == e.id and k[2] == m
@@ -1592,25 +2056,78 @@ def solve(
             else:
                 model.cons.add(_sum_terms(all_allocs) == total_due)
 
+    # Касса месяцев факта — история числом: остаток мог уйти в минус (платили
+    # раньше поступления или сверх ФОТ), а переменная с неотрицательным
+    # остатком сделала бы план нерешаемым. В план переходит неотрицательный
+    # остаток: после факта договор тратит не больше того, что у него есть, —
+    # перерасход истории не растёт, но и расчёт не останавливает.
+    frozen_cash_close: dict[str, float] = {}
+    for c_id in contract_list:
+        balance = 0.0
+        for m in range(1, frozen + 1):
+            balance += _month_inflow(ctx, c_id, m) - fact_spent.get((c_id, m), 0.0)
+        frozen_cash_close[c_id] = balance
+    if frozen:
+        frozen_notes += _frozen_money_notes(
+            contracts, frozen, fact_spent_total, frozen_cash_close)
+
+    # Деньги, которые факт уже потратил с договора, могли понадобиться
+    # месяцам после него: история оплатила с договора чужую зарплату, и в
+    # марте ему нечем платить тому, у кого другого источника нет. Без запаса
+    # такая история делала план нерешаемым (демо 30.09.2026: оклад переведён
+    # в феврале на договор, у которого следующее поступление только в
+    # апреле). Запасы frozen_cash_slack — касса после факта может уйти в
+    # минус — и frozen_fot_slack — ФОТ может быть превышен — не больше
+    # потраченного фактом, платные на первой стадии: берутся, только если
+    # иначе плана нет, и называются предупреждением. Минус кассы — по
+    # месяцам: запас одного месяца не открывает минус в другом, и следующие
+    # стадии не могут им воспользоваться. Касса такого договора считается со
+    # сдвигом на потраченное фактом: переменная остатка — настоящий остаток
+    # плюс сдвиг, поэтому остаётся неотрицательной, а настоящий остаток
+    # держится не ниже минус запаса месяца.
+    money_slack = [c_id for c_id in contract_list
+                   if frozen and fact_spent_total.get(c_id, 0.0) > 0.005]
+    cash_shift = {c_id: float(fact_spent_total[c_id]) for c_id in money_slack}
+    if money_slack:
+        model.frozen_cash_slack = pyo.Var(
+            [(c_id, m) for c_id in money_slack for m in future_months],
+            domain=pyo.NonNegativeReals,
+            bounds=lambda _m, c_id, _mo: (0, cash_shift[c_id]))
+        model.frozen_fot_slack = pyo.Var(
+            money_slack, domain=pyo.NonNegativeReals,
+            bounds=lambda _m, c_id: (0, cash_shift[c_id]))
+
     for c_id in contract_list:
         c = contracts[c_id]
 
-        for m in months:
+        for m in future_months:
             spent_expr = _contract_month_spent(alloc, c_id, m)
 
             inflow = _month_inflow(ctx, c_id, m)
             min_bal = min_balance_for_month(c, m)
 
-            opening = 0 if m == 1 else model.carry[(c_id, m - 1)]
+            if m == 1:
+                opening = 0
+            elif m - 1 <= frozen:
+                opening = max(0.0, frozen_cash_close[c_id]) + cash_shift.get(c_id, 0.0)
+            else:
+                opening = model.carry[(c_id, m - 1)]
             model.cons.add(model.close[(c_id, m)] == opening + inflow - spent_expr)
 
-            if min_bal > 0:
+            if c_id in cash_shift:
+                # Настоящий остаток не ниже минимального минус запас месяца.
+                model.cons.add(model.close[(c_id, m)] + model.frozen_cash_slack[(c_id, m)]
+                               >= cash_shift[c_id] + max(0.0, min_bal))
+            elif min_bal > 0:
                 model.cons.add(model.close[(c_id, m)] >= min_bal)
 
             if m < 12:
                 model.cons.add(model.carry[(c_id, m)] == model.close[(c_id, m)])
 
-    remainder_count = _add_contract_remainder_rules(model, contracts, alloc)
+    remainder_count = _add_contract_remainder_rules(
+        model, contracts, alloc,
+        spent_before={c_id: v for c_id, v in fact_spent_total.items() if v > 0.005},
+        overspend=getattr(model, "frozen_fot_slack", None))
 
     for c_id in contract_list:
         c = contracts[c_id]
@@ -1758,6 +2275,12 @@ def solve(
 
     if employee_contract_keys:
         for e_id, c_id in employee_contract_keys:
+            if (e_id, c_id) in fact_pairs:
+                # Связь сотрудник–договор — годовая: пара, которая платила в
+                # месяцах факта, в этом году уже есть, и продолжать её ничего
+                # не стоит.
+                model.cons.add(model.emp_contract_used[(e_id, c_id)] == 1)
+                continue
             related_uses = [uses[k] for k in alloc_keys if k[0] == e_id and k[1] == c_id]
             for uvar in related_uses:
                 model.cons.add(model.emp_contract_used[(e_id, c_id)] >= uvar)
@@ -1776,26 +2299,87 @@ def solve(
                 model.emp_contract_month_used[(e_id, c_id, m)] <= _sum_terms(related_uses)
             )
 
+    # Окна правила блока оклада: (строка, первый месяц, смены после факта,
+    # сколько их можно, смены в факте) — нужны и после решения, чтобы назвать
+    # вынужденные отступления.
+    windows: list[tuple[str, int, list, int, list[int]]] = []
+    salary_change_key_set = set(salary_change_keys)
     if salary_change_keys:
-        salary_change_key_set = set(salary_change_keys)
         for e_id, m in salary_change_keys:
             m_prev = m - 1
             for c_id in contract_list:
-                u_prev = _use_or_zero(uses, alloc_key_set, e_id, c_id, m_prev, PaymentKind.SALARY)
+                if m_prev <= frozen:
+                    # Месяц F — факт: договор оклада в нём известен числом.
+                    u_prev = int(c_id in fact_salary.get((e_id, m_prev), ()))
+                else:
+                    u_prev = _use_or_zero(uses, alloc_key_set, e_id, c_id, m_prev, PaymentKind.SALARY)
                 u_curr = _use_or_zero(uses, alloc_key_set, e_id, c_id, m, PaymentKind.SALARY)
                 model.cons.add(model.salary_change[(e_id, m)] >= u_prev - u_curr)
                 model.cons.add(model.salary_change[(e_id, m)] >= u_curr - u_prev)
 
+        # Не больше одной смены на три месяца подряд. Смена в факте входит в
+        # окно числом: смена в феврале запрещает смену в марте и апреле —
+        # ровно пример владельца продукта 30.09.2026 («если была смена, а
+        # правило — не более чем в квартал, то пусть учтет это»). Окно целиком
+        # в факте — история, его не проверить и не исправить. Если история
+        # сама дала в окне две смены, будущим месяцам окна — ноль смен.
+        breaches: dict[str, tuple[set[int], set[int]]] = {}
         for e in ctx.employees:
             for start_m in range(2, 13 - MIN_SALARY_BLOCK_MONTHS + 1):
                 window_months = range(start_m, start_m + MIN_SALARY_BLOCK_MONTHS)
+                if window_months[-1] <= frozen:
+                    continue
+                done = [m for m in window_months
+                        if m <= frozen and frozen_salary_change.get((e.id, m))]
                 changes = [
                     model.salary_change[(e.id, m)]
                     for m in window_months
-                    if (e.id, m) in salary_change_key_set
+                    if m > frozen and (e.id, m) in salary_change_key_set
                 ]
-                if changes:
-                    model.cons.add(_sum_terms(changes) <= 1)
+                if not changes:
+                    continue
+                if len(done) > 1:
+                    past, ahead = breaches.setdefault(e.id, (set(), set()))
+                    past.update(done)
+                    ahead.update(m for m in window_months if m > frozen)
+                windows.append((e.id, start_m, changes, max(0, 1 - len(done)), done))
+        # История может сделать план нерешаемым через это правило двумя
+        # путями, и оба закрывает запас смен frozen_block_slack — платный на
+        # первой стадии, так что берётся он только тогда, когда без него
+        # плана нет, и называется предупреждением:
+        # * окно уже занято сменой в факте, а после факта смена вынужденна —
+        #   человек уволился, договор кончился или истрачен;
+        # * смена F→F+1 вынужденна сама — договор оклада из факта после него
+        #   платить не может (в демо 30.09.2026 оклад в феврале перевели на
+        #   договор, который строке не разрешён), — а следующая смена в том
+        #   же окне нужна плану (в мае человек садится на строку РКМ гранта).
+        #   Здесь запас прощает только смену F→F+1: не больше её самой.
+        # Без факта запаса нет — правило как было.
+        transition = frozen + 1
+        slack_keys = [
+            (e_id, start_m) for e_id, start_m, _ch, _cap, done in windows
+            if done or (frozen and start_m <= transition < start_m + MIN_SALARY_BLOCK_MONTHS
+                        and (e_id, transition) in salary_change_key_set)]
+        slack_set = set(slack_keys)
+        if slack_keys:
+            model.frozen_block_slack = pyo.Var(
+                slack_keys, domain=pyo.NonNegativeReals, bounds=(0, MIN_SALARY_BLOCK_MONTHS))
+        for e_id, start_m, changes, cap, done in windows:
+            if (e_id, start_m) not in slack_set:
+                model.cons.add(_sum_terms(changes) <= cap)
+                continue
+            extra = model.frozen_block_slack[(e_id, start_m)]
+            model.cons.add(_sum_terms(changes) <= cap + extra)
+            if not done:
+                model.cons.add(extra <= model.salary_change[(e_id, transition)])
+        for e_id, (past, ahead) in breaches.items():
+            frozen_notes.append(ConflictRecord(
+                code="FROZEN_SALARY_BLOCK_WARNING",
+                message=(f"Сотрудник {e_id}: по факту договор оклада сменился чаще "
+                         f"одного раза в три месяца, смены — {_month_span(sorted(past))}; "
+                         f"правило блока оклада ослаблено, смен не будет — "
+                         f"{_month_span(sorted(ahead))}"),
+                employee_id=e_id, year=year, month=min(past)))
 
     if scheme_change_keys:
         for e_id, m in scheme_change_keys:
@@ -1804,9 +2388,12 @@ def solve(
                 u_curr = _emp_contract_month_used_or_zero(
                     model, month_used_set, e_id, c_id, m
                 )
-                u_prev = _emp_contract_month_used_or_zero(
-                    model, month_used_set, e_id, c_id, m_prev
-                )
+                if m_prev <= frozen:
+                    u_prev = int((e_id, c_id, m_prev) in fact_used)
+                else:
+                    u_prev = _emp_contract_month_used_or_zero(
+                        model, month_used_set, e_id, c_id, m_prev
+                    )
                 model.cons.add(
                     model.emp_contract_scheme_changed[(e_id, m)] >= u_curr - u_prev
                 )
@@ -1815,6 +2402,9 @@ def solve(
                 )
 
     max_contracts_per_year = stab.max_contracts_per_year
+    person_rows: dict[str, list[str]] = defaultdict(list)
+    person_contract_keys: list[tuple[str, str]] = []
+    frozen_person_contracts: dict[str, set[str]] = defaultdict(set)
     if max_contracts_per_year is not None and max_contracts_per_year > 0:
         for e_id, c_id in year_contract_keys:
             month_vars = [
@@ -1829,14 +2419,27 @@ def solve(
         # Лимит относится к физическому человеку, а не к строке штатного
         # расписания. Если две его должности получают оклад с одного договора,
         # договор считается один раз.
-        person_contract_keys = []
-        person_rows = defaultdict(list)
         for employee in ctx.employees:
             person_rows[_employee_person_key(employee)].append(employee.id)
+        # Договоры оклада человека в месяцах факта в этом году уже есть:
+        # предел считает их числом, и вернуться на такой договор ничего не
+        # стоит. Если история одна уже превысила предел, он поднимается ровно
+        # до неё — новых договоров оклада не будет, но план остаётся.
+        for (e_id, _m), c_ids in fact_salary.items():
+            frozen_person_contracts[_employee_person_key(employees[e_id])].update(c_ids)
+        for person, done in frozen_person_contracts.items():
+            if len(done) > max_contracts_per_year:
+                frozen_notes.append(ConflictRecord(
+                    code="FROZEN_MAX_CONTRACTS_WARNING",
+                    message=(f"Сотрудник {', '.join(person_rows[person])}: по факту оклад "
+                             f"шёл с {len(done)} договоров — {', '.join(sorted(done))}, "
+                             f"больше предела {max_contracts_per_year} в год; предел на "
+                             f"этот год поднят до {len(done)}, новых договоров оклада не будет"),
+                    employee_id=person_rows[person][0], year=year))
         for person, employee_ids in person_rows.items():
             contracts_for_person = sorted({
                 c_id for e_id, c_id in year_contract_keys if e_id in employee_ids
-            })
+            } - frozen_person_contracts.get(person, set()))
             person_contract_keys.extend((person, c_id) for c_id in contracts_for_person)
         if person_contract_keys:
             model.person_year_use = pyo.Var(person_contract_keys, domain=pyo.Binary)
@@ -1853,11 +2456,28 @@ def solve(
                     model.cons.add(flag <= _sum_terms(row_flags))
                 else:
                     model.cons.add(flag == 0)
+            # Предел, часть которого факт уже выбрал, держит запас
+            # frozen_contract_slack — как окно блока оклада выше: если
+            # договоры из факта после него платить не могут (кончились,
+            # истрачены, строке не разрешены) и в остаток предела план не
+            # укладывается, новый договор берётся, но только тогда, когда без
+            # него плана нет, не больше числа договоров факта, и называется
+            # предупреждением.
+            full = [person for person in person_rows
+                    if frozen_person_contracts.get(person)
+                    and any(p == person for p, _c in person_contract_keys)]
+            if full:
+                model.frozen_contract_slack = pyo.Var(
+                    full, domain=pyo.NonNegativeReals,
+                    bounds=lambda _m, person: (0, len(frozen_person_contracts[person])))
             for person in person_rows:
                 flags = [model.person_year_use[(person, c_id)]
                          for p, c_id in person_contract_keys if p == person]
                 if flags:
-                    model.cons.add(_sum_terms(flags) <= max_contracts_per_year)
+                    done = len(frozen_person_contracts.get(person, ()))
+                    extra = model.frozen_contract_slack[person] if person in full else 0
+                    model.cons.add(_sum_terms(flags)
+                                   <= max(max_contracts_per_year, done) - done + extra)
 
     if uniform_dev_keys:
         for key in uniform_dev_keys:
@@ -1870,6 +2490,22 @@ def solve(
             model.cons.add(
                 model.uniform_penalty_neg[key] >= ideal - actual - tolerance
             )
+
+    # Годовую строку РКМ (без плана по месяцам), которую факт недобрал,
+    # обязаны добрать будущие месяцы. Если добрать нечем — одному человеку
+    # больше ставки за месяц на договоре не открыть, — план не должен
+    # пропасть из-за истории: нижняя граница держит запас
+    # frozen_labor_*_slack, платный на первой стадии, и недобор называется
+    # предупреждением (проверка результата LABOR-001 его всё равно покажет).
+    labor_slack_rows = [idx for idx in labor_row_indices
+                        if frozen and not ctx.labor_plans[idx].monthly]
+    if labor_slack_rows:
+        model.frozen_labor_pm_slack = pyo.Var(
+            labor_slack_rows, domain=pyo.NonNegativeReals, bounds=(0, BIG_M))
+        model.frozen_labor_amount_slack = pyo.Var(
+            labor_slack_rows, domain=pyo.NonNegativeReals, bounds=(0, BIG_M))
+    labor_slack_set = set(labor_slack_rows)
+    labor_slack_info: dict[int, tuple] = {}
 
     for lp_idx in labor_row_indices:
         lp = ctx.labor_plans[lp_idx]
@@ -1886,12 +2522,49 @@ def solve(
         tol = min(max(float(stab.goz_labor_tolerance), 0.0), MAX_LABOR_TOLERANCE)
         pm_low = (1.0 - tol) * plan_pm
         pm_high = (1.0 + tol) * plan_pm
+        amt_low = (1.0 - tol) * plan_amount
+        amt_high = (1.0 + tol) * plan_amount
         pm_missing = pm_expr is None or (isinstance(pm_expr, (int, float)) and pm_expr == 0)
         amount_missing = amount_expr is None or (isinstance(amount_expr, (int, float)) and amount_expr == 0)
+        fz_pm = frozen_row_pm.get(lp_idx, 0.0)
+        fz_amt = frozen_row_amount.get(lp_idx, 0.0)
+        if frozen:
+            # Год строки РКМ с фактом (правило 26): сделанное в месяцах факта
+            # входит в годовую сумму числом, а коридор ослабляется ровно на
+            # то, что история уже сделала сверх него или недобрала там, где
+            # добрать нельзя (relaxed_labor_band).
+            if lp.monthly:
+                ahead = sum(v for m, v in lp.monthly.items() if m > frozen)
+                has_future, monthly_ahead = ahead > 0, ahead
+            else:
+                has_future = any(contract_allows_month(c, year, m) for m in future_months)
+                monthly_ahead = None
+            avg_cost = float(lp.avg_monthly_labor_cost or 0.0)
+            pm_band = relaxed_labor_band(pm_low, pm_high, fz_pm, tol=tol,
+                                         monthly_future_plan=monthly_ahead,
+                                         has_future=has_future)
+            amt_band = relaxed_labor_band(
+                amt_low, amt_high, fz_amt, tol=tol, has_future=has_future,
+                monthly_future_plan=None if monthly_ahead is None else avg_cost * monthly_ahead)
+            if pm_band != (pm_low, pm_high) or (plan_amount > 0 and amt_band != (amt_low, amt_high)):
+                frozen_notes.append(_frozen_labor_note(
+                    lp, frozen, fz_pm, fz_amt, (pm_low, pm_high), pm_band,
+                    (amt_low, amt_high) if plan_amount > 0 else None, amt_band, year))
+            (pm_low, pm_high), (amt_low, amt_high) = pm_band, amt_band
+            pm_expr = fz_pm if pm_missing else (pm_expr + fz_pm if fz_pm else pm_expr)
+            amount_expr = fz_amt if amount_missing else (
+                amount_expr + fz_amt if fz_amt else amount_expr)
+            labor_slack_info[lp_idx] = (lp, fz_pm, fz_amt, pm_low, amt_low)
         if pm_missing:
-            model.cons.add(model.infeasible_marker <= -1)
+            # Без переменных сумма строки — одна история: план годен, если
+            # она сама в коридоре, иначе закрыть строку некому.
+            if not (frozen and pm_low - 1e-6 <= fz_pm <= pm_high + 1e-6):
+                model.cons.add(model.infeasible_marker <= -1)
         else:
-            model.cons.add(pm_expr >= pm_low)
+            if lp_idx in labor_slack_set:
+                model.cons.add(pm_expr + model.frozen_labor_pm_slack[lp_idx] >= pm_low)
+            else:
+                model.cons.add(pm_expr >= pm_low)
             model.cons.add(pm_expr <= pm_high)
         if pm_expr is not None and lp_idx in labor_dev_keys:
             model.cons.add(model.labor_dev[lp_idx] >= pm_expr - pm_high)
@@ -1912,11 +2585,13 @@ def solve(
                 model.cons.add(model.labor_month_dev[key] >= month_expr - (1.0 + tol) * plan_m)
                 model.cons.add(model.labor_month_dev[key] >= (1.0 - tol) * plan_m - month_expr)
         if plan_amount > 0 and amount_missing:
-            model.cons.add(model.infeasible_marker <= -1)
+            if not (frozen and amt_low - 0.5 <= fz_amt <= amt_high + 0.5):
+                model.cons.add(model.infeasible_marker <= -1)
         if amount_expr is not None and not amount_missing and lp_idx in labor_amount_dev_keys and plan_amount > 0:
-            amt_low = (1.0 - tol) * plan_amount
-            amt_high = (1.0 + tol) * plan_amount
-            model.cons.add(amount_expr >= amt_low)
+            if lp_idx in labor_slack_set:
+                model.cons.add(amount_expr + model.frozen_labor_amount_slack[lp_idx] >= amt_low)
+            else:
+                model.cons.add(amount_expr >= amt_low)
             model.cons.add(amount_expr <= amt_high)
             model.cons.add(model.labor_amount_dev[lp_idx] >= amount_expr - amt_high)
             model.cons.add(model.labor_amount_dev[lp_idx] >= amt_low - amount_expr)
@@ -1952,6 +2627,8 @@ def solve(
     per_stage_limit = max(20, time_limit_sec)
 
     def _solver_failed(stage_label: str) -> PlanningResult:
+        # Ослабления из-за факта называются и при отказе: история могла
+        # быть причиной того, что плана нет.
         return PlanningResult(
             year=year,
             allocations=[],
@@ -1961,13 +2638,55 @@ def solve(
                     code="SOLVER_FAILED",
                     message=f"Решатель завершился со статусом {status_name} ({stage_label})",
                 )
-            ],
+            ] + frozen_notes,
             contract_balances=[],
             solver_status=status_name,
             objective_value=0.0,
             solve_time_sec=round(solve_time, 3),
             payroll_limit_mode=payroll_limit_mode,
+            frozen_through=frozen,
         )
+
+    # Вынужденные отступления из-за факта — впереди всего, даже дефицита:
+    # правило, которое история уже выбрала (окно блока оклада, предел
+    # договоров оклада, нижняя граница годовой строки РКМ), отступает, только
+    # если иначе плана нет. Без факта запасов нет, и стадии тоже.
+    # Цена отступлений: смена договора оклада и договор сверх предела — по
+    # единице, человеко-месяц недобора строки РКМ — единица, деньги — за
+    # тысячу рублей перерасхода кассы или ФОТ и за десять тысяч недобора
+    # суммы РКМ. Деньги дороже правил блока и предела: расчёт скорее вернёт
+    # оклад на прежний договор, чем потратит деньги, которых нет.
+    forced_terms = []
+    for name, scale in (("frozen_block_slack", 1.0), ("frozen_contract_slack", 1.0),
+                        ("frozen_labor_pm_slack", 1.0), ("frozen_labor_amount_slack", 1e-4),
+                        ("frozen_cash_slack", 1e-3), ("frozen_fot_slack", 1e-3)):
+        var = getattr(model, name, None)
+        if var is not None:
+            forced_terms.extend(scale * var[k] for k in var)
+    if forced_terms:
+        status_name, elapsed, stage_obj = _run_minimize_stage(
+            model, _sum_terms(forced_terms), per_stage_limit,
+            tolerance=1e-3, label=FROZEN_FORCED_STAGE)
+        solve_time += elapsed
+        if stage_obj is not None:
+            last_objective_value = stage_obj
+        if status_name not in ("OPTIMAL", "FEASIBLE"):
+            return _solver_failed(FROZEN_FORCED_STAGE)
+        # Каждый запас — не больше того, что взяла эта стадия. Фиксации
+        # суммы мало: её допуск следующие стадии тратили сами — стадия
+        # «договоров с остатком ФОТ» уводила кассу в минус на рубль в
+        # декабре, чтобы договор ушёл в ноль (демо 30.09.2026), — и могли
+        # переложить вынужденный минус из месяца, где он нужен, в другой.
+        # Ограничение, а не граница переменной: appsi видит новые
+        # ограничения и в быстром режиме FOT_APPSI_FAST.
+        for name in ("frozen_block_slack", "frozen_contract_slack",
+                     "frozen_labor_pm_slack", "frozen_labor_amount_slack",
+                     "frozen_cash_slack", "frozen_fot_slack"):
+            var = getattr(model, name, None)
+            money = name in ("frozen_labor_amount_slack", "frozen_cash_slack",
+                             "frozen_fot_slack")
+            for key in (var if var is not None else ()):
+                model.cons.add(var[key] <= _value(var[key]) + (0.01 if money else 1e-6))
 
     if allow_deficit and deficit_agg_keys:
         deficit_total_expr = _sum_terms(deficit[k] for k in deficit_agg_keys)
@@ -2014,6 +2733,28 @@ def solve(
     )
     if labor_part is not None:
         soft_stage_exprs.append((labor_part, "отклонения трудоёмкости"))
+    # Средняя по ГОЗ-договору — ровно БЭП, и добирается сразу после
+    # трудоёмкости, раньше прочих стадий (владелец продукта 30.09.2026: «по
+    # БЭП не критично, если меньше получается, но лучше ровно: каждый год
+    # повышают порог, и если укладываться в меньшую сторону, спросят, зачем
+    # тогда повышать»). Выше БЭП нельзя — это жёсткое правило 7; ниже —
+    # только если иначе не выходит.
+    goz_bep_under_part = _expr_model_var_sum(model, "goz_bep_average_under_limit")
+    if goz_bep_under_part is not None:
+        soft_stage_exprs.append(
+            (goz_bep_under_part, "недобор средней БЭП по ГОЗ")
+        )
+    # Члены рабочей группы — «по возможности вся» зарплата с договора группы
+    # (владелец продукта 30.09.2026: «какую выплату ему дать, решает расчёт —
+    # это можно задать, только удалить нельзя, если не задано — то по
+    # возможности ВСЮ»). Хотя бы одну выплату с договора держит жёстко
+    # закрепление без вида; эта стадия уменьшает деньги члену группы с других
+    # договоров. Сразу после БЭП: трудоёмкость и БЭП — правила договоров —
+    # важнее. Не хватает денег у договора группы — остаток идёт с других, и
+    # из-за этой цели плана без решения не бывает.
+    whole_part = _expr_whole_from_group(assignments, alloc_keys, alloc)
+    if whole_part is not None:
+        soft_stage_exprs.append((whole_part, WHOLE_GROUP_STAGE))
     labor_employee_balance_part = _expr_labor_employee_balance(
         model,
         labor_employee_balance_keys=labor_employee_balance_keys,
@@ -2049,11 +2790,6 @@ def solve(
     if staff_2556_deviation_part is not None:
         soft_stage_exprs.append(
             (staff_2556_deviation_part, "отклонение штатной части от П2556")
-        )
-    goz_bep_under_part = _expr_model_var_sum(model, "goz_bep_average_under_limit")
-    if goz_bep_under_part is not None:
-        soft_stage_exprs.append(
-            (goz_bep_under_part, "недобор средней БЭП по ГОЗ")
         )
     p4_under_part = _expr_model_var_sum(model, "p4_group_under_limit")
     if p4_under_part is not None:
@@ -2140,25 +2876,51 @@ def solve(
                     code="SOLVER_FAILED",
                     message=f"Решатель завершился со статусом {status_name}",
                 )
-            ],
+            ] + frozen_notes,
             contract_balances=[],
             solver_status=status_name,
             objective_value=0.0,
             solve_time_sec=round(solve_time, 3),
             payroll_limit_mode=payroll_limit_mode,
+            frozen_through=frozen,
         )
 
-    allocations: list[AllocationRecord] = []
+    frozen_notes += _forced_notes(
+        model, frozen, year, windows, salary_change_key_set, person_rows,
+        person_contract_keys, frozen_person_contracts, max_contracts_per_year,
+        labor_slack_info, cash_shift)
+
+    # Месяцы факта — ровно лист «факт_выплат», в том числе выплаты тем, кого
+    # в листе сотрудников нет: деньги с договора ушли, и в плане их видно.
+    # Сумма зафиксирована (is_manual), а источник — факт, не закрепление.
+    allocations: list[AllocationRecord] = [
+        AllocationRecord(
+            employee_id=e_id,
+            contract_id=c_id,
+            year=year,
+            month=m,
+            payment_kind=kind,
+            amount=round(value, 2),
+            is_manual=True,
+            source="fact",
+        )
+        for (e_id, c_id, m, kind), value in sorted(fact_pay.items(), key=lambda kv: (
+            kv[0][2], kv[0][0], kv[0][1], int(kv[0][3])))
+        if abs(value) > 0.005
+    ]
     manual_keys = {
         (a.employee_id, a.contract_id, m, a.payment_kind)
-        for a in ctx.manual_assignments
+        for a in assignments
+        if a.payment_kind is not None
         for m in range(a.month_from, a.month_to + 1)
     }
+    # Закрепление без вида делает ручной любую выплату пары в своих месяцах:
+    # вид выбрал расчёт, но платить с этого договора потребовал экономист.
     for key in alloc_keys:
         val = _value(model.alloc[key])
         if val > 0.005:
             e_id, c_id, m, kind = key
-            is_manual = (e_id, c_id, m, kind) in manual_keys
+            is_manual = (e_id, c_id, m, kind) in manual_keys or (e_id, c_id, m) in kindless_pins
             allocations.append(
                 AllocationRecord(
                     employee_id=e_id,
@@ -2197,7 +2959,18 @@ def solve(
                 )
             )
 
-    labor_pm_attributions: list[LaborPmAttribution] = []
+    # Трудоёмкость месяцев факта — как её отнёс расчёт выше (числом): в
+    # отчёте и в проверке результата год строки РКМ считается целиком.
+    labor_pm_attributions: list[LaborPmAttribution] = [
+        LaborPmAttribution(
+            employee_id=e_id, contract_id=c_id, year=year, month=m,
+            labor_row_id=labor_row_id(ctx.labor_plans[lp_idx]),
+            position=ctx.labor_plans[lp_idx].position,
+            equivalence_group=ctx.labor_plans[lp_idx].equivalence_group,
+            person_months=round(value, 4),
+        )
+        for (e_id, c_id, m, lp_idx), value in frozen_labor_pm.items()
+    ]
     if labor_pm_keys and hasattr(model, "labor_pm"):
         for key in labor_pm_keys:
             val = _value(model.labor_pm[key])
@@ -2218,7 +2991,16 @@ def solve(
                 )
             )
 
-    labor_payment_attributions: list[LaborPaymentAttribution] = []
+    labor_payment_attributions: list[LaborPaymentAttribution] = [
+        LaborPaymentAttribution(
+            employee_id=e_id, contract_id=c_id, year=year, month=m, payment_kind=kind,
+            labor_row_id=labor_row_id(ctx.labor_plans[lp_idx]),
+            position=ctx.labor_plans[lp_idx].position,
+            equivalence_group=ctx.labor_plans[lp_idx].equivalence_group,
+            amount=round(value, 2),
+        )
+        for (e_id, c_id, m, kind, lp_idx), value in frozen_labor_pay.items()
+    ]
     if labor_payment_keys and hasattr(model, "labor_pay"):
         for key in labor_payment_keys:
             val = _value(model.labor_pay[key])
@@ -2240,7 +3022,22 @@ def solve(
                 )
             )
 
-    open_rate_attributions: list[OpenRateAttribution] = []
+    # Ставки и основное место месяцев факта — из листа «факт_выплат»: ставка
+    # как записана (в истории бывает и 0,3), основное место — графа листа или
+    # наибольшая ставка человека в месяце (fact_main_flags).
+    fact_main = fact_main_flags(facts, employees)
+    open_rate_attributions: list[OpenRateAttribution] = [
+        OpenRateAttribution(
+            employee_id=e_id, contract_id=c_id, year=year, month=m,
+            open_rate=round(rate, 4),
+            is_main=fact_main.get((e_id, c_id, m), False),
+            position=employees[e_id].position,
+            equivalence_group=employees[e_id].equivalence_group,
+        )
+        for (e_id, c_id, m), rate in sorted(fact_rates(facts).items(),
+                                           key=lambda kv: (kv[0][2], kv[0][0], kv[0][1]))
+        if e_id in employees
+    ]
     if open_rate_keys and hasattr(model, "open_rate_q"):
         for key in open_rate_keys:
             q = int(round(_value(open_rate_q[key])))
@@ -2300,8 +3097,10 @@ def solve(
         contracts,
         employees,
         uses,
+        frozen=frozen,
+        cash_shift=cash_shift,
     )
-    conflicts: list[ConflictRecord] = []
+    conflicts: list[ConflictRecord] = list(frozen_notes)
     if status_name not in ("OPTIMAL", "FEASIBLE"):
         conflicts.append(
             ConflictRecord(
@@ -2328,6 +3127,7 @@ def solve(
         labor_payment_attributions=labor_payment_attributions,
         open_rate_attributions=open_rate_attributions,
         goals=goals,
+        frozen_through=frozen,
     )
     # Решатель отвечает за свою модель, аудит — за правила организации. План
     # со статусом OPTIMAL и дробной ставкой возможен, если условие записано
@@ -2348,14 +3148,20 @@ def _compute_balances(
     contracts: dict,
     employees: dict,
     uses: dict,
+    frozen: int = 0,
+    cash_shift: dict | None = None,
 ) -> list[ContractBalanceRecord]:
     records: list[ContractBalanceRecord] = []
     spent: dict[tuple[str, int], float] = defaultdict(float)
     for a in allocations:
         spent[(a.contract_id, a.month)] += a.amount
+    cash_shift = cash_shift or {}
 
     for c in ctx.contracts:
         opening = 0.0
+        # Касса с вынужденным запасом после факта считается в модели со
+        # сдвигом на запас (frozen_cash_slack); в отчёт — настоящий остаток.
+        shift = cash_shift.get(c.id, 0.0)
 
         for m in range(1, 13):
             inflow = _month_inflow(ctx, c.id, m)
@@ -2363,12 +3169,17 @@ def _compute_balances(
             key = (c.id, m)
 
             if key in balance_close:
-                closing = _value(balance_close[key])
+                closing = _value(balance_close[key]) - (shift if m > frozen else 0.0)
             else:
                 closing = opening + inflow - sp
-            
+
             if key in carry_forward:
-                carried = _value(carry_forward[key])
+                carried = _value(carry_forward[key]) - (shift if m > frozen else 0.0)
+            elif m < frozen:
+                # Внутри факта остаток идёт как был, и в минус тоже: это
+                # история. В план (после месяца F) переходит неотрицательный —
+                # так же, как в модели.
+                carried = closing
             else:
                 carried = max(0.0, closing)
 
@@ -2403,7 +3214,7 @@ def _monthly_pool(ctx: PlanningContext, contract, month: int) -> float:
 def _explain_deficit(ctx: PlanningContext, employee, month: int) -> list[str]:
     reasons: list[str] = []
     year = ctx.year
-    total_due = employee_monthly_payment_due(employee)
+    total_due = employee_monthly_payment_due(employee, month)
     possible_month = 0.0
     possible_cumulative = 0.0
     for c in ctx.contracts:

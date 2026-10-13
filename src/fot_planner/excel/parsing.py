@@ -103,9 +103,15 @@ def parse_payment_kind(
         return value
     if isinstance(value, int):
         return PaymentKind(value)
+    # Графу из одних кодов с пустыми ячейками pandas читает дробными числами:
+    # 122.0 — тот же код 122, а не неизвестный вид.
+    if isinstance(value, float) and value.is_integer():
+        return PaymentKind(int(value))
     text = str(value).strip().lower().replace("ё", "е")
     if not text:
         return default
+    if text.endswith(".0") and text[:-2].isdigit():
+        text = text[:-2]
     if text.isdigit():
         return PaymentKind(int(text))
     kind = PAYMENT_KIND_INPUT_ALIASES.get(text)

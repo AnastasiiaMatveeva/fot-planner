@@ -247,8 +247,9 @@ def _key(value):
     return "%d" % f if f == int(f) else "%s" % round(f, 4)
 
 
-def compare(rows):
-    """Величины из документа против действующего справочника.
+def compare(rows, effective=None):
+    """Величины из документа против справочника — действующего сегодня, а с
+    датой документа (effective, «ДД.ММ.ГГГГ») — на эту дату (01.10.2026).
 
     Возвращает расхождения, названия должностей, которых нет в справочнике,
     графы, которые документ заполняет, и то, что документ дал справочнику:
@@ -258,6 +259,22 @@ def compare(rows):
     """
     from fot_planner.position_reference import normalize_position
     current = read_rows()
+    on_day = _day(effective)
+    if on_day:
+        # Величины на дату документа: новая редакция сравнивается с той, что
+        # действовала тогда, а не с сегодняшней.
+        hist = {}
+        for e in read_history():
+            hist.setdefault((e["pos"], e["field"]), []).append(e)
+        current = [dict(r) for r in current]
+        for r in current:
+            for field, key in FIELD_KEY.items():
+                got = hist.get((r["pos"], field))
+                if got:
+                    r[key] = _value_at(got, on_day)
+        # Указатель кэшируется по именам должностей — величины на дату в нём
+        # были бы сегодняшние.
+        _INDEX["for"] = None
     idx = _index(current)
     changes, unknown, seen, values, lines, miss = [], [], set(), {}, {}, {}
     for row in rows or []:
@@ -304,7 +321,8 @@ def compare(rows):
             if differs and not any(
                     c["pos"] == hit["pos"] and c["field"] == field for c in changes):
                 changes.append({"pos": hit["pos"], "field": field,
-                                "old": old, "new": float(value)})
+                                "old": old, "new": float(value),
+                                "from": effective if on_day else None})
         if not matched:
             label = names[0] if len(names) == 1 else str(row.get("pos"))[:80]
             if label not in unknown:
@@ -320,8 +338,13 @@ def compare(rows):
     return changes, unknown[:20], sorted(seen), given
 
 
-def apply(edits):
-    """Записать величины в лист. edits: [{pos, field, value}]."""
+def apply(edits, effective=None, doc=None):
+    """Записать величины в справочник. edits: [{pos, field, value, from?}].
+
+    С датой (effective или «from» у правки, «ДД.ММ.ГГГГ») величина ложится в
+    историю — действует с этой даты, прежняя остаётся до неё (01.10.2026);
+    строка справочника — величина на сегодня. Без даты — величина на все
+    даты: история пары снимается, как было до истории."""
     if not edits:
         return []
     from fot_planner.position_reference import normalize_position
@@ -339,15 +362,156 @@ def apply(edits):
         if not r or not col:
             continue
         new = _num(e.get("value") if "value" in e else e.get("new"))
+        when = e.get("from") or effective
+        if _day(when):
+            old, _now = _record(wb, ws, r, e["field"], new, str(when).strip(), doc)
+            applied.append({"pos": ws.cell(r, 1).value, "field": e["field"],
+                            "old": old, "new": new, "from": str(when).strip()})
+            continue
         old = _num(ws.cell(r, col).value)
         if old == new:
             continue
         ws.cell(r, col).value = new
+        _drop_history(wb, ws.cell(r, 1).value, e["field"])
         applied.append({"pos": ws.cell(r, 1).value, "field": e["field"],
                         "old": old, "new": new})
     if applied:
         wb.save(TEMPLATE)
     return applied
+
+
+# ── величины по датам ──────────────────────────────────────────
+#: Лист истории справочника (01.10.2026): величина должности с датой, с
+#: которой она действует. Оклады индексируются с 1 сентября, приказ № 2556
+#: вступает с 1 декабря, справки П4 и БЭП пересматриваются раз в год, и даты
+#: эти от года к году разные. Строка листа «лимиты_по_должностям» — величина,
+#: действующая сегодня; история — все величины с датами. Пустая дата — «с
+#: самого начала»: так записывается величина, бывшая до первой датированной.
+HISTORY_SHEET = "история_справочника"
+_HISTORY_COLS = ("должность", "величина", "значение", "действует с", "документ",
+                 "id документа", "записано")
+
+
+def _day(text):
+    """«01.09.2026» → (2026, 9, 1); пусто или не дата — None."""
+    parts = str(text or "").strip().split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        d, m, y = (int(p) for p in parts)
+    except ValueError:
+        return None
+    return (y, m, d) if 1 <= m <= 12 and 1 <= d <= 31 else None
+
+
+def _history_sheet(wb, create=False):
+    if HISTORY_SHEET in wb.sheetnames:
+        return wb[HISTORY_SHEET]
+    if not create:
+        return None
+    ws = wb.create_sheet(HISTORY_SHEET)
+    for c, name in enumerate(_HISTORY_COLS, start=1):
+        ws.cell(1, c).value = name
+    return ws
+
+
+def read_history(wb=None):
+    """[{pos, field, value, from, doc, doc_id}] — строки истории как есть."""
+    wb = wb or openpyxl.load_workbook(TEMPLATE)
+    ws = _history_sheet(wb)
+    if ws is None:
+        return []
+    out = []
+    for r in range(2, ws.max_row + 1):
+        pos, field = ws.cell(r, 1).value, ws.cell(r, 2).value
+        if not pos or field not in COLS:
+            continue
+        out.append({"pos": str(pos), "field": str(field), "value": _num(ws.cell(r, 3).value),
+                    "from": str(ws.cell(r, 4).value or "").strip(),
+                    "doc": ws.cell(r, 5).value, "doc_id": ws.cell(r, 6).value})
+    return out
+
+
+def _value_at(entries, day):
+    """Величина, действующая на день (кортеж год, месяц, число): последняя
+    строка истории с датой не позже дня; пустая дата — самая ранняя."""
+    best, best_day = None, None
+    for e in entries:
+        start = _day(e["from"]) or (0, 0, 0)
+        if start <= day and (best_day is None or start >= best_day):
+            best, best_day = e["value"], start
+    return best
+
+
+def month_values(year, wb=None):
+    """{(должность, величина): {месяц: значение}} года по истории: в месяце
+    действует величина на его 1-е число. Пары без истории — не в ответе:
+    у них весь год величина строки справочника."""
+    from fot_planner.position_reference import normalize_position
+    by = {}
+    for e in read_history(wb):
+        by.setdefault((normalize_position(e["pos"]), e["pos"], e["field"]), []).append(e)
+    out = {}
+    for (_key, pos, field), entries in by.items():
+        months = {m: _value_at(entries, (int(year), m, 1)) for m in range(1, 13)}
+        out[(pos, field)] = {m: v for m, v in months.items() if v is not None}
+    return out
+
+
+def _today():
+    import datetime as _dt
+    t = _dt.date.today()
+    return (t.year, t.month, t.day)
+
+
+def _record(wb, ws_limits, row, field, value, effective, doc=None):
+    """Величина должности с даты: строка истории; при пустой истории сначала
+    — прежняя величина «с самого начала». Строка справочника — величина,
+    действующая сегодня. Возвращает (было сегодня, стало сегодня)."""
+    import datetime as _dt
+    col = COLS[field]
+    pos = ws_limits.cell(row, 1).value
+    hist = _history_sheet(wb, create=True)
+    mine = [r for r in range(2, hist.max_row + 1)
+            if str(hist.cell(r, 1).value or "") == str(pos) and hist.cell(r, 2).value == field]
+    old = _num(ws_limits.cell(row, col).value)
+    if not mine and old is not None:
+        # Прежняя величина — с документом, который её дал (лист источников).
+        src_doc = src_id = None
+        if SOURCES_SHEET in wb.sheetnames:
+            src = wb[SOURCES_SHEET]
+            for r in range(2, src.max_row + 1):
+                if str(src.cell(r, 1).value or "") == field:
+                    src_doc, src_id = src.cell(r, 2).value, src.cell(r, 3).value
+        hist.append([pos, field, old, "", src_doc, src_id,
+                     _dt.datetime.now().strftime("%d.%m.%Y %H:%M")])
+    # Та же дата — новая редакция величины, а не вторая строка.
+    for r in mine:
+        if str(hist.cell(r, 4).value or "").strip() == effective:
+            hist.cell(r, 3).value = value
+            hist.cell(r, 5).value = getattr(doc, "name", None) or hist.cell(r, 5).value
+            hist.cell(r, 6).value = getattr(doc, "id", None) or hist.cell(r, 6).value
+            break
+    else:
+        hist.append([pos, field, value, effective, getattr(doc, "name", None),
+                     getattr(doc, "id", None), _dt.datetime.now().strftime("%d.%m.%Y %H:%M")])
+    entries = [{"from": str(hist.cell(r, 4).value or "").strip(), "value": _num(hist.cell(r, 3).value)}
+               for r in range(2, hist.max_row + 1)
+               if str(hist.cell(r, 1).value or "") == str(pos) and hist.cell(r, 2).value == field]
+    now = _value_at(entries, _today())
+    if now is not None:
+        ws_limits.cell(row, col).value = now
+    return old, now
+
+
+def _drop_history(wb, pos, field):
+    """Величина без даты заменяет её на все даты: история пары снимается."""
+    hist = _history_sheet(wb)
+    if hist is None:
+        return
+    for r in range(hist.max_row, 1, -1):
+        if str(hist.cell(r, 1).value or "") == str(pos) and hist.cell(r, 2).value == field:
+            hist.delete_rows(r)
 
 
 #: Лист источников: какая величина справочника из какого документа.
@@ -435,9 +599,15 @@ def forget_source(doc_id):
         for c in range(2, len(_SOURCE_COLS) + 1):
             ws.cell(r, c).value = None
         ws.cell(r, 5).value = "документ удалён"
+    hist = _history_sheet(wb)
+    if hist is not None:
+        for r in range(2, hist.max_row + 1):
+            if str(hist.cell(r, 6).value or "") == str(doc_id):
+                hist.cell(r, 5).value, hist.cell(r, 6).value = "документ удалён", None
+                lost = lost or ["история"]
     if lost:
         wb.save(TEMPLATE)
-    return lost
+    return [x for x in lost if x != "история"]
 
 
 def rows_by_anchors(path):

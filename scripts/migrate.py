@@ -119,6 +119,11 @@ def run(args):
         if not os.path.isfile(args.restore):
             report["errors"].append("копии нет: %s" % args.restore)
             return report, 2
+        # Журнал WAL прежней базы лёг бы поверх восстановленного файла при
+        # первом открытии — его страницы относятся к другой версии базы.
+        for tail in ("-wal", "-shm"):
+            if os.path.exists(args.db + tail):
+                os.remove(args.db + tail)
         shutil.copyfile(args.restore, args.db)
         report["restored_sha256"] = sha256(args.db)
         print("восстановлено из %s" % args.restore)

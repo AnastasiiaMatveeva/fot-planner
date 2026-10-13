@@ -31,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     # не реализованная в аудите обязательная проверка даёт not_run и FAIL.
     solve_p.add_argument("--require", default="",
                          help="обязательные проверки результата через запятую: RATE-001,FOT-001")
+    solve_p.add_argument("--audit-bundle", help="JSON-пакет для отдельного аудита результата")
 
     args = parser.parse_args(argv)
 
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             plan_override_path=args.plan,
             time_limit_sec=args.time_limit,
             required_checks=[s.strip() for s in (args.require or "").split(",") if s.strip()],
+            audit_bundle_path=args.audit_bundle,
         )
         print(f"Статус: {result.solver_status}")
         # Статус решателя говорит о его модели, аудит — о правилах

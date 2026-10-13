@@ -34,6 +34,9 @@ def normalize_position(value: str | None) -> str:
     text = re.sub(r"[()\[\],;]+", " ", text)
     text = re.sub(r"\s*-\s*", "-", text)
     text = re.sub(r"\s+", " ", text)
+    # «Инженер 2 кат.» в таблице замещения — та же должность, что «Инженер
+    # 2 категории» в справочнике (SOURCE-014).
+    text = re.sub(r"\bкат\b\.?", "категории", text)
     return text.strip()
 
 

@@ -23,7 +23,11 @@ def run_planning(
     plan_override_path: str | Path | None = None,
     time_limit_sec: int = 120,
     required_checks=None,
+    audit_bundle_path: str | Path | None = None,
 ) -> PlanningResult:
+    if audit_bundle_path:
+        from fot_planner.harness_local.artifacts import sha256_of
+        input_digest = sha256_of(str(input_path))
     override = plan_override_path or output_path
     ctx = load_context(input_path, plan_path=override)
     ctx = _merge_locked_plan(ctx)
@@ -53,6 +57,13 @@ def run_planning(
     if validation_issues:
         result.conflicts = validation_issues + result.conflicts
     export_result(output_path, ctx, result)
+    if audit_bundle_path:
+        from fot_planner.harness_local.candidate_audit import bundle_bytes, workbook_digest
+        # Включается сервисом; обычный CLI без флага сохраняет прежний сценарий.
+        raw = bundle_bytes(ctx, result, required_checks,
+                           input_sha256=input_digest,
+                           export_data_sha256=workbook_digest(Path(output_path).read_bytes()))
+        Path(audit_bundle_path).write_bytes(raw)
     return result
 
 

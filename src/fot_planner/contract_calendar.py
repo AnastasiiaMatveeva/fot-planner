@@ -97,3 +97,34 @@ def latest_payment_month(contract: Contract, year: int) -> int | None:
         if months:
             last = max(last or 0, months[-1])
     return last
+
+
+def secret_allowance_active(row, contracts: dict, year: int, month: int) -> bool:
+    """Строка листа 120 действует в месяце (правило 10).
+
+    Окно строки задано экономистом — действует оно; не задано — окно 120
+    договора секретности: от его начала до срока выплат надбавок."""
+    secret_contract = contracts.get(row.secret_contract_id)
+    start = getattr(row, "start_date", None)
+    end = getattr(row, "end_date", None)
+    if start is None and end is None:
+        if secret_contract is None:
+            return False
+        return contract_payment_window_includes_month(
+            secret_contract, year, month, PaymentKind.K120)
+    period_start, period_end = _month_period(year, month)
+    if start is None:
+        start = secret_contract.start_date if secret_contract else date(year, 1, 1)
+    if end is None:
+        end = (payment_deadline_date(secret_contract, PaymentKind.K120)
+               if secret_contract else date(year, 12, 31))
+    return start <= period_end and period_start <= end
+
+
+def secret_allowance_pay_contracts(rows, contracts: dict, employee_id: str,
+                                   year: int, month: int) -> set[str]:
+    """Закреплённые договоры выплаты 120 у сотрудника в месяце; пусто —
+    договор выбирает оптимизатор (дополнение 18.09.2026 к правилу 10)."""
+    return {row.pay_contract_id for row in rows
+            if row.employee_id == employee_id and getattr(row, "pay_contract_id", None)
+            and secret_allowance_active(row, contracts, year, month)}

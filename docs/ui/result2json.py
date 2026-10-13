@@ -35,12 +35,17 @@ def convert(inp_path, res_path, out_path):
                 ("k122", "122 разрешена"), ("k124", "124 разрешена"),
                 ("k152", "152 разрешена"), ("prk", "стимулирующая приказом разрешена")]}})
 
-    ws = win["фот_по_месяцам"]
-    for r in range(2, ws.max_row + 1):
-        code = ws.cell(r, 1).value
-        if not code:
-            continue
-        data["inflow"][code] = [ws.cell(r, c).value or 0 for c in range(2, 14)]
+    # С 18.09.2026 сервис листа «фот_по_месяцам» во вход не пишет (SOURCE-009):
+    # без проверки разбор падал на каждом расчёте — карточка расчёта теряла
+    # сводку, а разбор «решения нет» не читал проверки решателя (найдено
+    # сквозной проверкой 30.09.2026).
+    if "фот_по_месяцам" in win.sheetnames:
+        ws = win["фот_по_месяцам"]
+        for r in range(2, ws.max_row + 1):
+            code = ws.cell(r, 1).value
+            if not code:
+                continue
+            data["inflow"][code] = [ws.cell(r, c).value or 0 for c in range(2, 14)]
 
     kind_map = {
         "оклад": "oklad", "120 надбавка (гостайна)": "k120",
@@ -59,7 +64,8 @@ def convert(inp_path, res_path, out_path):
             "ctr": row["договор"], "kind": kind or kind_raw,
             "sum": round(float(row["сумма"]), 2)})
 
-    for row in sheet_rows(wres["ФОТ по договорам"]):
+    for row in (sheet_rows(wres["ФОТ по договорам"]) if "ФОТ по договорам" in wres.sheetnames
+                else ()):
         if row.get("раздел") != "Поступления и выплаты":
             continue
         code, metric = row["договор"], row["показатель"]

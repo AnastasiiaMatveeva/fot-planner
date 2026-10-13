@@ -127,8 +127,11 @@ def build_staff_detail_rows(ctx: PlanningContext, result: PlanningResult) -> lis
         if rate <= 0:
             rate = employee.rate if employee.rate > 0 else 1.0
 
-        if allocation.payment_kind is PaymentKind.SALARY and employee.reference_salary_for_rate:
-            nominal = employee.reference_salary_for_rate
+        # Оклад месяца назначения: после индексации — новый (01.10.2026).
+        month_salary = (getattr(employee, "reference_salary_by_month", None) or {}).get(
+            allocation.month, employee.reference_salary_for_rate)
+        if allocation.payment_kind is PaymentKind.SALARY and month_salary:
+            nominal = month_salary
         else:
             nominal = allocation.amount / rate
         value_by_rate = nominal * rate

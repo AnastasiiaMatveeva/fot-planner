@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
 
+from fot_planner.actuals import MAX_FROZEN_THROUGH, month_span
 from fot_planner.contract_calendar import (
     payment_deadline_date,
     payment_kind_enabled,
@@ -16,6 +18,7 @@ from fot_planner.models import (
     PaymentKind,
     PlanningContext,
 )
+from fot_planner.payment_split import employee_monthly_payment_due
 from fot_planner.open_rate_rules import (
     MAIN_QUARTERS_MAX,
     PART_QUARTERS_MAX,
@@ -158,10 +161,121 @@ def _employment_structure_conflicts(ctx: PlanningContext) -> list[ConflictRecord
     return out
 
 
+def _actuals_conflicts(ctx: PlanningContext) -> list[ConflictRecord]:
+    """Что из листа «факт_выплат» расчёт не учёл или учёл по догадке.
+
+    Пересчёт с факта (правило 26, владелец продукта 30.09.2026) держит
+    месяцы 1…F ровно по факту. Строка, которую расчёт отбросил или прочитал
+    не так, как записана, не должна пропадать молча: экономист увидит план
+    без неё и решит, что факт учтён. Всё здесь — предупреждения: история
+    расчёт не останавливает; ошибка только в самом «факт по месяц».
+    """
+    raw = getattr(ctx, "frozen_through", 0) or 0
+    try:
+        last = int(raw)
+    except (TypeError, ValueError):
+        last = -1
+    if not 0 <= last <= MAX_FROZEN_THROUGH:
+        return [ConflictRecord(
+            code="INVALID_FROZEN_MONTHS",
+            message=(f"«Факт по месяц» {raw!r}: нужно целое от 0 до "
+                     f"{MAX_FROZEN_THROUGH} — последний прошедший месяц"),
+        )]
+    facts = list(getattr(ctx, "actuals", None) or [])
+    if not facts:
+        if not last:
+            return []
+        # Месяцы 1…F расчёт не считает, а заполнить их нечем: план покажет
+        # прошедшие месяцы пустыми, и об этом надо сказать, а не молчать.
+        return [ConflictRecord(
+            code="FACT_MISSING_WARNING",
+            message=(f"«Факт по месяц» — {month_span([last])}, а листа «факт_выплат» во "
+                     f"входе нет или он пуст: в плане {month_span(range(1, last + 1))} без выплат"),
+        )]
+    employees = {e.id: e for e in ctx.employees}
+    contract_ids = {c.id for c in ctx.contracts}
+    out: list[ConflictRecord] = []
+    # Строка работала и получала зарплату, а в факте её месяца нет: скорее
+    # всего, выгрузка факта неполная. Расчёт этот месяц не восполнит — он
+    # считает только месяцы после F, — поэтому предупреждение.
+    paid = {(a.employee_id, a.month) for a in facts
+            if 1 <= a.month <= last and a.contract_id in contract_ids}
+    for e in ctx.employees:
+        empty = [m for m in range(1, last + 1)
+                 if employee_active_in_month(e, ctx.year, m)
+                 and employee_monthly_payment_due(e, m) > 0 and (e.id, m) not in paid]
+        if empty:
+            out.append(ConflictRecord(
+                code="FACT_MISSING_WARNING",
+                message=(f"Сотрудник {e.id} работал, а в факте выплат за "
+                         f"{month_span(empty)} его нет: в плане эти месяцы у него без выплат"),
+                employee_id=e.id, month=empty[0],
+            ))
+    later = sorted({a.month for a in facts if a.month > last})
+    if later:
+        why = (f"последний месяц факта — {month_span([last])}" if last
+               else "в настройках не задан «факт по месяц»")
+        out.append(ConflictRecord(
+            code="FACT_AFTER_FROZEN_WARNING",
+            message=(f"Факт выплат за {month_span(later)} не учтён: {why}; "
+                     f"эти месяцы считает расчёт"),
+            month=later[0],
+        ))
+    held = [a for a in facts if 1 <= a.month <= last]
+    for cid in sorted({a.contract_id for a in held} - contract_ids):
+        months = [a.month for a in held if a.contract_id == cid]
+        out.append(ConflictRecord(
+            code="FACT_UNKNOWN_CONTRACT_WARNING",
+            message=(f"Факт выплат за {month_span(months)} по договору {cid}, которого "
+                     f"нет в листе договоров, не учтён"),
+            contract_id=cid, month=min(months),
+        ))
+    held = [a for a in held if a.contract_id in contract_ids]
+    for eid in sorted({a.employee_id for a in held} - set(employees)):
+        rows = [a for a in held if a.employee_id == eid]
+        total = sum(a.amount for a in rows)
+        cids = ", ".join(sorted({a.contract_id for a in rows}))
+        rubles = f"{total:,.0f}".replace(",", " ")
+        out.append(ConflictRecord(
+            code="FACT_UNKNOWN_EMPLOYEE_WARNING",
+            message=(f"Факт выплат строке {eid}, которой нет в листе сотрудников: "
+                     f"{rubles} ₽ за {month_span([a.month for a in rows])} учтены "
+                     f"в ФОТ договоров {cids}, в плане строки нет"),
+            employee_id=eid, month=min(a.month for a in rows),
+        ))
+    unrated: dict[tuple[str, str], list[int]] = defaultdict(list)
+    derived: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for a in held:
+        if a.payment_kind is not PaymentKind.SALARY or a.employee_id not in employees:
+            continue
+        if getattr(a, "rate_derived", False):
+            derived[(a.employee_id, a.contract_id)].append(a.month)
+        elif a.rate is None:
+            unrated[(a.employee_id, a.contract_id)].append(a.month)
+    for (eid, cid), months in sorted(derived.items()):
+        out.append(ConflictRecord(
+            code="FACT_RATE_DERIVED_WARNING",
+            message=(f"Факт выплат: у оклада строки {eid} по договору {cid} за "
+                     f"{month_span(months)} ставка не указана — взята как оклад, делённый "
+                     f"на оклад должности по справочнику"),
+            employee_id=eid, contract_id=cid, month=min(months),
+        ))
+    for (eid, cid), months in sorted(unrated.items()):
+        out.append(ConflictRecord(
+            code="FACT_RATE_DERIVED_WARNING",
+            message=(f"Факт выплат: у оклада строки {eid} по договору {cid} за "
+                     f"{month_span(months)} ставка не указана и не выводится — у должности "
+                     f"нет оклада в справочнике; человеко-месяцы этих месяцев не учтены"),
+            employee_id=eid, contract_id=cid, month=min(months),
+        ))
+    return out
+
+
 def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
     conflicts: list[ConflictRecord] = _defaults_used_conflicts(ctx)
     conflicts += _labor_rows_by_group_only(ctx)
     conflicts += _employment_structure_conflicts(ctx)
+    conflicts += _actuals_conflicts(ctx)
     emp_ids = {e.id for e in ctx.employees}
     contract_ids = {c.id for c in ctx.contracts}
 
@@ -190,6 +304,19 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
                     employee_id=e.id,
                 )
             )
+        # Зарплата по месяцам (правило 1, решение пользователя 19.09.2026):
+        # сумма месяца заменяет зарплату штатного расписания, и отрицательная
+        # в ней так же недопустима.
+        for month, wage in sorted((getattr(e, "monthly_wages", None) or {}).items()):
+            if wage < 0:
+                conflicts.append(
+                    ConflictRecord(
+                        code="INVALID_PAYMENT",
+                        message=f"Сотрудник {e.id}, месяц {month}: отрицательная зарплата",
+                        employee_id=e.id,
+                        month=month,
+                    )
+                )
         staff_q = staff_rate_min_quarters(e.rate)
         employment_max_q = (
             PART_QUARTERS_MAX
@@ -382,7 +509,12 @@ def validate_context(ctx: PlanningContext) -> list[ConflictRecord]:
             )
 
     for e in ctx.employees:
-        if e.monthly_wage > 0 and (
+        # Зарплата бывает и только в отдельных месяцах (лист зарплаты по
+        # месяцам): оклад нужен и такой строке.
+        has_wage = e.monthly_wage > 0 or any(
+            wage > 0 for wage in (getattr(e, "monthly_wages", None) or {}).values()
+        )
+        if has_wage and (
             e.reference_salary_for_rate is None or e.reference_salary_for_rate <= 0
         ):
             conflicts.append(

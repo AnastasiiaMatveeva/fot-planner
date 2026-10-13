@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fot_planner.defaults.position_limits import (
     P4_LIMIT_BY_CATEGORY_2025,
@@ -33,6 +33,14 @@ class PositionLimit:
     personnel_category: str | None = None
     limit: float | None = None
     note: str | None = None
+    # Месяц → лимит, где он не равен ``limit`` (лист «лимиты_по_месяцам»).
+    limit_by_month: dict[int, float] = field(default_factory=dict, compare=False, hash=False)
+
+    def limit_in(self, month: int | None) -> float | None:
+        """Лимит, действующий в месяце; без месяца — строка справочника."""
+        if month is not None and month in self.limit_by_month:
+            return self.limit_by_month[month]
+        return self.limit
 
 
 @dataclass(frozen=True)
@@ -45,6 +53,11 @@ class PositionSalaryLimit:
     p4_limit: float | None = None
     bep_limit: float | None = None
     note: str | None = None
+    # Месяц → величина, где она не равна строке (лист «лимиты_по_месяцам»).
+    order_2556_by_month: dict[int, float] = field(default_factory=dict, compare=False,
+                                                  hash=False)
+    p4_by_month: dict[int, float] = field(default_factory=dict, compare=False, hash=False)
+    bep_by_month: dict[int, float] = field(default_factory=dict, compare=False, hash=False)
 
 
 def normalize_personnel_category(value: object) -> str:
@@ -55,11 +68,12 @@ def p4_applies_to_category(personnel_category: object) -> bool:
     return normalize_personnel_category(personnel_category) in P4_PERSONNEL_CATEGORIES
 
 
-def effective_p4_limit(row: PositionSalaryLimit | None) -> float | None:
-    """П4 для расчёта: только НТП/НР и только при заданном значении в справочнике."""
+def effective_p4_limit(row: PositionSalaryLimit | None, month: int | None = None) -> float | None:
+    """П4 для расчёта: только НТП/НР и только при заданном значении в справочнике;
+    с месяцем — величина, действующая в этом месяце."""
     if row is None or not p4_applies_to_category(row.personnel_category):
         return None
-    limit = row.p4_limit
+    limit = row.p4_by_month.get(month, row.p4_limit) if month is not None else row.p4_limit
     if limit is None or limit <= 0:
         return None
     return float(limit)
@@ -90,6 +104,7 @@ def position_limit_tables_from_salary_limits(
                 personnel_category=row.personnel_category,
                 limit=row.order_2556_limit,
                 note=row.note,
+                limit_by_month=dict(row.order_2556_by_month),
             )
             for row in rows
         ],
@@ -100,6 +115,7 @@ def position_limit_tables_from_salary_limits(
                 personnel_category=row.personnel_category,
                 limit=row.p4_limit,
                 note=None,
+                limit_by_month=dict(row.p4_by_month),
             )
             for row in rows
         ],
@@ -110,6 +126,7 @@ def position_limit_tables_from_salary_limits(
                 personnel_category=row.personnel_category,
                 limit=row.bep_limit,
                 note=None,
+                limit_by_month=dict(row.bep_by_month),
             )
             for row in rows
         ],

@@ -86,9 +86,15 @@ def mark_review(db, runs, reason):
         except ValueError:
             log = []
         log.append({"когда": stamp, "что": reason})
+        fresh = r.review != REVIEW
         r.review = REVIEW
         r.review_log = json.dumps(log, ensure_ascii=False)
-        touched.setdefault(r.case_id, []).append(r.id)
+        # В ленту — только когда прогон впервые потерял актуальность: каждая
+        # следующая правка дописывает причину в журнал прогона, а не шлёт ту
+        # же реплику снова (02.10.2026: шесть одинаковых «требует пересмотра»
+        # подряд на одну правку договора).
+        if fresh:
+            touched.setdefault(r.case_id, []).append(r.id)
     for case_id, ids in touched.items():
         agents.say(db, case_id,
                    "%s № %s требует пересмотра: %s."

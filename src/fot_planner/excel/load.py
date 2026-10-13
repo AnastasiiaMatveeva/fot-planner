@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from fot_planner.excel.constants import (
+    SHEET_ACTUALS,
     SHEET_CONTRACT_LABOR,
     SHEET_CONTRACTS,
     SHEET_EMPLOYEES,
@@ -15,8 +17,10 @@ from fot_planner.excel.constants import (
     SHEET_MANUAL_ASSIGNMENTS,
     SHEET_MANUAL_PROHIBITIONS,
     SHEET_MIN_BALANCE_MATRIX,
+    SHEET_MONTHLY_WAGES,
     SHEET_PLAN,
     SHEET_POSITION_LIMITS,
+    SHEET_POSITION_LIMITS_MONTHLY,
     SHEET_SUBSTITUTIONS,
     SHEET_SECRET_ALLOWANCES,
     SHEET_SETTINGS,
@@ -37,7 +41,9 @@ from fot_planner.open_rate_rules import (
     normalize_employment_category,
     normalize_employment_type,
 )
+from fot_planner.actuals import MAX_FROZEN_THROUGH
 from fot_planner.models import (
+    ActualPayment,
     AllocationRecord,
     Contract,
     ContractLaborPlan,
@@ -71,7 +77,16 @@ from fot_planner.salary_limits_2556 import (
 def load_context(path: str | Path, plan_path: str | Path | None = None) -> PlanningContext:
     path = Path(path)
     xl = pd.ExcelFile(path)
+    try:
+        return _load_context(path, xl, plan_path)
+    finally:
+        # Книга закрывается и тогда, когда это не шаблон и чтение упало: на
+        # Windows открытый файл остаётся занятым процессом сервиса, и удаление
+        # документа не может стереть загрузку.
+        xl.close()
 
+
+def _load_context(path: Path, xl: pd.ExcelFile, plan_path: str | Path | None) -> PlanningContext:
     year = date.today().year
     settings_df: pd.DataFrame | None = None
     if SHEET_SETTINGS in xl.sheet_names:
@@ -117,6 +132,15 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         position_index,
         substitution_rules,
     )
+    # Лист необязательный: без него у всех месяцев зарплата штатного расписания.
+    if SHEET_MONTHLY_WAGES in xl.sheet_names:
+        _load_monthly_wages(
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_MONTHLY_WAGES),
+                SHEET_MONTHLY_WAGES,
+            ),
+            employees,
+        )
     contracts = _load_contracts(
         _canonicalize_columns(pd.read_excel(xl, SHEET_CONTRACTS), SHEET_CONTRACTS),
     )
@@ -129,6 +153,16 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             )
         )
     position_salary_limits = position_salary_limit_defaults
+    # Величины справочника по месяцам (01.10.2026) — поверх строк справочника.
+    if SHEET_POSITION_LIMITS_MONTHLY in xl.sheet_names:
+        position_salary_limits = _load_position_limits_monthly(
+            _canonicalize_columns(
+                pd.read_excel(xl, SHEET_POSITION_LIMITS_MONTHLY),
+                SHEET_POSITION_LIMITS_MONTHLY,
+            ),
+            position_salary_limits,
+            employees,
+        )
     position_limit_tables = position_limit_tables_from_salary_limits(position_salary_limits)
 
     if SHEET_FOT_MATRIX in xl.sheet_names:
@@ -207,6 +241,7 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
     weights = OptimizationWeights()
     salary_stability = SalaryStabilityRules()
     allow_deficit = False
+    frozen_through = 0
     if settings_df is not None:
         weights = _load_weights(settings_df)
         salary_stability = _load_salary_stability(settings_df)
@@ -214,6 +249,17 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
             row = settings_df.iloc[0]
             if "allow_deficit" in row and pd.notna(row["allow_deficit"]):
                 allow_deficit = _bool(row["allow_deficit"])
+            if "frozen_through" in row:
+                frozen_through = _frozen_through(row["frozen_through"])
+    # Факт прошедших месяцев (пересчёт с факта, 30.09.2026). Лист читается
+    # целиком и при пустом «факт по месяц»: какие строки расчёт не учёл,
+    # называет проверка входа, а не молчаливый пропуск.
+    actuals: list[ActualPayment] = []
+    if SHEET_ACTUALS in xl.sheet_names:
+        actuals = _load_actuals(
+            _canonicalize_columns(pd.read_excel(xl, SHEET_ACTUALS), SHEET_ACTUALS),
+            employees,
+        )
     position_bep_limit = _bep_limit_from_position_limits(position_salary_limits)
     if position_bep_limit is not None:
         salary_stability.goz_average_salary_limit = position_bep_limit
@@ -235,8 +281,9 @@ def load_context(path: str | Path, plan_path: str | Path | None = None) -> Plann
         secret_allowances=secret_allowances,
         baseline_plan=baseline_plan,
         allow_deficit=allow_deficit,
+        frozen_through=frozen_through,
+        actuals=actuals,
     )
-    xl.close()
     return ctx
 
 
@@ -403,6 +450,80 @@ def _position_salary_limits_from_limits_sheet(
     return rows
 
 
+def _load_position_limits_monthly(
+    df: pd.DataFrame,
+    limits: list[PositionSalaryLimit],
+    employees: list[Employee],
+) -> list[PositionSalaryLimit]:
+    """Лист «лимиты_по_месяцам»: величины справочника, действующие не весь год.
+
+    По строке на пару «должность — месяц», только где величина месяца не
+    равна строке справочника; пустая графа — величина строки. Ошибка в листе
+    — ошибка входа, как у зарплаты по месяцам: потерянный оклад после
+    индексации дал бы план со старым окладом, который выглядит правильным.
+    Оклад по месяцам ложится на строки сотрудников этой должности, П2556, П4
+    и БЭП — на строку справочника."""
+    from dataclasses import replace
+
+    rows = [(idx, r) for idx, r in df.iterrows()
+            if any(_has_value(r.get(col)) for col in ("position", "month"))]
+    if not rows:
+        return limits
+    for col, title in (("position", "должность"), ("month", "месяц")):
+        if col not in df.columns:
+            raise ValueError(f"В листе {SHEET_POSITION_LIMITS_MONTHLY} нет графы «{title}»")
+    by_pos = {normalize_position(row.position): row for row in limits}
+    extra: dict[str, dict[str, dict[int, float]]] = {}
+    salary: dict[str, dict[int, float]] = {}
+    for idx, r in rows:
+        where = f"В листе {SHEET_POSITION_LIMITS_MONTHLY}, строка {idx + 2}"
+        position = _clean_optional_text(r.get("position"))
+        if not position:
+            raise ValueError(f"{where}: не указана должность")
+        key = normalize_position(position)
+        month = _wage_month(r.get("month"))
+        if month is None:
+            raise ValueError(f"{where}: месяц у должности «{position}» — нужен номер от 1 до 12")
+        for col, title in (("reference_salary_for_rate", "оклад"),
+                           ("order_2556_limit", "П2556"), ("p4_limit", "П4"),
+                           ("bep_limit", "БЭП")):
+            raw = r.get(col)
+            if not _has_value(raw):
+                continue
+            try:
+                value = float("".join(str(raw).split()).replace(",", "."))
+            except ValueError:
+                value = math.nan
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(
+                    f"{where}: {title} «{str(raw).strip()}» у должности «{position}», "
+                    f"месяц {month} — не число")
+            if col == "reference_salary_for_rate":
+                salary.setdefault(key, {})[month] = value
+            else:
+                if key not in by_pos:
+                    raise ValueError(
+                        f"{where}: должности «{position}» нет в листе {SHEET_POSITION_LIMITS}")
+                extra.setdefault(key, {}).setdefault(col, {})[month] = value
+    for employee in employees:
+        months = salary.get(normalize_position(employee.position))
+        if months:
+            employee.reference_salary_by_month = dict(months)
+    out = []
+    for row in limits:
+        got = extra.get(normalize_position(row.position))
+        if not got:
+            out.append(row)
+            continue
+        out.append(replace(
+            row,
+            order_2556_by_month=dict(got.get("order_2556_limit") or {}),
+            p4_by_month=dict(got.get("p4_limit") or {}),
+            bep_by_month=dict(got.get("bep_limit") or {}),
+        ))
+    return out
+
+
 def _bep_limit_from_position_limits(
     position_salary_limits: list[PositionSalaryLimit],
 ) -> float | None:
@@ -510,6 +631,11 @@ def _load_employees(
                 end_date=_parse_date(r.get("end_date")),
                 allowed_contracts=_split_list(r.get("allowed_contracts")),
                 forbidden_contracts=_split_list(r.get("forbidden_contracts")),
+                account=(
+                    str(r.get("account")).strip()
+                    if _has_value(r.get("account"))
+                    else None
+                ),
                 equivalence_group=ref.equivalence_group if ref else None,
                 extra_positions=frozenset(
                     covers.get(normalize_position(position), frozenset())
@@ -527,6 +653,227 @@ def _load_employees(
 
 def _has_value(value: object) -> bool:
     return value is not None and not pd.isna(value) and str(value).strip() != ""
+
+
+def _wage_month(value: object) -> int | None:
+    """Номер месяца из графы «месяц»: целое от 1 до 12, иначе None.
+
+    Графу с пустыми ячейками pandas читает дробными числами, поэтому 4.0 — тот
+    же апрель; 4,5 или «апрель» — ошибка: в листе месяц записывается числом.
+    """
+    if isinstance(value, bool) or not _has_value(value):
+        return None
+    try:
+        number = float(str(value).strip().replace(",", "."))
+    except ValueError:
+        return None
+    if not number.is_integer() or not 1 <= number <= 12:
+        return None
+    return int(number)
+
+
+def _load_monthly_wages(df: pd.DataFrame, employees: list[Employee]) -> None:
+    """Зарплата строк сотрудников по месяцам — лист «зарплата_по_месяцам».
+
+    Зарплата меняется в течение года (правило 1, решение пользователя
+    19.09.2026), а на листе сотрудников у строки одна сумма. Лист длинный: по
+    строке на пару «код строки — месяц», и только там, где сумма месяца своя;
+    остальные месяцы берут зарплату листа сотрудников. Ошибка в листе —
+    ошибка входа, а не пропуск: потерянная сумма месяца дала бы план с
+    прежней зарплатой, который выглядит правильным.
+    """
+    columns = {"id": "код строки", "month": "месяц", "monthly_wage": "зарплата"}
+    rows = [(idx, r) for idx, r in df.iterrows()
+            if any(_has_value(r.get(col)) for col in columns)]
+    if not rows:
+        return
+    missing = [title for col, title in columns.items() if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"В листе {SHEET_MONTHLY_WAGES} нет граф: {', '.join(missing)}"
+        )
+    by_id = {e.id: e for e in employees}
+    for idx, r in rows:
+        where = f"В листе {SHEET_MONTHLY_WAGES}, строка {idx + 2}"
+        code = str(r.get("id")).strip() if _has_value(r.get("id")) else ""
+        if not code:
+            raise ValueError(f"{where}: не указан код строки")
+        employee = by_id.get(code)
+        if employee is None:
+            raise ValueError(
+                f"{where}: код строки «{code}» не найден в листе {SHEET_EMPLOYEES}"
+            )
+        raw_month = r.get("month")
+        month = _wage_month(raw_month)
+        if month is None:
+            shown = str(raw_month).strip() if _has_value(raw_month) else "пусто"
+            raise ValueError(
+                f"{where}: месяц «{shown}» у строки «{code}» — "
+                f"нужен номер месяца от 1 до 12"
+            )
+        raw_amount = r.get("monthly_wage")
+        if not _has_value(raw_amount):
+            raise ValueError(
+                f"{where}: не указана зарплата у строки «{code}», месяц {month}"
+            )
+        try:
+            # Пробелы разрядов, в том числе неразрывные, и запятая дроби.
+            amount = float("".join(str(raw_amount).split()).replace(",", "."))
+        except ValueError:
+            amount = math.nan
+        if not math.isfinite(amount):
+            raise ValueError(
+                f"{where}: зарплата «{str(raw_amount).strip()}» у строки «{code}», "
+                f"месяц {month} — не число"
+            )
+        if amount < 0:
+            raise ValueError(
+                f"{where}: отрицательная зарплата «{str(raw_amount).strip()}» у строки "
+                f"«{code}», месяц {month}"
+            )
+        if amount == 0:
+            # Ноль пока запрещён (решение пользователя 19.09.2026): месяц без
+            # оклада среди оплачиваемых делает план нерешаемым — оклад держится
+            # блоком не короче трёх месяцев, а внятной причины решатель не даёт.
+            raise ValueError(
+                f"{where}: нулевая зарплата у строки «{code}», месяц {month} — "
+                f"ноль в месяце пока не допускается"
+            )
+        known = employee.monthly_wages.get(month)
+        if known is not None and abs(known - amount) > 0.005:
+            # Две суммы на один месяц: какая из них действует, по листу не
+            # понять, а молча взять последнюю — угадать за экономиста.
+            raise ValueError(
+                f"{where}: у строки «{code}» на месяц {month} две суммы — "
+                f"{known:.2f} и {amount:.2f}"
+            )
+        employee.monthly_wages[month] = amount
+
+
+def _frozen_through(value: object) -> int:
+    """«Факт по месяц» из настроек: целое от 0 до 11, пусто — 0 (факта нет).
+
+    Неверное значение — ошибка входа, а не ноль: план, посчитанный без
+    факта, выглядел бы правильным, хотя экономист просил держать прошедшие
+    месяцы.
+    """
+    if isinstance(value, bool) or not _has_value(value):
+        return 0
+    try:
+        number = float(str(value).strip().replace(",", "."))
+    except ValueError:
+        number = math.nan
+    if not math.isfinite(number) or not number.is_integer() \
+            or not 0 <= number <= MAX_FROZEN_THROUGH:
+        raise ValueError(
+            f"В листе {SHEET_SETTINGS}: «факт по месяц» «{str(value).strip()}» — "
+            f"нужно целое от 0 до {MAX_FROZEN_THROUGH}"
+        )
+    return int(number)
+
+
+def _fact_number(raw: object) -> float:
+    """Число ячейки: пробелы разрядов (и неразрывные), запятая дроби."""
+    try:
+        return float("".join(str(raw).split()).replace(",", "."))
+    except ValueError:
+        return math.nan
+
+
+def _load_actuals(df: pd.DataFrame, employees: list[Employee]) -> list[ActualPayment]:
+    """Начисления прошедших месяцев — лист «факт_выплат» (пересчёт с факта).
+
+    Владелец продукта 30.09.2026: «мы знаем, например, что в январе и
+    феврале вот такие суммы были, вот так сотрудники распределены, с такими
+    ставками и надбавками». Строка — начисление строке штатного расписания с
+    договора в месяце одним видом; повторы одной четвёрки складываются
+    (начисление и перерасчёт). Ставка — только у оклада: пусто — выводится
+    как оклад ÷ оклад должности по справочнику (так её читает отчёт
+    сервиса), проверка входа об этом предупреждает. Код строки, которого нет
+    в листе сотрудников, не ошибка: уволенный или снятый с расчёта человек
+    свои деньги с договора уже получил.
+
+    Ошибка в строке — ошибка входа с номером строки: молча отброшенный факт
+    дал бы план, который тратит уже потраченные деньги.
+    """
+    required = {"employee_id": "код строки", "contract_id": "договор", "month": "месяц",
+                "payment_kind": "вид выплаты", "amount": "сумма"}
+    optional = ("rate", "is_main")
+    rows = [(idx, r) for idx, r in df.iterrows()
+            if any(_has_value(r.get(col)) for col in (*required, *optional))]
+    if not rows:
+        return []
+    missing = [title for col, title in required.items() if col not in df.columns]
+    if missing:
+        raise ValueError(f"В листе {SHEET_ACTUALS} нет граф: {', '.join(missing)}")
+    by_id = {e.id: e for e in employees}
+    # (строка, договор, месяц, вид) → [сумма, ставка, основное место, где]
+    merged: dict[tuple[str, str, int, PaymentKind], list] = {}
+    for idx, r in rows:
+        where = f"В листе {SHEET_ACTUALS}, строка {idx + 2}"
+        code = str(r.get("employee_id")).strip() if _has_value(r.get("employee_id")) else ""
+        contract = str(r.get("contract_id")).strip() if _has_value(r.get("contract_id")) else ""
+        if not code:
+            raise ValueError(f"{where}: не указан код строки")
+        if not contract:
+            raise ValueError(f"{where}: не указан договор у строки «{code}»")
+        raw_month = r.get("month")
+        month = _wage_month(raw_month)
+        if month is None:
+            shown = str(raw_month).strip() if _has_value(raw_month) else "пусто"
+            raise ValueError(f"{where}: месяц «{shown}» у строки «{code}» — "
+                             f"нужен номер месяца от 1 до 12")
+        raw_kind = r.get("payment_kind")
+        if not _has_value(raw_kind):
+            raise ValueError(f"{where}: не указан вид выплаты у строки «{code}», месяц {month}")
+        try:
+            kind = parse_payment_kind(raw_kind)
+        except ValueError:
+            raise ValueError(f"{where}: вид выплаты «{str(raw_kind).strip()}» у строки «{code}» — "
+                             f"нужен один из: оклад, 120, 122, 124, 152, приказ") from None
+        raw_amount = r.get("amount")
+        if not _has_value(raw_amount):
+            raise ValueError(f"{where}: не указана сумма у строки «{code}», месяц {month}")
+        amount = _fact_number(raw_amount)
+        if not math.isfinite(amount):
+            raise ValueError(f"{where}: сумма «{str(raw_amount).strip()}» у строки «{code}», "
+                             f"месяц {month} — не число")
+        rate = None
+        raw_rate = r.get("rate") if "rate" in df.columns else None
+        if kind is PaymentKind.SALARY and _has_value(raw_rate):
+            rate = _fact_number(raw_rate)
+            if not math.isfinite(rate) or rate < 0:
+                raise ValueError(f"{where}: ставка «{str(raw_rate).strip()}» у строки «{code}», "
+                                 f"месяц {month} — нужно неотрицательное число")
+        is_main = _optional_bool(r.get("is_main")) if "is_main" in df.columns else None
+        slot = merged.setdefault((code, contract, month, kind), [0.0, None, None, where])
+        slot[0] += amount
+        if rate is not None:
+            slot[1] = rate if slot[1] is None else max(slot[1], rate)
+        if is_main is not None:
+            slot[2] = True if (is_main or slot[2]) else False
+    out: list[ActualPayment] = []
+    for (code, contract, month, kind), (amount, rate, is_main, where) in merged.items():
+        if amount < -0.005:
+            raise ValueError(f"{where}: отрицательная сумма {amount:.2f} у строки «{code}», "
+                             f"договор «{contract}», месяц {month}")
+        if abs(amount) <= 0.005:
+            continue
+        derived = False
+        if kind is PaymentKind.SALARY and rate is None:
+            employee = by_id.get(code)
+            reference = getattr(employee, "reference_salary_for_rate", None)
+            # Оклад этого месяца: после индексации ставка — из нового оклада.
+            reference = (getattr(employee, "reference_salary_by_month", None) or {}).get(
+                month, reference)
+            if reference and reference > 0:
+                rate, derived = round(amount / reference, 4), True
+        out.append(ActualPayment(
+            employee_id=code, contract_id=contract, month=month, payment_kind=kind,
+            amount=round(amount, 2), rate=rate if kind is PaymentKind.SALARY else None,
+            is_main=is_main if kind is PaymentKind.SALARY else None, rate_derived=derived,
+        ))
+    return out
 
 
 def _optional_deadline(row: pd.Series, column: str) -> date | None:
@@ -619,11 +966,15 @@ def _load_secret_allowances(df: pd.DataFrame) -> list[SecretAllowance]:
             raise ValueError(
                 f"В листе {SHEET_SECRET_ALLOWANCES} не указан договор секретности для сотрудника {employee_id!r}"
             )
+        pay = r.get("pay_contract_id")
         rows.append(
             SecretAllowance(
                 employee_id=employee_id,
                 secret_contract_id=secret_contract_id,
                 rate=_normalize_secret_allowance_rate(r.get("rate")),
+                start_date=_optional_deadline(r, "start_date"),
+                end_date=_optional_deadline(r, "end_date"),
+                pay_contract_id=str(pay).strip() if _has_value(pay) else None,
             )
         )
     return rows
@@ -896,17 +1247,37 @@ def _apply_matrix_min_balances(contracts: list[Contract], df: pd.DataFrame, year
 
 def _load_manual_assignments(df: pd.DataFrame) -> list[ManualAssignment]:
     rows: list[ManualAssignment] = []
-    for _, r in df.iterrows():
+    for idx, r in df.iterrows():
+        employee_id = str(r["employee_id"]).strip()
+        contract_id = str(r["contract_id"]).strip()
         fixed = r.get("fixed_amount")
+        raw_kind = r.get("payment_kind")
+        # Пустой «вид выплаты» — закрепление без вида (MANUAL-ANY-001, решение
+        # пользователя 19.09.2026): платить с договора надо, а вид выбирает
+        # расчёт. Раньше пустая графа молча читалась как оклад, и закрепление
+        # на договоре без оклада просто терялось.
+        kind = parse_payment_kind(raw_kind) if _has_value(raw_kind) else None
+        if kind is None and _has_value(fixed):
+            # Сумма бывает только у конкретного вида: какой выплатой платить
+            # её без вида, по листу не понять, а отбросить её или назначить
+            # окладом — угадать за экономиста.
+            raise ValueError(
+                f"В листе {SHEET_MANUAL_ASSIGNMENTS}, строка {idx + 2}: сумма закрепления "
+                f"без вида выплаты «{str(fixed).strip()}» у сотрудника «{employee_id}», "
+                f"договор «{contract_id}» — сумма задаётся только вместе с видом выплаты"
+            )
         rows.append(
             ManualAssignment(
-                employee_id=str(r["employee_id"]).strip(),
-                contract_id=str(r["contract_id"]).strip(),
+                employee_id=employee_id,
+                contract_id=contract_id,
                 year=int(r.get("year", date.today().year)),
                 month_from=int(r["month_from"]),
                 month_to=int(r["month_to"]),
-                payment_kind=parse_payment_kind(r.get("payment_kind")),
+                payment_kind=kind,
                 fixed_amount=float(fixed) if pd.notna(fixed) else None,
+                # Графа необязательная: «да» — по возможности вся зарплата с
+                # этого договора (члены рабочей группы, 30.09.2026).
+                whole_if_possible=bool(_optional_bool(r.get("whole_if_possible"))),
             )
         )
     return rows
@@ -935,6 +1306,13 @@ def _load_plan_overrides(df: pd.DataFrame, default_year: int) -> list[Allocation
     for _, r in df.iterrows():
         locked = _bool(r.get("lock"), False)
         if not locked:
+            continue
+        # Строка факта зафиксирована, но не закреплением: прошедший месяц
+        # берётся из листа «факт_выплат» нового входа. Прочитанная как
+        # закрепление, она при меньшем «факт по месяц» требовала бы прежнюю
+        # сумму истории — например, оклад на ставку 0,3, которого расчёт не
+        # выберет.
+        if _clean_optional_text(r.get("source")) == "fact":
             continue
         month = _month_from_column(r.get("month"))
         if month is None:

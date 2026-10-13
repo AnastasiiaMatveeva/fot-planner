@@ -23,7 +23,7 @@ import datetime as dt
 import os
 
 from sqlalchemy import (
-    DateTime, Float, ForeignKey, Integer, String, Text, create_engine,
+    Boolean, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, event,
 )
 from sqlalchemy.orm import (
     DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker,
@@ -70,6 +70,10 @@ class Case(Base):
     # (ручные назначения), запреты и настройки расчёта. JSON, живёт с планом
     # и уходит в каждый расчёт, пока экономист не снимет.
     plan_settings: Mapped[str | None] = mapped_column(Text, default=None)
+    # Основание расчёта этого плана (SOURCE-003): договоры, снятые с расчёта,
+    # и версии документов, выбранные вместо последних. JSON. Реестр общий, а
+    # варианты плана считают разное: «без гранта», «по прежней редакции РКМ».
+    plan_basis: Mapped[str | None] = mapped_column(Text, default=None)
 
     employees: Mapped[list["Employee"]] = relationship(back_populates="case",
                                                        cascade="all, delete-orphan")
@@ -118,6 +122,11 @@ class Employee(Base):
     employment_category: Mapped[str | None] = mapped_column(String(40), default=None)
     allowed_contracts: Mapped[str | None] = mapped_column(String(300), default=None)
     forbidden_contracts: Mapped[str | None] = mapped_column(String(300), default=None)
+    # Лицевой счёт, на котором сотрудник сидит сейчас: в штатном расписании он
+    # уже проставлен, и экономист читает по нему, с какого договора человеку
+    # платят (решение пользователя 28.09.2026). В расчёт не уходит — это
+    # справка о текущем положении, а не переменная решателя.
+    account: Mapped[str | None] = mapped_column(String(60), default=None)
     source: Mapped[str | None] = mapped_column(String(300), default=None)
     # Из какого документа взята строка. По имени файла связь ненадежна:
     # документ можно загрузить повторно или удалить, и данные должны уйти
@@ -240,6 +249,13 @@ class Document(Base):
     # Что документ дал реестру, когда строк со ссылкой на него нет: величины
     # справочника должностей (JSON).
     gave: Mapped[str | None] = mapped_column(Text, default=None)
+    # Договор, в который файл загружен. Строки договора привязывают документ
+    # к договору и сами, но ТЗ или письмо строк не дают, а относятся к нему.
+    contract_code: Mapped[str | None] = mapped_column(String(60), default=None)
+    # Строки реестра этой версии, записанные при замене новой (JSON). Без
+    # снимка прежнюю версию не выбрать для расчёта: её строки из реестра
+    # удалены, а разбирать файл заново — другой ответ модели.
+    rows_snapshot: Mapped[str | None] = mapped_column(Text, default=None)
 
     case: Mapped[Case] = relationship(back_populates="documents")
 
@@ -355,6 +371,14 @@ class Run(Base):
 
 engine = create_engine("sqlite:///" + DB_PATH, future=True,
                        connect_args={"check_same_thread": False})
+
+
+@event.listens_for(engine, "connect")
+def _wal(dbapi_conn, _record):
+    """Журнал WAL: чтение не ждёт записи, и несколько пользователей вместе с
+    фоновыми потоками (heartbeat, предпросмотры) реже упираются в «database is
+    locked». Режим записывается в файл базы; рядом появляются -wal и -shm."""
+    dbapi_conn.execute("PRAGMA journal_mode=WAL")
 SessionLocal = sessionmaker(bind=engine, autoflush=False, future=True)
 
 
@@ -420,6 +444,193 @@ class SecretAllowance(Base):
     employee_code: Mapped[str] = mapped_column(String(60))
     secret_contract_code: Mapped[str | None] = mapped_column(String(60), default=None)
     rate: Mapped[float | None] = mapped_column(Float, default=None)
+    # Окно выплаты: пусто — срок договора секретности. Договор выплаты —
+    # закреплённый экономистом: его счёт на 23 платит 120 без оклада, иначе
+    # оклад в эти месяцы идёт туда же (правило 10, дополнение 18.09.2026).
+    date_from: Mapped[str | None] = mapped_column(String(20), default=None)
+    date_to: Mapped[str | None] = mapped_column(String(20), default=None)
+    pay_contract_code: Mapped[str | None] = mapped_column(String(60), default=None)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
+
+
+class SalaryRow(Base):
+    """Строка таблицы «Заработная плата по месяцам»: сотрудник в году.
+
+    Строку приносит документ зарплаты или экономист, выбрав сотрудника по ФИО
+    из штатного расписания (решение пользователя 19.09.2026). Связь — по коду
+    строки штатного расписания, как у надбавки 120: строку штатки
+    перезаписывает новый файл, а строка зарплаты остаётся.
+    """
+
+    __tablename__ = "salary_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_code: Mapped[str] = mapped_column(String(60))
+    year: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
+    # Управленческое подразделение строки (01.10.2026, MgmtDepartment). У
+    # человека строк может быть несколько — по одной на подразделение, со
+    # своими суммами; зарплата месяца — их сумма.
+    mgmt_department_id: Mapped[int | None] = mapped_column(Integer, default=None)
+
+
+class MgmtDepartment(Base):
+    """Управленческое подразделение (01.10.2026): внутренняя структура для
+    отчёта руководству — отдельная от подразделения штатного расписания, как
+    «Структура предприятия» рядом с «Подразделениями организации» в 1С.
+    Порядок задаёт экономист: в нём подразделения стоят в отчёте."""
+
+    __tablename__ = "mgmt_departments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    position: Mapped[int | None] = mapped_column(Integer, default=None)
+    note: Mapped[str | None] = mapped_column(String(300), default=None)
+
+
+class SalaryMonth(Base):
+    """Зарплата строки штатного расписания в одном месяце года.
+
+    Зарплата меняется в течение года, а в штатном расписании у строки одна
+    сумма. Здесь лежат только месяцы, где сумма своя; в остальных действует
+    зарплата штатного расписания. Сумма из документа уходит вместе с ним;
+    сумма, введённая в ячейке, — без документа, её не перепишет следующий файл.
+    """
+
+    __tablename__ = "salary_months"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_code: Mapped[str] = mapped_column(String(60))
+    year: Mapped[int] = mapped_column(Integer)
+    month: Mapped[int] = mapped_column(Integer)
+    amount: Mapped[float] = mapped_column(Float)
+    # Строка таблицы зарплаты, которой принадлежит сумма (01.10.2026): у
+    # человека в двух подразделениях две строки и две суммы месяца.
+    salary_row_id: Mapped[int | None] = mapped_column(Integer, default=None)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
+
+
+class ActualPayment(Base):
+    """Факт начислений месяца: сотрудник, договор, вид выплаты, сумма, ставка.
+
+    Пересчёт по факту (решение пользователя 30.09.2026): прошедшие месяцы
+    план берёт как были начислены, а не пересчитывает. Факт один на
+    организацию и год, как штатное расписание, — строка общая, без плана;
+    план выбирает, по какой месяц его учитывать (basis, «факт по»).
+
+    ``employee_code`` — код строки штатного расписания, а если человек в нём
+    не нашёлся — табельный номер или ФИО из файла (``matched`` ложно): его
+    деньги с договора уже потрачены и в расчёте учитываются. Договор, который
+    не нашёлся, остаётся пустым — такая строка в расчёт не идёт.
+    """
+
+    __tablename__ = "actual_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    employee_code: Mapped[str | None] = mapped_column(String(200), default=None)
+    person_code: Mapped[str | None] = mapped_column(String(60), default=None)
+    fio: Mapped[str | None] = mapped_column(String(200), default=None)
+    contract_code: Mapped[str | None] = mapped_column(String(60), default=None)
+    contract_text: Mapped[str | None] = mapped_column(String(300), default=None)
+    year: Mapped[int] = mapped_column(Integer)
+    month: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(String(20))
+    amount: Mapped[float] = mapped_column(Float)
+    rate: Mapped[float | None] = mapped_column(Float, default=None)
+    is_main: Mapped[bool | None] = mapped_column(Boolean, default=None)
+    matched: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
+
+
+class WorkOrder(Base):
+    """Приказ о рабочей группе договора или о внесении в него изменений.
+
+    Вход плана (решение пользователя 28.09.2026): для каждого договора
+    руководитель темы формирует рабочую группу («Положение об оплате труда»,
+    п. 4.1.3), и выплаты с договора опираются на её состав. Сумм приказ не
+    содержит — их устанавливают приказы о стимулирующих выплатах. Договор
+    находится по лицевому счёту или номеру соглашения; не нашёлся — его
+    выбирает экономист, поэтому ``contract_code`` может быть пуст.
+    """
+
+    __tablename__ = "work_orders"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #: «создание» или «изменение».
+    kind: Mapped[str] = mapped_column(String(20), default="создание")
+    number: Mapped[str | None] = mapped_column(String(60), default=None)
+    date: Mapped[str | None] = mapped_column(String(20), default=None)
+    #: У приказа об изменении — номер и дата изменяемого приказа.
+    base_number: Mapped[str | None] = mapped_column(String(60), default=None)
+    base_date: Mapped[str | None] = mapped_column(String(20), default=None)
+    contract_code: Mapped[str | None] = mapped_column(String(60), default=None)
+    agreement: Mapped[str | None] = mapped_column(String(120), default=None)
+    agreement_date: Mapped[str | None] = mapped_column(String(20), default=None)
+    topic: Mapped[str | None] = mapped_column(String(500), default=None)
+    account: Mapped[str | None] = mapped_column(String(60), default=None)
+    kfo: Mapped[str | None] = mapped_column(String(20), default=None)
+    date_from: Mapped[str | None] = mapped_column(String(20), default=None)
+    date_to: Mapped[str | None] = mapped_column(String(20), default=None)
+    leader: Mapped[str | None] = mapped_column(String(200), default=None)
+    source: Mapped[str | None] = mapped_column(String(300), default=None)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), default=None)
+
+
+class WorkOrderMember(Base):
+    """Строка состава рабочей группы: строка штатного расписания, а не человек.
+
+    Рабочая группа — это связка «человек + должность» (пользователь 28.09.2026):
+    у человека с основной работой и совместительством две строки, и в группу
+    входит конкретная. Строку находят по табельному номеру и должности; не
+    нашлась однозначно — её выбирает экономист, ``employee_code`` пуст.
+    """
+
+    __tablename__ = "work_order_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("work_orders.id", ondelete="CASCADE"))
+    n: Mapped[int | None] = mapped_column(Integer, default=None)
+    #: «включить» или «исключить» — у приказа о создании всегда «включить».
+    action: Mapped[str] = mapped_column(String(20), default="включить")
+    fio: Mapped[str | None] = mapped_column(String(200), default=None)
+    person_code: Mapped[str | None] = mapped_column(String(60), default=None)
+    position: Mapped[str | None] = mapped_column(String(200), default=None)
+    department: Mapped[str | None] = mapped_column(String(300), default=None)
+    work: Mapped[str | None] = mapped_column(Text, default=None)
+    leader: Mapped[str | None] = mapped_column(String(10), default=None)
+    employee_code: Mapped[str | None] = mapped_column(String(60), default=None)
+
+
+class ContractValue(Base):
+    """Величина пакета договора (SOURCE-004): ФОТ периода, норматив года, срок.
+
+    Договор создаёт экономист или реестр договоров, а документы пакета
+    дополняют его: пустые срок и ФОТ заполняются при сборке расчёта, и видно,
+    из какого документа и места взято число. Строкой договора величина не
+    становится — иначе удаление документа стирало бы сам договор.
+    """
+
+    __tablename__ = "contract_values"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contract_code: Mapped[str] = mapped_column(String(60))
+    field: Mapped[str] = mapped_column(String(80))
+    year: Mapped[int | None] = mapped_column(Integer, default=None)
+    stage: Mapped[str | None] = mapped_column(String(80), default=None)
+    value: Mapped[float | None] = mapped_column(Float, default=None)
+    text: Mapped[str | None] = mapped_column(String(120), default=None)
+    unit: Mapped[str | None] = mapped_column(String(20), default=None)
+    label: Mapped[str | None] = mapped_column(String(300), default=None)
+    place: Mapped[str | None] = mapped_column(String(200), default=None)
     source: Mapped[str | None] = mapped_column(String(300), default=None)
     document_id: Mapped[int | None] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), default=None)
@@ -630,13 +841,15 @@ _ADDED_COLUMNS = {
     # Переписка по документу живет в тех же сообщениях, что и лента плана,
     # только с ссылкой на документ вместо плана.
     "messages": [("document_id", "INTEGER")],
-    "cases": [("muted_docs", "TEXT"), ("plan_settings", "TEXT")],
+    "cases": [("muted_docs", "TEXT"), ("plan_settings", "TEXT"), ("plan_basis", "TEXT")],
     "documents": [("version", "INTEGER"), ("supersedes_id", "INTEGER"),
                   ("scope", "VARCHAR(20)"),
                   ("sha256", "VARCHAR(64)"),
                   # Что документ дал реестру, когда это не строки со ссылкой
                   # на него: величины справочника должностей.
-                  ("gave", "TEXT")],
+                  ("gave", "TEXT"),
+                  # Договор, в который загружен, и снимок строк версии.
+                  ("contract_code", "VARCHAR(60)"), ("rows_snapshot", "TEXT")],
     "proposals": [("grade", "VARCHAR(20)"), ("reason", "TEXT"),
                   ("context_sha256", "VARCHAR(64)")],
     "runs": [("sources", "TEXT"), ("executor", "VARCHAR(120)"),
@@ -650,11 +863,19 @@ _ADDED_COLUMNS = {
                  ("context_sha256", "VARCHAR(64)")],
     "employees": [
         ("person_code", "VARCHAR(60)"),
+        ("account", "VARCHAR(60)"),
         ("department", "VARCHAR(200)"),
         ("employment_type", "VARCHAR(40)"),
         ("employment_category", "VARCHAR(40)"),
         ("allowed_contracts", "VARCHAR(300)"),
         ("forbidden_contracts", "VARCHAR(300)"),
+    ],
+    "salary_rows": [("mgmt_department_id", "INTEGER")],
+    "salary_months": [("salary_row_id", "INTEGER")],
+    "secret_allowances": [
+        ("date_from", "VARCHAR(20)"),
+        ("date_to", "VARCHAR(20)"),
+        ("pay_contract_code", "VARCHAR(60)"),
     ],
     "contracts": [
         ("account", "VARCHAR(60)"),
@@ -679,6 +900,11 @@ def init_db():
                 if name not in have:
                     conn.execute(text("ALTER TABLE %s ADD COLUMN %s %s"
                                       % (table, name, kind)))
+        # Суммы месяцев без строки (до 01.10.2026) — к строке своего кода и
+        # года (миграция 014 делает то же).
+        conn.execute(text("UPDATE salary_months SET salary_row_id = (SELECT MIN(r.id) "
+                          "FROM salary_rows r WHERE r.employee_code = salary_months.employee_code "
+                          "AND r.year = salary_months.year) WHERE salary_row_id IS NULL"))
 
 
 def session():

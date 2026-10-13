@@ -5,6 +5,7 @@ from __future__ import annotations
 from fot_planner.payment_kind import PaymentKind
 
 SHEET_EMPLOYEES = "сотрудники"
+SHEET_MONTHLY_WAGES = "зарплата_по_месяцам"
 SHEET_CONTRACTS = "договоры"
 SHEET_SECRET_ALLOWANCES = "120_надбавка"
 SHEET_CONTRACT_LABOR = "трудоемкость_по_договорам"
@@ -16,7 +17,14 @@ SHEET_MANUAL_PROHIBITIONS = "ручные_запреты"
 SHEET_SETTINGS = "настройки"
 SHEET_PLAN = "План выплат"
 SHEET_POSITION_LIMITS = "лимиты_по_должностям"
+# Величины справочника, действующие не весь год (01.10.2026): оклад
+# индексируется с 1 сентября, приказ № 2556 вступает с 1 декабря. Длинный
+# лист — по строке на пару «должность — месяц» там, где величина месяца не
+# равна строке листа «лимиты_по_должностям».
+SHEET_POSITION_LIMITS_MONTHLY = "лимиты_по_месяцам"
 SHEET_SUBSTITUTIONS = "правила_замещения"
+# Начисления прошедших месяцев для пересчёта с факта (30.09.2026).
+SHEET_ACTUALS = "факт_выплат"
 
 EMPLOYEE_COLUMN_ALIASES: dict[str, str] = {
     # Лист SHEET_EMPLOYEES / «сотрудники».
@@ -37,6 +45,20 @@ EMPLOYEE_COLUMN_ALIASES: dict[str, str] = {
     "дата окончания": "end_date",
     "разрешенные договоры": "allowed_contracts",
     "запрещенные договоры": "forbidden_contracts",
+    # Лицевой счёт, на котором сотрудник сидит сейчас. Расчёт им не
+    # пользуется — он нужен экономисту, чтобы видеть, с какого договора
+    # человеку платят (решение пользователя 28.09.2026).
+    "лицевой счет": "account",
+    "лицевой счёт": "account",
+}
+
+MONTHLY_WAGE_COLUMN_ALIASES: dict[str, str] = {
+    # Лист SHEET_MONTHLY_WAGES / «зарплата_по_месяцам»: по строке на пару
+    # «строка сотрудника — месяц», только месяцы со своей суммой (правило 1,
+    # решение пользователя 19.09.2026).
+    "код строки": "id",
+    "месяц": "month",
+    "зарплата": "monthly_wage",
 }
 
 CONTRACT_COLUMN_ALIASES: dict[str, str] = {
@@ -74,6 +96,9 @@ SECRET_ALLOWANCE_COLUMN_ALIASES: dict[str, str] = {
     "сотрудник": "employee_id",
     "договор секретности": "secret_contract_id",
     "ставка 120": "rate",
+    "начало 120": "start_date",
+    "окончание 120": "end_date",
+    "договор выплаты 120": "pay_contract_id",
 }
 
 POSITION_LIMITS_COLUMN_ALIASES: dict[str, str] = {
@@ -89,6 +114,16 @@ POSITION_LIMITS_COLUMN_ALIASES: dict[str, str] = {
     "п4": "p4_limit",
     "бэп": "bep_limit",
     "примечание": "note",
+}
+
+POSITION_LIMITS_MONTHLY_COLUMN_ALIASES: dict[str, str] = {
+    # Лист SHEET_POSITION_LIMITS_MONTHLY / «лимиты_по_месяцам».
+    "должность": "position",
+    "месяц": "month",
+    "оклад": "reference_salary_for_rate",
+    "п2556": "order_2556_limit",
+    "п4": "p4_limit",
+    "бэп": "bep_limit",
 }
 
 SUBSTITUTION_COLUMN_ALIASES: dict[str, str] = {
@@ -142,6 +177,21 @@ MANUAL_RULE_COLUMN_ALIASES: dict[str, str] = {
     "вид выплаты": "payment_kind",
     "фикс сумма": "fixed_amount",
     "сумма": "amount",
+    # Члены рабочей группы: «по возможности вся» зарплата с договора группы
+    # (владелец продукта 30.09.2026) — стадия цели, а не запрет.
+    "по возможности вся": "whole_if_possible",
+}
+
+ACTUALS_COLUMN_ALIASES: dict[str, str] = {
+    # Лист SHEET_ACTUALS / «факт_выплат»: по строке на начисление прошедшего
+    # месяца (пересчёт с факта, владелец продукта 30.09.2026).
+    "код строки": "employee_id",
+    "договор": "contract_id",
+    "месяц": "month",
+    "вид выплаты": "payment_kind",
+    "сумма": "amount",
+    "ставка": "rate",
+    "основное место": "is_main",
 }
 
 BUDGET_COLUMN_ALIASES: dict[str, str] = {
@@ -170,6 +220,9 @@ PLAN_OVERRIDE_COLUMN_ALIASES: dict[str, str] = {
     "сумма": "amount",
     "фикс": "lock",
     "зафиксировано": "lock",
+    # fact — начисление прошедшего месяца: его даёт лист «факт_выплат», а
+    # не прошлый результат (пересчёт с факта, 30.09.2026).
+    "источник решения": "source",
 }
 
 SETTINGS_COLUMN_ALIASES: dict[str, str] = {
@@ -184,10 +237,14 @@ SETTINGS_COLUMN_ALIASES: dict[str, str] = {
     "допуск трудоемкости": "goz_labor_tolerance",
     "штраф отклонения трудоемкости": "weight_labor_deviation",
     "штраф нестабильности сумм выплат": "weight_payment_change",
+    # Последний прошедший месяц: 1…F берутся из листа «факт_выплат» и не
+    # меняются (пересчёт с факта, 30.09.2026). Пусто или 0 — факта нет.
+    "факт по месяц": "frozen_through",
 }
 
 COLUMN_ALIASES_BY_SHEET: dict[str, dict[str, str]] = {
     SHEET_EMPLOYEES: EMPLOYEE_COLUMN_ALIASES,
+    SHEET_MONTHLY_WAGES: MONTHLY_WAGE_COLUMN_ALIASES,
     SHEET_CONTRACTS: CONTRACT_COLUMN_ALIASES,
     SHEET_SECRET_ALLOWANCES: SECRET_ALLOWANCE_COLUMN_ALIASES,
     SHEET_CONTRACT_LABOR: CONTRACT_LABOR_COLUMN_ALIASES,
@@ -199,7 +256,9 @@ COLUMN_ALIASES_BY_SHEET: dict[str, dict[str, str]] = {
     SHEET_SETTINGS: SETTINGS_COLUMN_ALIASES,
     SHEET_PLAN: PLAN_OVERRIDE_COLUMN_ALIASES,
     SHEET_POSITION_LIMITS: POSITION_LIMITS_COLUMN_ALIASES,
+    SHEET_POSITION_LIMITS_MONTHLY: POSITION_LIMITS_MONTHLY_COLUMN_ALIASES,
     SHEET_SUBSTITUTIONS: SUBSTITUTION_COLUMN_ALIASES,
+    SHEET_ACTUALS: ACTUALS_COLUMN_ALIASES,
 }
 
 RU_MONTHS = {
@@ -232,3 +291,8 @@ PAYMENT_KIND_INPUT_ALIASES: dict[str, PaymentKind] = {
     label.lower().replace("ё", "е"): kind
     for kind, label in PAYMENT_KIND_RU.items()
 }
+# Короткое имя, которым вид пишет сервис (app/build_input.fill_manual) и
+# лист «факт_выплат»: «приказ». Без него закрепление приказом падало при
+# загрузке («Неизвестный вид выплаты: 'приказ'»), и план с таким
+# закреплением не считался вовсе (30.09.2026).
+PAYMENT_KIND_INPUT_ALIASES["приказ"] = PaymentKind.ORDER_INCENTIVE

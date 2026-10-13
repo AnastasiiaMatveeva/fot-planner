@@ -46,7 +46,8 @@ def build_deficit_by_month_dataframe(ctx: PlanningContext, result: PlanningResul
         total_need = 0.0
         for e in ctx.employees:
             if employee_active_in_month(e, ctx.year, m):
-                total_need += employee_monthly_payment_due(e)
+                # Потребность месяца — зарплата этого месяца (правило 1).
+                total_need += employee_monthly_payment_due(e, m)
 
         paid = sum(a.amount for a in result.allocations if a.month == m)
         month_deficit = sum(d.amount for d in result.deficits if d.month == m)
