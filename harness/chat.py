@@ -254,16 +254,22 @@ def c08(app):
     return out
 
 
-@case("ч09", "Правка поля пишется в реестр и отражается в ленте")
+@case("ч09", "Правка поля отражается в ленте; оклад сотрудника — в таблицу зарплаты по месяцам")
 def c09(app):
     out = []
     app.say("у Петрова оклад 90 000",
             model(reply="Записал.", action="заполнить поле",
                   edits=[{"entity": "сотрудник", "key": "E1", "field": "оклад",
                           "value": "90000"}]))
+    app.db.expire_all()
     emp = app.db.query(app.db_mod.Employee).filter_by(code="E1").first()
-    app.db.refresh(emp)
-    expect(float(emp.salary) == 90000, "оклад в реестре %s" % emp.salary, out)
+    # Зарплаты в штатном расписании нет (решение пользователя 19.09.2026):
+    # сумма — во все месяцы срока строки в году плана, штатка не меняется.
+    got = sorted((m.month, m.amount) for m in app.db.query(app.db_mod.SalaryMonth)
+                 .filter_by(employee_code="E1", year=2026).all())
+    expect(got == [(m, 90000.0) for m in range(1, 13)], "зарплата по месяцам %s" % got, out)
+    expect(float(emp.salary) == 100000, "оклад переписан в штатном расписании: %s" % emp.salary,
+           out)
     expect(any("90" in t for _w, t in app.messages()[-2:]), "в ленте нет строки о правке", out)
     return out
 
@@ -373,6 +379,205 @@ def c17(app):
     expect(len(app.runs()) == 0, "появился прогон", out)
     expect(not app.plan_settings()["назначения"], "появилось закрепление", out)
     expect(not app.solved, "решатель вызван", out)
+    return out
+
+
+# ── CHAT-TUNING-001: агент «Настройка расчёта» на слабой модели ──────────
+@case("ч18", "Вопрос со словом «дефицит» или числом договоров ничего не меняет и не считает")
+def c18(app):
+    out = []
+    app.add_run("OPTIMAL")
+    r = app.say("почему в плане дефицит?", model(reply="Дефицита в плане нет."))
+    expect(not app.plan_settings()["настройки"],
+           "вопрос записал настройку: %s" % app.plan_settings()["настройки"], out)
+    expect(len(app.runs()) == 1, "вопрос про дефицит запустил пересчёт", out)
+    expect(r.get("action") == "ничего", "действие %s вместо «ничего»" % r.get("action"), out)
+    r = app.say("почему у Петрова 3 договора оклада?", model(reply="Так сложилось по деньгам."))
+    expect(not app.plan_settings()["настройки"],
+           "вопрос про договоры оклада стал пределом: %s" % app.plan_settings()["настройки"], out)
+    expect(len(app.runs()) == 1, "вопрос про договоры оклада запустил пересчёт", out)
+    return out
+
+
+@case("ч19", "Слова о дефиците читаются по смыслу глагола, а не по слову «дефицит»")
+def c19(app):
+    out = []
+    for text, want in (("убери дефицит", "нет"), ("отключи дефицит", "нет"),
+                       ("дефицит разрешать не надо", "нет"), ("без дефицита", "нет"),
+                       ("разреши дефицит", "да"), ("допусти дефицит выплат", "да"),
+                       ("можно с дефицитом", "да")):
+        got = {d["name"]: d["value"] for d in app.chat.parse_settings(text)}.get("разрешить дефицит")
+        expect(got == want, "«%s» → %s вместо %s" % (text, got, want), out)
+    got = app.chat.parse_settings("у Петрова в марте дефицит")
+    expect(not got, "упоминание дефицита без глагола стало настройкой: %s" % got, out)
+    app.say("разреши дефицит", model(reply="Разрешаю."))
+    app.say("убери дефицит", model(reply="Убираю."))
+    expect(app.plan_settings()["настройки"].get("разрешить дефицит") == "нет",
+           "после «убери дефицит» стоит %s" % app.plan_settings()["настройки"], out)
+    return out
+
+
+@case("ч20", "Претензия действует без действия модели и без её claims")
+def c20(app):
+    out = []
+    app.add_run("OPTIMAL")
+    # Модель назвала цель с заглавной и оставила действие «ничего» —
+    # слабая модель делает так часто; слова и действие не расходятся.
+    r = app.say("слишком много переводов",
+                model(reply="Уменьшу переводы.", action="ничего",
+                      claims=[{"goal": "Переводы", "direction": "меньше", "factor": 2}]))
+    expect(r.get("action") == "расчет", "claims без действия не применились: %s" % r.get("action"), out)
+    w = app.plan_settings().get("веса") or {}
+    expect(w.get("штраф смены договора оклада") == 1000000.0, "вес переводов: %s" % w, out)
+    runs = app.runs()
+    runs[-1].status = "OPTIMAL"
+    app.db.commit()
+    # Модель целей не назвала вовсе — претензия читается из реплики кодом.
+    r = app.say("суммы скачут от месяца к месяцу", model(reply="Понял.", action="ничего"))
+    expect(r.get("action") == "расчет",
+           "претензия словами без claims модели не применилась: %s" % r.get("action"), out)
+    w = app.plan_settings().get("веса") or {}
+    expect(w.get("штраф нестабильности сумм выплат") == 20000.0, "вес стабильности: %s" % w, out)
+    expect(w.get("штраф смены договора оклада") == 1000000.0, "прежний вес потерян: %s" % w, out)
+    s = json.loads(app.runs()[-1].settings or "{}")
+    expect(s.get("штраф нестабильности сумм выплат") == 20000.0
+           and s.get("штраф смены договора оклада") == 1000000.0, "веса не ушли в прогон: %s" % s, out)
+    return out
+
+
+@case("ч21", "Претензия, не сдвинувшая вес, расчёта не запускает и называет правило")
+def c21(app):
+    out = []
+    app.add_run("OPTIMAL")
+    app.say("слишком много приказов",
+            model(reply="Уменьшу приказы.", action="претензия к плану",
+                  claims=[{"goal": "приказы", "direction": "меньше", "factor": 2}]))
+    expect(len(app.runs()) == 1, "претензия к стадии-правилу запустила пересчёт", out)
+    expect("весом не лечится" in app.last(), "агент не назвал правило: %s" % app.last(), out)
+    expect(not app.plan_settings().get("веса"), "веса появились без цели: %s" % app.plan_settings(), out)
+    app.say("мне не нравится", model(reply="Что именно?", action="претензия к плану", claims=[]))
+    expect(len(app.runs()) == 1, "претензия без цели запустила пересчёт", out)
+    expect("перевести не смог" in app.last(), "агент не попросил назвать цель: %s" % app.last(), out)
+    app.say("закрепи Сидорову на гранте",
+            model(reply="Закрепляю.", fixes=[{"employee": "Сидорова", "contract": "C_GRANT-26",
+                                              "month_from": 6, "month_to": 12,
+                                              "kind": "оклад", "mode": "назначить"}]))
+    expect(len(app.runs()) == 1, "закрепление на чужого запустило пересчёт", out)
+    return out
+
+
+@case("ч22", "Претензия во время расчёта не теряется: вес живёт с планом")
+def c22(app):
+    out = []
+    app.add_run("OPTIMAL")
+    busy = app.add_run("идет")
+    r = app.say("всё потрачено в первые месяцы",
+                model(reply="Понял.", action="претензия к плану",
+                      claims=[{"goal": "равномерность", "direction": "больше", "factor": 2}]))
+    expect(r.get("action") == "закреплено", "при идущем расчёте: %s" % r.get("action"), out)
+    expect(len(app.runs()) == 2, "третий прогон при идущем", out)
+    w = app.plan_settings().get("веса") or {}
+    expect(w.get("штраф отклонения от равномерного освоения") == 20000.0, "вес не записан: %s" % w, out)
+    # Следующий расчёт берёт вес из условий плана, как закрепления.
+    busy.status = "OPTIMAL"
+    app.db.commit()
+    data = {"settings": {}, "year": 2026, "contracts": [], "employees": [], "workgroups": []}
+    app.main._apply_plan_settings(data, app.db.get(app.db_mod.Case, app.case.id))
+    expect(data["settings"].get("штраф отклонения от равномерного освоения") == 20000.0,
+           "вес не попал во вход расчёта: %s" % data["settings"], out)
+    return out
+
+
+@case("ч23", "Слова модели о режиме, виде и месяцах читаются, а не ломают закрепление")
+def c23(app):
+    out = []
+    app.say("закрепи Петрова на гранте с июня по декабрь",
+            model(reply="Закрепляю.", fixes=[{"employee": "Петров", "contract": "C_GRANT-26",
+                                              "month_from": "июнь", "month_to": "декабрь",
+                                              "kind": "надбавка 122", "mode": "закрепить"}]))
+    ps = app.plan_settings()
+    expect(len(ps["назначения"]) == 1 and not ps["запреты"],
+           "«закрепить» стало запретом или потерялось: %s" % ps, out)
+    if ps["назначения"]:
+        a = ps["назначения"][0]
+        expect(a["вид"] == "122", "вид «надбавка 122» → %s" % a["вид"], out)
+        expect((a["с"], a["по"]) == (6, 12), "месяцы словами → %s–%s" % (a["с"], a["по"]), out)
+    app.say("Петрову премию с гранта",
+            model(reply="Закрепляю.", fixes=[{"employee": "Петров", "contract": "C_GRANT-26",
+                                              "month_from": 1, "month_to": 12,
+                                              "kind": "премия", "mode": "назначить"}]))
+    expect(len(app.plan_settings()["назначения"]) == 1, "неизвестный вид расширился до любого", out)
+    expect("не знаю" in app.last(), "агент не сказал, что вид неизвестен: %s" % app.last(), out)
+    app.say("сделай что-нибудь с Петровым",
+            model(reply="Делаю.", fixes=[{"employee": "Петров", "contract": "C_GRANT-26",
+                                          "mode": "удвоить"}]))
+    ps = app.plan_settings()
+    expect(len(ps["назначения"]) == 1 and not ps["запреты"], "неизвестный режим что-то записал", out)
+    expect("закрепить, запретить или снять" in app.last(),
+           "агент не переспросил режим: %s" % app.last(), out)
+    return out
+
+
+@case("ч24", "Сотрудник в падеже и договор по названию находятся; двое на одну основу — нет")
+def c24(app):
+    out = []
+    app.say("оставь Иванову на гранте с июня по декабрь",
+            model(reply="Закрепляю.", fixes=[{"employee": "Иванову", "contract": "гранте",
+                                              "month_from": 6, "month_to": 12,
+                                              "kind": "оклад", "mode": "назначить"}]))
+    got = app.plan_settings()["назначения"]
+    expect(len(got) == 1 and got[0]["сотрудник"] == "E2" and got[0]["договор"] == "C_GRANT-26",
+           "закрепление по падежу и названию: %s" % got, out)
+    app.say("Петрова на внебюджет не сажать",
+            model(reply="Запрещаю.", fixes=[{"employee": "Петрова", "contract": "Внебюджет",
+                                             "mode": "не сажать"}]))
+    bans = app.plan_settings()["запреты"]
+    expect(len(bans) == 1 and bans[0]["сотрудник"] == "E1" and bans[0]["договор"] == "C_BASE-26",
+           "запрет по падежу и названию: %s" % bans, out)
+    app.db.add(app.db_mod.Employee(code="E3", fio="Иванова Ирина Ивановна", position="Инженер",
+                                   rate=1.0, salary=90000, source="стенд"))
+    app.db.commit()
+    app.say("сними закрепление Иванова", model(reply="Снимаю.", fixes=[{"employee": "Иванова", "mode": "снять"}]))
+    expect(len(app.plan_settings()["назначения"]) == 1, "снято у одного из двух Ивановых", out)
+    expect("несколько" in app.last(), "двое на одну основу сошли за находку: %s" % app.last(), out)
+    return out
+
+
+@case("ч25", "Имя настройки от модели сопоставляется по основе, а не по букве «ё»")
+def c25(app):
+    out = []
+    app.say("допуск трудоемкости три процента",
+            model(reply="Записал.", settings=[{"name": "Допуск трудоемкости", "value": "3%"}]))
+    expect(app.plan_settings()["настройки"].get("допуск трудоёмкости") == 0.03,
+           "допуск через «е» потерян: %s" % app.plan_settings()["настройки"], out)
+    app.say("дефицит пусть будет",
+            model(reply="Разрешаю.", settings=[{"name": "разрешить дефицит", "value": True}]))
+    expect(app.plan_settings()["настройки"].get("разрешить дефицит") == "да",
+           "булево «да» потеряно: %s" % app.plan_settings()["настройки"], out)
+    return out
+
+
+@case("ч26", "Модель видит условия плана: закрепления, настройки, веса, претензии")
+def c26(app):
+    out = []
+    ctx = app.chat.context(app.db, app.case)
+    expect("Условий плана от экономиста нет" in ctx, "пустые условия не названы", out)
+    app.say("оставь Петрова на гранте с июня по декабрь",
+            model(reply="Закрепляю.", fixes=[{"employee": "Петров", "contract": "C_GRANT-26",
+                                              "month_from": 6, "month_to": 12,
+                                              "kind": "оклад", "mode": "назначить"}]))
+    app.say("допуск трудоёмкости 3 %", model(reply="Записал."))
+    app.add_run("OPTIMAL")
+    app.say("слишком много переводов",
+            model(reply="Понял.", claims=[{"goal": "переводы", "direction": "меньше", "factor": 2}]))
+    app.db.refresh(app.case)
+    ctx = app.chat.context(app.db, app.case)
+    expect("Закрепления экономиста" in ctx and "Петров" in ctx and "C_GRANT-26" in ctx,
+           "закрепление не в контексте", out)
+    expect("допуск трудоёмкости — 0.03" in ctx, "настройка не в контексте", out)
+    expect("Веса целей после претензий" in ctx and "штраф смены договора оклада — 1000000" in ctx,
+           "веса не в контексте", out)
+    expect("Претензии к плану" in ctx and "«переводы»" in ctx, "претензия не в контексте", out)
     return out
 
 

@@ -63,14 +63,59 @@ FIELDS = {
     "сотрудник": {
         "должность": ("position", "pos"),
         "ставка": ("rate", "rate"),
+        # «Оклад» и «зарплата» сотрудника пишутся не в штатное расписание, а
+        # в таблицу «Заработная плата по месяцам» (apply_edits, 19.09.2026).
         "оклад": ("salary", "sal"),
+        "зарплата": ("salary", "sal"),
         "работает с": ("date_from", "from"),
         "работает по": ("date_to", "to"),
     },
 }
 
 #: Поля, где значение — число, а не текст.
-NUMERIC = {"фонд", "ставка", "оклад"}
+NUMERIC = {"фонд", "ставка", "оклад", "зарплата"}
+
+#: Что можно поправить в строке, ждущей подтверждения: слово → ключ строки
+#: предложения. Предложение ещё не в реестре и не в расчёте, поэтому здесь
+#: шире, чем в FIELDS: экономист правит всё, что разборщик достал или
+#: пропустил, а в реестр строка уйдёт только его подтверждением (12.10.2026:
+#: правки из разговора о документе шли мимо предложения в реестр и заводили
+#: там пустые договоры, а само предложение оставалось неверным).
+PROPOSAL_FIELDS = {
+    "договор": {
+        "ГОЗ": "goz", "фонд": "fot", "наименование": "name", "номер": "num",
+        "шифр": "code", "вид": "type", "счет": "account",
+        "действует с": "from", "действует по": "to",
+        "разрешенные выплаты": "kinds",
+        "приоритет 2030": "priority",
+        "основное место": "allow_main", "совместительство": "allow_part",
+        "конечная дата оклада": "salary_deadline",
+        "конечная дата надбавок": "allowance_deadline",
+    },
+    "сотрудник": {
+        "табельный": "code", "ФИО": "fio", "должность": "position",
+        "подразделение": "department", "ставка": "rate", "оклад": "salary",
+        "зарплата": "salary", "тип занятости": "employment",
+        "категория": "category", "работает с": "from", "работает по": "to",
+    },
+    "трудоемкость": {
+        "договор": "contract", "должность": "position",
+        "человеко-месяцы": "person_months", "средняя стоимость": "avg_cost",
+        "людей": "headcount", "год": "year", "с": "from", "по": "to",
+    },
+    "поступление": {
+        "договор": "contract", "год": "year", "месяц": "month", "сумма": "amount",
+    },
+}
+#: Числовые ключи строки предложения.
+PROPOSAL_NUMERIC = {"fot", "rate", "salary", "person_months", "avg_cost",
+                    "headcount", "year", "month", "amount"}
+#: Признаки «да/нет» строки договора.
+PROPOSAL_FLAGS = {"goz", "priority", "allow_main", "allow_part"}
+#: Виды выплат договора: слово в «разрешенные выплаты» → ключ строки.
+PROPOSAL_KINDS = (("оклад", "allow_salary"), ("120", "allow_120"),
+                  ("122", "allow_122"), ("124", "allow_124"),
+                  ("152", "allow_152"), ("приказ", "allow_order"))
 
 SYSTEM = """Ты — агент сервиса планирования фонда оплаты труда. Отвечаешь
 экономисту в рабочей ленте плана.
@@ -166,7 +211,12 @@ SYSTEM = """Ты — агент сервиса планирования фонд
 месяцам; «стабильность сумм» — одинаковые суммы одной выплаты из месяца в
 месяц. В reply назови перевод претензии одной фразой: чего меньше или больше
 и во сколько раз. Претензия, упирающаяся в правило (зарплата целиком, срок договора, П2556),
-весом не лечится — назови правило.
+весом не лечится — назови правило. Приказы и трудоёмкость — тоже не веса:
+сумма приказов минимизируется стадией раньше весов, трудоёмкость держит
+допуск (настройка), поэтому «меньше приказов» и «точнее по трудоёмкости»
+в claims не идут — объясни это в reply. Условия плана, которые уже заданы
+(закрепления, запреты, настройки, веса), перечислены в состоянии плана —
+отвечай по ним, а не по памяти.
 
 Экономист может сам задать переменные решателя — закрепить или запретить:
 «оставь Петрова на гранте с июня по декабрь», «Иванову с ГОЗ только оклад»,
@@ -221,7 +271,7 @@ SHAPE = """Ответь одним объектом JSON:
  "fixes": [{"employee": "ФИО или табельный номер, как назвал экономист",
             "contract": "шифр или название договора",
             "month_from": 6, "month_to": 12,
-            "kind": "оклад | 120 | 122 | 124 | 152 | приказ | null",
+            "kind": "оклад | 120 | 122 | 124 | 152 | приказ | null — вид не назван: любой",
             "amount": null,
             "mode": "назначить | запретить | снять"}],
  "settings": [{"name": "допуск трудоёмкости | разрешить дефицит | макс договоров оклада в год",
@@ -240,7 +290,7 @@ SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "entity": {"type": "string", "enum": list(FIELDS)},
+                    "entity": {"type": "string", "enum": list(PROPOSAL_FIELDS)},
                     "key": {"type": "string"},
                     "field": {"type": "string"},
                     "value": {"type": "string"},
@@ -342,10 +392,13 @@ def _registry_lines(db):
         lines.append("- трудоемкость %s: должность «%s», %s чел.-мес., средняя "
                      "стоимость %s" % (r.contract_code, r.position or "любая",
                                        _n(r.person_months), _n(r.avg_cost)))
+    # Зарплаты в штатном расписании нет (решение пользователя 19.09.2026): она
+    # по месяцам на своей вкладке реестра, и называть модели графу штатки как
+    # зарплату сотрудника — дать ей неверное число.
     for e in emp[:8]:
-        lines.append("- сотрудник %s %s: должность «%s», ставка %s, зарплата %s, "
+        lines.append("- сотрудник %s %s: должность «%s», ставка %s, "
                      "срок %s—%s" % (e.code, e.fio or "", e.position or "",
-                                     _n(e.rate), _n(e.salary),
+                                     _n(e.rate),
                                      e.date_from or "не указан", e.date_to or "не указан"))
     if len(emp) > 8:
         lines.append("- и еще сотрудников: %d" % (len(emp) - 8))
@@ -521,6 +574,13 @@ def context(db, case):
     if off:
         lines.append("Исключены из рассмотрения по просьбе экономиста: " +
                      ", ".join("«%s»" % d.name for d in off[:20]) + ".")
+    # Выбор плана в реестре (SOURCE-003): что снято с расчёта и по какой
+    # версии документа считается — иначе агент уверял бы, что договор в плане.
+    try:
+        import basis
+        lines += basis.describe(db, case)
+    except Exception:  # noqa: BLE001 — контекст разговора не должен падать
+        pass
     if not reg and not box:
         lines.append("Документов пока нет.")
 
@@ -530,6 +590,7 @@ def context(db, case):
     # реестре стояли три человека и два договора.
     lines += _registry_lines(db)
     lines += _result_lines(db, case)
+    lines += conditions_lines(db, case)
 
     open_q = (db.query(Question).filter_by(case_id=case.id, answer=None)
               .order_by(Question.id).all())
@@ -567,8 +628,8 @@ def history(db, case, limit=12):
 
 DOC_NOTE = """Сейчас разговор идет не о плане, а об одном документе из реестра:
 экономист смотрит, что из него извлечено, и поправляет. Если он говорит, что
-величина или строка неверна, — выбери «заполнить поле» с верными значениями,
-если он их назвал; если не назвал — спроси, как верно, коротко. Правь только
+величина или строка неверна, — выбери «заполнить поле» с верными значениями:
+названными им, а если не назвал — найденными в файле (порядок ниже). Правь только
 то, что действительно расходится: если в состоянии документа уже стоит это же
 значение, правку не предлагай, а скажи, что там уже так. Если он
 говорит, что документ не того вида, — «переразобрать документ». Сам вид не
@@ -582,6 +643,82 @@ DOC_NOTE = """Сейчас разговор идет не о плане, а об
 приведи найденное место и прямо признай расхождение. Не повторяй прежний ответ
 только потому, что он есть в истории. Различай дату подписания договора,
 интервал этапа и период выплат: это разные сведения.
+
+«Ты забыл», «не извлёк», «неправильно», «посмотри внимательнее» — это
+поручение найти и исправить, а не вопрос. Порядок такой:
+1. Найди во фрагментах файла место, о котором речь, и процитируй его коротко.
+2. Выведи значение сам и сразу положи его в edits. Не проси подтвердить:
+   строка ждёт подтверждения экономиста и без того, в расчёт она не ушла.
+   Спрашивай, только если в файле правда два разных ответа — назови оба.
+3. В reply скажи, что было, что стало и откуда взял.
+Здесь, в отличие от разговора о плане, значение можно брать не только из слов
+экономиста, но и из фрагментов файла — с указанием места. «Состояние плана»
+в правилах выше для этого разговора — состояние документа вместе с
+фрагментами файла.
+Возражение экономиста — исходная точка, а не спор. Если он говорит «неверно»,
+считай, что ошибка есть, и найди её: не отвечай «извлечено верно», пока не
+назвал, чем ещё могло быть это значение. Типичное: срок этапа, дата письма
+или дата подписания записаны как срок договора — тогда у договора срока в
+этом файле нет, и поле надо очистить (значение «пусто»); сумма в тысячах
+взята как рубли; оклад за ставку взят как зарплата при неполной ставке;
+шифр взят из названия листа, где «/» заменён на «-». У строки трудоемкости
+«с» и «по» — это и есть срок этапа, там ему и место: ошибка бывает только
+у строки договора.
+Значение, которое стоит в строке, меняй, только процитировав место файла,
+которое ему противоречит. «Признаков не нашёл» — не довод: фрагменты
+неполны, и строку заполняли по тексту, которого ты можешь не видеть.
+Но и ошибку не выдумывай, чтобы согласиться: если перечитал, а значение в
+строке уже совпадает с файлом, скажи это прямо, процитируй место и значение
+строки и спроси, что именно он видит иначе. «Вы правы, я ошибся» — только
+когда называешь, что стояло неверно и что стало.
+Шифр, которого в файле нет, ищи в списке известных договоров по названию
+темы, номеру или похожему написанию — и предложи найденный, назвав, почему.
+Ответ «в документе этого нет» допустим, только если ты перечитал фрагменты и
+называешь, где искал. Повторять его на второе возражение нельзя: если
+экономист настаивает, ищи другими словами — синонимы, сокращения, косвенные
+признаки — или прямо спроси, где он это видит.
+
+Значения в документах пишут по-разному, и это не повод их пропускать:
+- «тыс. руб.», «т.р.», «тыс.₽» в шапке графы или рядом с числом — умножь на
+  1000; «млн» — на 1 000 000; суммы прописью переводи в число;
+- кварталы: I — 01.01–31.03, II — 01.04–30.06, III — 01.07–30.09,
+  IV — 01.10–31.12; «II–III кварталы 2026» — с 01.04.2026 по 30.09.2026;
+  «весь год» — с 01.01 по 31.12 года документа; «с первого апреля» —
+  01.04; «текущий год» — год документа;
+- ГОЗ «да» — государственный оборонный заказ, идентификатор
+  государственного контракта (ИГК), отдельный счёт по 275-ФЗ, заказчик
+  Минобороны, приёмка военным представительством (ВП МО), «головной
+  исполнитель ГОЗ», «соисполнитель ГОЗ»; ГОЗ «нет» —
+  внебюджет, коммерческий заказчик, инициативная работа, грант,
+  собственные средства, субсидия на госзадание. Назови признак, по
+  которому решил;
+- тип занятости — только «основное» или «совместительство»; «совм.»,
+  «внутр. совместитель» — совместительство. «Совмещение» — другое понятие,
+  его так не записывай;
+- разрешённые выплаты: «только оклад, надбавки нельзя» — это оклад, а
+  120, 122, 124, 152 и приказ запрещены; перечисли в значении только
+  разрешённые виды;
+- «совместителей не привлекать» — совместительство «нет»;
+- оклад и зарплата сотрудника — месячная сумма при его ставке: «оклад за
+  ставку» 71 000 при 0,5 ставки — это 35 500. Ставку при этом не меняй;
+- «приоритет 2030» — только участие договора в программе «Приоритет 2030».
+  Очерёдность финансирования («в первую очередь», «очередь 3 из 5») —
+  другое: в расчёт она не идёт, так и скажи, а в «приоритет 2030» не клади.
+
+Как править. Строку, которая ждёт подтверждения, правь по её номеру: key —
+«п12», entity — её вид (договор, сотрудник, трудоемкость, поступление).
+Поля строки ожидания:
+- договор: ГОЗ, фонд, наименование, номер, шифр, вид, счет, действует с,
+  действует по, разрешенные выплаты, приоритет 2030, основное место,
+  совместительство, конечная дата оклада, конечная дата надбавок;
+- сотрудник: табельный, ФИО, должность, подразделение, ставка, оклад,
+  тип занятости, категория, работает с, работает по;
+- трудоемкость: договор, должность, человеко-месяцы, средняя стоимость,
+  людей, год, с, по;
+- поступление: договор, год, месяц, сумма.
+Одна правка — одно поле одной строки; несколько строк — несколько правок.
+Строку, уже записанную в реестр, правь по шифру или табельному номеру
+полями из общего списка.
 
 Если к реплике приложен фрагмент документа — лист, строка, графа и текст
 ячейки, — считай, что экономист показывает пальцем именно туда: отвечай про
@@ -649,9 +786,47 @@ def doc_context(db, doc):
     if n_lab:
         lines.append("Строки выше — сохранённый результат разборщика. Отсутствие "
                      "даты или этапа в них не доказывает, что этих сведений нет в файле.")
-    pend = db.query(Proposal).filter_by(document_id=doc.id, state="предложено").count()
+    pend = (db.query(Proposal).filter_by(document_id=doc.id, state="предложено")
+            .order_by(Proposal.id).all())
     if pend:
-        lines.append("Ждут подтверждения экономиста: %d строк." % pend)
+        # Сами строки, а не их число: без них модель отвечала «строк
+        # трудоемкости 0» и «данных нет», хотя разборщик их достал и они ждали
+        # подтверждения (12.10.2026), — и поправить их ей было нечем.
+        lines.append("Ждут подтверждения экономиста (это и есть результат разбора; "
+                     "в реестр и в расчёт они ещё не ушли), %d строк:" % len(pend))
+        for pr in pend[:40]:
+            try:
+                f = json.loads(pr.payload)
+            except ValueError:
+                f = {}
+            # Пустые поля — явно: без них модель брала значение из файла и
+            # уверяла, что оно «уже записано», хотя поле было пустым.
+            shown = ", ".join("%s=%s" % (k, "пусто" if v in (None, "", []) else v)
+                              for k, v in f.items() if k != "months")
+            lines.append("  п%d (%s): %s; откуда: %s%s" % (
+                pr.id, pr.entity, shown or "пусто", pr.evidence or "не указано",
+                "; оценка: %s — %s" % (pr.grade, pr.reason) if pr.reason else ""))
+        lines.append("«пусто» в этих строках значит «разборщик не нашёл», "
+                     "а не «в файле этого нет»; такое поле надо заполнить правкой.")
+    # Шифры, которые уже знает сервис: в реестре и в строках других документов.
+    # Без них агент на «шифр неверный» мог только переспросить, хотя тема
+    # «Гранит-М» лежала соседним документом как ГРН-26/04 (12.10.2026).
+    known = {}
+    for c in db.query(Contract).all():
+        if c.code and c.code not in known:
+            known[c.code] = c.name or ""
+    for pr in (db.query(Proposal).filter(Proposal.entity == "договор",
+                                         Proposal.state == "предложено",
+                                         Proposal.document_id != doc.id).limit(60)):
+        try:
+            f = json.loads(pr.payload)
+        except ValueError:
+            continue
+        if f.get("code") and f["code"] not in known:
+            known[f["code"]] = "%s (ждёт подтверждения)" % (f.get("name") or "")
+    if known:
+        lines.append("Известные договоры: " + "; ".join(
+            "%s %s" % (k, v) if v else k for k, v in list(known.items())[:60]))
     lines.extend(_norms_facts(db, doc))
     return "\n".join(lines)
 
@@ -821,25 +996,392 @@ def reply_doc(db, doc, text, fragment=None):
             "Последние реплики:\n%s%s\n\nНовая реплика экономиста: %s"
             % (doc_context(db, doc), evidence, recent, frag, text))
     try:
-        if name == "anthropic":
-            raw = _ask_anthropic(user, model, SYSTEM + "\n\n" + DOC_NOTE)
-        else:
-            raw = llm._call_openai_compatible(
-                user, doc.name, model, llm._endpoint(name), api_key=llm._key(name),
-                schema=llm._use_schema(name), no_thinking=llm._no_thinking(name),
-                insecure=llm._truthy(__import__("os").environ.get("FOT_LLM_INSECURE_TLS")),
-                system=SYSTEM + "\n\n" + DOC_NOTE, shape=SHAPE, json_schema=SCHEMA,
-                schema_name="chat_reply")
+        raw = _ask_doc(name, model, user, doc.name)
+        said = _agent_said(db, doc)
+        if raw and raw.get("reply") and _repeats(raw["reply"], said):
+            # Заезженная пластинка (12.10.2026): на «да, только оклад» Qwen
+            # слово в слово повторил прошлый ответ. Подсказка «не повторяй»
+            # маленькую модель не держит — переспрашиваем один раз явно.
+            raw = _ask_doc(name, model, user + (
+                "\n\nТвой черновик ответа повторяет то, что ты уже говорил:\n«%s»\n"
+                "Экономист с этим не согласен или уже ответил на твой вопрос. "
+                "Не повторяй его. Исходи из его новой реплики: выведи значение "
+                "и положи правку в edits, либо назови другое место в файле."
+                % raw["reply"].strip()), doc.name) or raw
+        if raw and raw.get("reply") and _claims_fix(raw["reply"]) \
+                and not _real_edits(raw.get("edits")):
+            # «Исправляю на 950 000» трижды подряд — и ни одной правки
+            # (прогон 50 документов, 12.10.2026): слова без действия.
+            again = _ask_doc(name, model, user + (
+                "\n\nТвой черновик говорит, что ты исправляешь:\n«%s»\n"
+                "но в edits нет ни одной правки, и в строке ничего не "
+                "изменится. Положи правку в edits (key — номер строки «пN», "
+                "field — поле, value — значение) или не пиши, что исправляешь."
+                % raw["reply"].strip()), doc.name)
+            if again and again.get("reply"):
+                raw = again
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)}
     if not raw or not raw.get("reply"):
         return {"ok": False, "error": "модель вернула пустой ответ"}
     action = raw.get("action")
-    edits = raw.get("edits")
-    return {"ok": True, "reply": raw["reply"].strip(),
+    edits = _real_edits(raw.get("edits"))
+    reply_text = raw["reply"].strip()
+    kept = _goz_guard(doc, text, edits)
+    if len(kept) != len(edits):
+        reply_text += " " + _goz_guard.note
+        edits = kept
+    kept = _rate_guard(db, doc, text, edits)
+    if len(kept) != len(edits):
+        reply_text += " " + _rate_guard.note
+        edits = kept
+    kept = _evidence_guard(db, doc, text, edits)
+    if len(kept) != len(edits):
+        reply_text += " " + _evidence_guard.note
+        edits = kept
+    if edits and _asks_back(raw["reply"]) and not _claims_fix(raw["reply"]):
+        # Ответ спрашивает «уточните, какая сумма», а правка тем временем
+        # меняет верную зарплату (12.10.2026). Кто спрашивает — не пишет.
+        edits = []
+    return {"ok": True, "reply": reply_text,
             "action": action if action in ACTIONS else "ничего",
             "as_kind": raw.get("as_kind") or None,
-            "edits": edits if isinstance(edits, list) else []}
+            "edits": edits}
+
+
+#: Признаки ГОЗ в тексте документа (SOURCE-016): «да» и «нет». Проверка
+#: детерминированная: на ложное «ГОЗ неверный» Qwen снимал признак, сам
+#: цитируя «заказчик — Министерство обороны» (прогон 50 документов, 12.10.2026).
+_GOZ_YES = re.compile(r"(идентификатор государственного контракта|\bИГК\b|275-ФЗ|"
+                      r"министерств\w* обороны|минобороны|\bВП МО\b|военн\w+ представительств|"
+                      r"оборонн\w+ заказ|гособоронзаказ|\bГОЗ\b)", re.I)
+_GOZ_NO = re.compile(r"(внебюджет|коммерческ|инициативн|\bгрант|собственн\w+ средств|"
+                     r"субсиди)", re.I)
+#: Экономист сам назвал значение — его слово главнее признаков в тексте.
+_GOZ_SAID = re.compile(r"(не\s+гоз|не\s+гособорон|не\s+оборонн|гоз\s*[—:-]?\s*(нет|да)|"
+                       r"это\s+гоз|гоз\s+это|является\s+гоз)", re.I)
+
+
+#: Совместители: «не привлекать» сильнее «можно» в той же фразе.
+_PART_NO = re.compile(r"(совместител\w*[^.\n]{0,30}?(не\s+(привлека|допуска|разреш)\w*|запрещ\w*|"
+                      r"нельзя)|не\s+привлекать\s+совместител|без\s+совместител)", re.I)
+_PART_YES = re.compile(r"совместител\w*[^.\n]{0,30}?(?<!не )(можно|допуска\w*|разреш\w*)", re.I)
+_PART_SAID = re.compile(r"(совместител\w*\s*[—:-]?\s*(можно|нельзя|разреш\w*|запрещ\w*|да|нет|"
+                        r"не\s+привлека\w*)|без\s+совместител)", re.I)
+
+#: Признаки «да/нет», которые сверяются с фразой документа: поле правки →
+#: (признак «да», признак «нет», слова экономиста, «нет» сильнее «да»).
+_FLAG_SIGNS = {
+    "гоз": (_GOZ_YES, _GOZ_NO, _GOZ_SAID, False),
+    "совместительство": (_PART_YES, _PART_NO, _PART_SAID, True),
+}
+
+
+def _goz_guard(doc, said, edits):
+    """Убрать правку признака, которая спорит с фразой документа.
+
+    ГОЗ (SOURCE-016) и совместительство: «нет» при признаке «да» в тексте,
+    «да» при признаке «нет» не проходят, если экономист сам не назвал
+    значение. Случаи 12.10.2026: ГОЗ снимали при «заказчик — Минобороны»,
+    совместителей запрещали при «Внутренние совместители — можно».
+    В ``_goz_guard.note`` — что сказать экономисту.
+    """
+    _goz_guard.note = ""
+    flagged = [e for e in edits if str(e.get("field") or "").strip().lower() in _FLAG_SIGNS]
+    if not flagged:
+        return edits
+    try:
+        source = docread.to_text(doc.path)
+    except Exception:  # noqa: BLE001 — не прочитали: проверять нечем
+        return edits
+    drop, notes = [], []
+    for e in flagged:
+        field = str(e.get("field") or "").strip()
+        yes_re, no_re, said_re, no_wins = _FLAG_SIGNS[field.lower()]
+        if said_re.search(said or ""):
+            continue
+        yes, no = yes_re.search(source), no_re.search(source)
+        if no_wins:
+            yes = yes if not no else None
+        else:
+            no = no if not yes else None
+        v = _goz(e.get("value")) if field.lower() == "гоз" \
+            else _proposal_value("allow_part", e.get("value"))
+        if v == "нет" and yes:
+            drop.append(e)
+            notes.append("%s оставил «да»: в документе сказано «%s». Если всё же нет — "
+                         "скажите прямо." % (field, _quote(source, yes)))
+        elif v == "да" and no:
+            drop.append(e)
+            notes.append("%s оставил «нет»: в документе сказано «%s». Если всё же да — "
+                         "скажите прямо." % (field, _quote(source, no)))
+    _goz_guard.note = " ".join(dict.fromkeys(notes))
+    return [e for e in edits if e not in drop]
+
+
+def _rate_guard(db, doc, said, edits):
+    """Не отменять умножение на ставку без числа от экономиста.
+
+    Зарплата строки — месячная сумма при её ставке (SOURCE-016). На ложное
+    «зарплата неверная» Qwen делил её обратно на ставку: 24 500 при 0,5 →
+    49 000 «за ставку» (прогон 50 документов, 12.10.2026). Правка, равная
+    стоящей зарплате, делённой на неполную ставку, не проходит, если в
+    реплике экономиста нет числа.
+    """
+    from db import Proposal
+
+    _rate_guard.note = ""
+    if re.search(r"\d", said or ""):
+        return edits
+    drop = []
+    for e in edits:
+        if str(e.get("field") or "").strip().lower() not in ("оклад", "зарплата"):
+            continue
+        m = re.fullmatch(r"\s*[пp№#]?\s*(\d+)\s*", str(e.get("key") or ""), re.I)
+        pr = db.get(Proposal, int(m.group(1))) if m else None
+        if pr is None or pr.document_id != doc.id:
+            continue
+        f = json.loads(pr.payload)
+        rate, old, new = _num(f.get("rate")), _num(f.get("salary")), _num(e.get("value"))
+        if rate and 0 < rate < 1 and old and new and abs(new - old / rate) <= 1:
+            drop.append(e)
+            _rate_guard.note = ("Зарплату оставил %s: это месячная сумма при ставке %s "
+                                "(%s за полную ставку × %s). Если сумма другая — назовите её."
+                                % (_shown(old), _shown(rate), _shown(new), _shown(rate)))
+    return [e for e in edits if e not in drop]
+
+
+#: Какие поля строки ожидания проверяются на опору в документе и как.
+_EVIDENCE_NUM = {"fot", "salary", "rate", "person_months", "avg_cost", "headcount", "amount"}
+_EVIDENCE_DATE = {"from", "to", "salary_deadline", "allowance_deadline"}
+#: Только идентификаторы: наименование, вид и должность модель законно
+#: пересказывает своими словами, их по подстроке не проверить.
+_EVIDENCE_TEXT = {"code", "num", "contract", "fio"}
+
+_W_UNITS = {"один": 1, "одна": 1, "одного": 1, "два": 2, "две": 2, "двух": 2, "три": 3, "трёх": 3,
+            "трех": 3, "четыре": 4, "четырёх": 4, "четырех": 4, "пять": 5, "шесть": 6, "семь": 7,
+            "восемь": 8, "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12,
+            "тринадцать": 13, "четырнадцать": 14, "пятнадцать": 15, "шестнадцать": 16,
+            "семнадцать": 17, "восемнадцать": 18, "девятнадцать": 19, "двадцать": 20,
+            "тридцать": 30, "сорок": 40, "пятьдесят": 50, "шестьдесят": 60, "семьдесят": 70,
+            "восемьдесят": 80, "девяносто": 90, "сто": 100, "двести": 200, "триста": 300,
+            "четыреста": 400, "пятьсот": 500, "шестьсот": 600, "семьсот": 700,
+            "восемьсот": 800, "девятьсот": 900}
+_W_SCALE = (("тысяч", 1000), ("миллион", 1_000_000))
+_MON_STEMS = ("янв", "фев", "мар", "апр", "ма[йя]", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
+_MON_LAST = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+def _numbers(text):
+    """Все числа текста: цифрами («4 800», «0,95») и прописью («восемнадцать»)."""
+    out = []
+    for m in re.finditer(r"\d{1,3}(?:[  ]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?", text or ""):
+        v = _num(m.group(0))
+        if v is not None:
+            out.append(v)
+    total, group, any_word = 0, 0, False
+    for w in re.findall(r"[а-яё]+", (text or "").lower()) + [""]:
+        scale = next((s for stem, s in _W_SCALE if w.startswith(stem)), None)
+        if w in _W_UNITS:
+            group += _W_UNITS[w]
+            any_word = True
+        elif scale:
+            total += (group or 1) * scale
+            group, any_word = 0, True
+        else:
+            if any_word:
+                out.append(total + group)
+            total, group, any_word = 0, 0, False
+    return out
+
+
+def _number_backed(nums, target, rate=None):
+    """Число опирается на текст: оно само, в тысячах, в миллионах или × ставку."""
+    if target is None:
+        return False
+    tol = max(1.0, abs(target) * 0.005) if abs(target) >= 1 else 0.001
+    for n in nums:
+        for k in (1, 1000, 1_000_000):
+            if abs(n * k - target) <= tol or (rate and abs(n * k * rate - target) <= tol):
+                return True
+    return False
+
+
+def _dates(text):
+    """Даты, которые текст называет прямо или через месяц, квартал, «весь год»."""
+    low = (text or "").lower()
+    years = {int(y) for y in re.findall(r"(?<!\d)(20\d\d)(?!\d)", low)} or {2026}
+    years.add(2026)
+    out = set()
+    for d, m, y in re.findall(r"(?<!\d)(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?!\d)", low):
+        y = int(y) + (2000 if len(y) == 2 else 0)
+        out.add("%02d.%02d.%d" % (int(d), int(m), y))
+    for d, m in re.findall(r"(?<!\d)(\d{1,2})\.(\d{1,2})(?![.\d])", low):
+        out |= {"%02d.%02d.%d" % (int(d), int(m), y) for y in years}
+    months = {i + 1 for i, stem in enumerate(_MON_STEMS) if re.search(r"(?<!\w)%s" % stem, low)}
+    if "квартал" in low or re.search(r"(?<!\w)кв\.", low):
+        months |= set(range(1, 13))
+    if re.search(r"весь\s+(20\d\d\s+)?год|весь год|целый год", low):
+        months |= {1, 12}
+    for m in months:
+        for y in years:
+            out |= {"01.%02d.%d" % (m, y), "%02d.%02d.%d" % (_MON_LAST[m - 1], m, y)}
+    return out
+
+
+def _amount(v):
+    """Число для ответа экономисту: «4 800 000», «0,5»; остальное как есть."""
+    n = _num(v) if not isinstance(v, str) or re.fullmatch(r"[\d\s.,]+", v) else None
+    if n is None:
+        return str(v)
+    if n == int(n):
+        return "{:,}".format(int(n)).replace(",", " ")
+    return _shown(float(n))
+
+
+def _norm_id(s):
+    return re.sub(r"[\s«»\"'.]", "", str(s or "").lower()).replace("–", "/").replace("-", "/")
+
+
+def _evidence_guard(db, doc, said, edits):
+    """Правка заполненного поля — только с опорой (FOT-CHAT-DOC-001, правило 31).
+
+    На ложное «неверно» модель выдумывала новое значение. Правка, которая
+    меняет уже заполненное поле строки ожидания, проходит, если новое
+    значение есть в документе (с «тыс.», «млн», прописью, × ставку; для дат —
+    явные даты, границы упомянутых месяцев и кварталов) или его назвал сам
+    экономист. Заполнение пустого поля и очистка не проверяются.
+    """
+    from db import Contract, Proposal
+
+    _evidence_guard.note = ""
+    pending = (db.query(Proposal).filter_by(document_id=doc.id, state="предложено").all())
+    if not pending or not edits:
+        return edits
+    source = None
+    drop, notes = [], []
+    for e in edits:
+        key = str(e.get("key") or "")
+        m = re.fullmatch(r"\s*[пp№#]?\s*(\d+)\s*", key, re.I)
+        pr = next((p for p in pending if m and p.id == int(m.group(1))), None)
+        if pr is None:
+            k = key.strip().lower()
+            pr = next((p for p in pending if p.entity == (e.get("entity") or "").strip()
+                       and k and k in {str(json.loads(p.payload).get(x) or "").strip().lower()
+                                       for x in ("code", "num", "fio", "employee")}), None)
+        if pr is None:
+            continue
+        table = PROPOSAL_FIELDS.get(pr.entity) or {}
+        field = str(e.get("field") or "").strip()
+        pkey = next((v for k2, v in table.items() if k2.lower() == field.lower()), None)
+        if pkey not in _EVIDENCE_NUM | _EVIDENCE_DATE | _EVIDENCE_TEXT:
+            continue
+        f = json.loads(pr.payload)
+        old, raw = f.get(pkey), str(e.get("value") or "").strip()
+        if old in (None, "", []) or raw.lower() in ("пусто", "очистить", "нет данных", ""):
+            continue
+        if str(old).strip() == raw or (pkey in _EVIDENCE_NUM and _num(old) == _num(raw)):
+            continue                    # ничего не меняет: ответит «уже так»
+        if source is None:
+            try:
+                source = docread.to_text(doc.path)
+            except Exception:  # noqa: BLE001 — нечем проверить: не мешаем
+                return edits
+        if pkey in _EVIDENCE_NUM:
+            new = _num(raw)
+            rate = _num(f.get("rate")) if pkey == "salary" else None
+            ok = (_number_backed(_numbers(said), new)
+                  or _number_backed(_numbers(source), new, rate))
+        elif pkey in _EVIDENCE_DATE:
+            new = raw
+            ok = raw in _dates(said) or raw in _dates(source)
+        else:
+            new = raw
+            known = {_norm_id(c.code) for c in db.query(Contract).all() if c.code}
+            known |= {_norm_id(json.loads(p.payload).get("code")) for p in
+                      db.query(Proposal).filter(Proposal.entity == "договор",
+                                                Proposal.state == "предложено")}
+            ok = (_norm_id(raw) in _norm_id(said) or _norm_id(raw) in _norm_id(source)
+                  or (pkey in ("code", "contract") and _norm_id(raw) in known))
+        if not ok:
+            drop.append(e)
+            notes.append("«%s» у п%d оставил %s: значения %s в документе нет. Если верно оно — "
+                         "назовите его в сообщении, и я запишу."
+                         % (field, pr.id, _amount(old), _amount(new) if new is not None else raw))
+    _evidence_guard.note = " ".join(dict.fromkeys(notes))
+    return [e for e in edits if e not in drop]
+
+
+def _quote(text, m, width=60):
+    """Кусок текста вокруг найденного признака — для ответа экономисту."""
+    a = max(0, m.start() - width // 2)
+    return " ".join(text[a:m.end() + width // 2].split())
+
+
+def _ask_doc(name, model, user, filename, system=None):
+    """Один запрос чата: о документе, а с ``system=SYSTEM`` — о плане.
+
+    Под строгой схемой Qwen иногда уходит в бесконечные переводы строк, и
+    ответ не разбирается («Expecting value: line 2443»). Тогда спрашиваем
+    второй раз в обычном режиме JSON — схема проверяется у нас и так.
+    """
+    system = system or SYSTEM + "\n\n" + DOC_NOTE
+    if name == "anthropic":
+        return _ask_anthropic(user, model, system)
+    import os
+
+    def call(schema):
+        return llm._call_openai_compatible(
+            user, filename, model, llm._endpoint(name), api_key=llm._key(name),
+            schema=schema, no_thinking=llm._no_thinking(name),
+            insecure=llm._truthy(os.environ.get("FOT_LLM_INSECURE_TLS")),
+            system=system, shape=SHAPE, json_schema=SCHEMA,
+            schema_name="chat_reply",
+            # С рассуждением (FOT_LLM_THINKING) Qwen3 тратит на «думать»
+            # тысячи токенов до ответа: при 3000 ответа не было вовсе.
+            max_tokens=3000 if llm._no_thinking(name) else 16000)
+    schema = llm._use_schema(name)
+    try:
+        return call(schema)
+    except (ValueError, llm.Truncated):
+        if not schema:
+            raise
+        return call(False)
+
+
+def _real_edits(edits):
+    """Правки со значением: «?» и пустое — не правка, их эхо только шумит."""
+    return [e for e in (edits or []) if isinstance(e, dict)
+            and re.search(r"\w", str(e.get("value") or ""))]
+
+
+#: Только настоящее время: «исправляю» — действие сейчас, а «внесу правку,
+#: если укажете» — условие, правки при нём быть не должно.
+_FIX_WORDS = re.compile(r"(?<!\w)(исправляю|правлю|вношу|записываю|ставлю|заполняю|"
+                        r"фиксирую|устанавливаю|проставляю|выставляю|"
+                        r"заменяю|очищаю)(?!\w)", re.I)
+_ASK_WORDS = re.compile(r"(?<!\w)(уточните|укажите|назовите|подскажите)(?!\w)", re.I)
+
+
+def _claims_fix(reply):
+    return bool(_FIX_WORDS.search(reply or ""))
+
+
+def _asks_back(reply):
+    return bool(_ASK_WORDS.search(reply or ""))
+
+
+def _agent_said(db, doc, limit=6):
+    """Последние ответы агента в разговоре об этом документе."""
+    from db import Message
+    return [m.text or "" for m in db.query(Message).filter_by(document_id=doc.id)
+            .filter(Message.who != "экономист").order_by(Message.id.desc()).limit(limit)]
+
+
+def _repeats(reply, said, ratio=0.8):
+    import difflib
+    return any(difflib.SequenceMatcher(None, reply.strip(), s.strip()).ratio() >= ratio
+               for s in said if s)
 
 
 def reply(db, case, text):
@@ -851,14 +1393,7 @@ def reply(db, case, text):
     user = ("Состояние дела:\n%s\n\nПоследние реплики:\n%s\n\n"
             "Новая реплика экономиста: %s" % (context(db, case), history(db, case), text))
     try:
-        if name == "anthropic":
-            raw = _ask_anthropic(user, model)
-        else:
-            raw = llm._call_openai_compatible(
-                user, case.title, model, llm._endpoint(name), api_key=llm._key(name),
-                schema=llm._use_schema(name), no_thinking=llm._no_thinking(name),
-                insecure=llm._truthy(__import__("os").environ.get("FOT_LLM_INSECURE_TLS")),
-                system=SYSTEM, shape=SHAPE, json_schema=SCHEMA, schema_name="chat_reply")
+        raw = _ask_doc(name, model, user, case.title, system=SYSTEM)
     except Exception as e:  # noqa: BLE001 — сеть, лимиты, битый JSON
         return {"ok": False, "error": str(e)}
     if not raw or not raw.get("reply"):
@@ -915,7 +1450,11 @@ def _ask_anthropic(user, model, system=None):
 
 def _num(v):
     """Число из того, как его пишут: 3 000 000, 3000000.50, 1,5."""
-    s = str(v or "").replace("\u00a0", " ").replace(" ", "").replace(",", ".")
+    s = str(v or "").replace("\u00a0", " ").replace(" ", "").strip("$\u20bd")
+    # \u00ab2,300,000\u00bb \u2014 \u0437\u0430\u043f\u044f\u0442\u044b\u0435 \u0440\u0430\u0437\u0440\u044f\u0434\u043e\u0432 (\u043c\u043e\u0434\u0435\u043b\u044c \u0442\u0430\u043a \u043f\u0438\u0441\u0430\u043b\u0430 \u0441\u0443\u043c\u043c\u044b), \u0430 \u043d\u0435 \u0434\u0440\u043e\u0431\u044c.
+    if re.fullmatch(r"\d{1,3}(,\d{3}){2,}(\.\d+)?", s):
+        s = s.replace(",", "")
+    s = s.replace(",", ".")
     s = "".join(ch for ch in s if ch.isdigit() or ch in ".-")
     try:
         return float(s)
@@ -956,39 +1495,96 @@ def _value(field, raw):
     return s or None
 
 
-def _find_contract(db, case_id, key):
-    """Договор по шифру или номеру. Реестр общий, план берет из него свое."""
+def _contract_matches(db, case_id, key):
+    """Договоры, подходящие под слово экономиста. Реестр общий, план берет из него свое."""
     from sqlalchemy import or_
     from db import Contract
 
     rows = (db.query(Contract)
             .filter(or_(Contract.case_id == case_id, Contract.case_id.is_(None)))
             .order_by(Contract.id).all())
-    k = str(key or "").strip().lower()
+    k = _plain(key)
+    if not k:
+        return []
     for c in rows:
-        if (c.code or "").lower() == k or (c.number or "").lower() == k:
-            return c
-    for c in rows:
-        if k and (k in (c.code or "").lower() or k in (c.number or "").lower()):
-            return c
-    return None
+        if (c.code or "").lower() == k or (c.number or "").lower() == k or _plain(c.name) == k:
+            return [c]
+    sub = [c for c in rows if k in (c.code or "").lower() or k in (c.number or "").lower()]
+    if sub:
+        return sub
+    # По наименованию: экономист говорит «на гранте», модель передаёт
+    # «гранте» или «Грант», а шифр C_GRANT-26 не называет никто. Основа
+    # слова без окончания.
+    stem = _stem(k)
+    if len(stem) < 3:
+        return []
+    return [c for c in rows if stem == _stem(c.name) or stem in _stems(c.name)
+            or stem in _stems(c.code)]
 
 
-def _find_employee(db, case_id, key):
+def _find_contract(db, case_id, key):
+    """Договор по шифру, номеру или наименованию; двусмысленность — не находка."""
+    hits = _contract_matches(db, case_id, key)
+    return hits[0] if len(hits) == 1 else None
+
+
+_ENDINGS = re.compile(r"(ами|ями|ого|его|ому|ему|ым|им|ых|их|ой|ей|ом|ем|ую|юю|ая|яя|ое|ее|ые|ие|"
+                      r"ов|ев|ам|ям|ах|ях|а|я|у|ю|ы|и|е|о|й|ь)$")
+
+
+def _stem(word):
+    """Основа русского слова: окончания снимаются, пока основа не короче
+    четырёх букв. «Иванову» и «Иванов» сходятся на «иван»."""
+    w = _plain(word)
+    while True:
+        cut = _ENDINGS.sub("", w)
+        if cut == w or len(cut) < 4:
+            return w
+        w = cut
+
+
+def _stems(text):
+    return {_stem(w) for w in re.findall(r"[a-zа-я0-9]+", _plain(text))}
+
+
+def _employee_matches(db, case_id, key):
+    """Сотрудники, подходящие под слово экономиста: табельный номер, ФИО,
+    часть ФИО, фамилия в падеже («Иванову», «Петровой» — модель передаёт
+    слово, как сказал экономист; сравниваются основы слов)."""
     from sqlalchemy import or_
     from db import Employee
 
     rows = (db.query(Employee)
             .filter(or_(Employee.case_id == case_id, Employee.case_id.is_(None)))
             .order_by(Employee.id).all())
-    k = str(key or "").strip().lower()
+    k = _plain(key)
+    if not k:
+        return []
     for e in rows:
-        if (e.code or "").lower() == k:
-            return e
-    for e in rows:
-        if k and k in ((e.fio or "") + " " + (e.code or "")).lower():
-            return e
-    return None
+        if (e.code or "").lower() == k or _plain(e.fio) == k:
+            return [e]
+    sub = [e for e in rows if k in _plain((e.fio or "") + " " + (e.code or ""))]
+    stems = {s for s in _stems(k) if len(s) >= 4}
+    by_stem = [e for e in rows if stems and stems <= _stems((e.fio or "") + " " + (e.code or ""))]
+    # Одно слово — фамилия, и «Иванова» это и Иванов в родительном, и
+    # Иванова в именительном: при двух таких людях находка не однозначна.
+    if len(k.split()) == 1:
+        return sub + [e for e in by_stem if e not in sub]
+    return sub or by_stem
+
+
+def _find_employee(db, case_id, key):
+    """Сотрудник по слову экономиста; двое подходящих — не находка."""
+    hits = _employee_matches(db, case_id, key)
+    return hits[0] if len(hits) == 1 else None
+
+
+def _ambiguous(hits, what):
+    """Строка о том, что подходящих несколько, — чтобы не записать на чужого."""
+    names = ", ".join((getattr(h, "fio", None) or getattr(h, "name", None) or h.code)
+                      + (" (%s)" % h.code) for h in hits[:4])
+    return "%s в реестре несколько: %s — назовите %s." % (
+        what, names, "табельный номер" if hasattr(hits[0], "fio") else "шифр")
 
 
 def _shown(v):
@@ -1009,10 +1605,18 @@ def claim_settings(base, claims, text):
     history = list(out.get("претензии") or [])
     lines = []
     for c in claims or []:
-        goal = (c.get("goal") or "").strip()
+        if not isinstance(c, dict):
+            continue
+        said = (c.get("goal") or "").strip()
+        goal, rule = goal_of(said)
         column = GOALS.get(goal)
         if column is None:
-            lines.append("Цели «%s» у решателя нет." % goal)
+            # Цель названа словами модели или экономиста: «Переводы»,
+            # «скачки сумм». Явление из правила весом не лечится — об этом
+            # говорится прямо, а не «цели нет».
+            lines.append("«%s» весом не лечится: %s." % (said, rule) if rule
+                         else "Цели «%s» у решателя нет: есть переводы, административная "
+                              "сложность, равномерность и стабильность сумм." % said)
             continue
         try:
             factor = float(c.get("factor") or 2)
@@ -1040,6 +1644,62 @@ def claim_settings(base, claims, text):
                         _shown(was), _shown(new)))
     out["претензии"] = history
     return out, lines
+
+
+def apply_claims(db, case, claims, text="", base=None):
+    """Претензии → веса целей в условиях плана. Возвращает (строки эха, сдвинут ли вес).
+
+    Вес — такое же условие плана, как закрепление: живёт с планом и уходит
+    в каждый его расчёт. Раньше он жил только в настройках прогона, и
+    претензия, сказанная во время расчёта, терялась (12.10.2026). base —
+    веса последнего удачного прогона для планов, посчитанных до этого.
+    """
+    d = plan_settings(case)
+    start = {**(base or {}), **(d.get("веса") or {})}
+    new, lines = claim_settings(start, claims, text)
+    changed = any(new.get(c) != start.get(c) for c in GOAL_DEFAULTS)
+    if changed:
+        d["веса"] = {c: new[c] for c in GOAL_DEFAULTS if c in new}
+        d["претензии"] = new.get("претензии") or []
+        _save_plan_settings(db, case, d, text)
+    return lines, changed
+
+
+def conditions_lines(db, case):
+    """Условия плана, заданные экономистом, словами для модели.
+
+    Без них агент не знал, что уже закреплено и какие веса стоят, и на
+    «что я закрепил?» отвечал догадкой (12.10.2026).
+    """
+    d = plan_settings(case)
+    lines = []
+
+    def pin(x):
+        kind = x.get("вид") or "любой"
+        months = _months_text(int(x.get("с") or 1), int(x.get("по") or 12))
+        amount = (", %s ₽ в месяц" % _shown(x["сумма"])) if x.get("сумма") else ""
+        return "%s на %s, %s, %s%s" % (x.get("фио") or x.get("сотрудник"), x.get("договор"),
+                                       months, "любой вид выплаты" if kind == "любой" else kind, amount)
+    if d.get("назначения"):
+        lines.append("Закрепления экономиста (переменные решателя): "
+                     + "; ".join(pin(x) for x in d["назначения"]) + ".")
+    if d.get("запреты"):
+        lines.append("Запреты экономиста: " + "; ".join(pin(x) for x in d["запреты"]) + ".")
+    if d.get("настройки"):
+        lines.append("Настройки расчёта от экономиста: "
+                     + "; ".join("%s — %s" % (k, v) for k, v in sorted(d["настройки"].items())) + ".")
+    if d.get("веса"):
+        lines.append("Веса целей после претензий: "
+                     + "; ".join("%s — %s" % (k, _shown(v)) for k, v in sorted(d["веса"].items())) + ".")
+    if d.get("претензии"):
+        lines.append("Претензии к плану: " + "; ".join(
+            "«%s» → %s «%s» ×%s" % (c.get("текст", "")[:60], c.get("направление"), c.get("цель"),
+                                    _shown(c.get("множитель")))
+            for c in d["претензии"][-6:]) + ".")
+    if not lines:
+        lines.append("Условий плана от экономиста нет: закреплений, запретов, настроек "
+                     "и претензий не задано.")
+    return lines
 
 
 KINDS = ("оклад", "120", "122", "124", "152", "приказ")
@@ -1079,22 +1739,165 @@ def parse_months(text):
     return (found[0], found[-1]) if len(found) > 1 else (found[0], found[0])
 
 
+def _plain(s):
+    """Слова к одному виду: строчные, «е» вместо «ё», один пробел."""
+    return re.sub(r"\s+", " ", str(s or "").lower().replace("ё", "е")).strip()
+
+
+#: Вопрос — не команда. «Почему в плане дефицит?» спрашивает, а не разрешает
+#: дефицит; до 12.10.2026 такая реплика включала дефицит и запускала
+#: пересчёт на десять минут. Разбор команд кодом вопросы пропускает — на
+#: них отвечает модель.
+_QUESTION = re.compile(r"\?|^(почему|отчего|зачем|откуда|какой|какая|какие|каков|что|где|"
+                       r"сколько|когда|как|разве|неужели)\b|\bли\b")
+
+
+def is_question(text):
+    return bool(_QUESTION.search(_plain(text)))
+
+
+_WORD_NUMBERS = {"один": 1, "одн": 1, "дв": 2, "тр": 3, "четыр": 4, "пят": 5}
+_NUMBER = r"(\d+|один|одн|дв|тр|четыр|пят)"
+_LIMIT = r"(?:не больше|не более|максимум|максимально|лимит|ограничь|предел|до|только)"
+#: Полярность слов о дефиците. Раньше любое слово «дефицит» без «запрет»
+#: читалось как разрешение — и «убери дефицит» его включало.
+_DEFICIT_NO = re.compile(r"запрет|не разреш|не допус|нельзя|без дефицит|убер|отключ|выключ|"
+                         r"сним|снять|не нужен|не надо|не должно|исключ")
+_DEFICIT_YES = re.compile(r"разреш|допус|позвол|включ|можно|пусть|давай")
+
+
 def parse_settings(text):
     """Настройки словами: «допуск трудоёмкости 5 %», «разреши дефицит»,
-    «не больше трёх договоров оклада». Возвращает список как от модели."""
-    t = (text or "").lower().replace("ё", "е")
+    «не больше трёх договоров оклада». Возвращает список как от модели.
+
+    Разбор только для команды: вопрос ничего не меняет. Дефицит — по
+    смыслу глагола, число договоров — только с ограничивающим словом:
+    «почему у Петрова 3 договора оклада» — вопрос, а не лимит.
+    """
+    t = _plain(text)
     out = []
-    m = re.search(r"допуск[а-я ]*?(\d+(?:[.,]\d+)?)\s*%?", t)
+    if not t or is_question(t):
+        return out
+    m = re.search(r"допуск[а-я ]*?(\d+(?:[.,]\d+)?|ноль|нулев)\s*%?", t)
     if m and "трудо" in t:
-        out.append({"name": "допуск трудоёмкости", "value": m.group(1).replace(",", ".")})
-    if "дефицит" in t:
-        out.append({"name": "разрешить дефицит",
-                    "value": "нет" if re.search(r"запрет|не разреш|нельзя|без дефицит", t) else "да"})
-    m = re.search(r"(\d+|одн|дв|тр|четыр|пят)[а-я]*\s+договор[а-я]*\s+оклад", t)
-    if m:
-        words = {"одн": 1, "дв": 2, "тр": 3, "четыр": 4, "пят": 5}
         v = m.group(1)
-        out.append({"name": "макс договоров оклада в год", "value": words.get(v, v)})
+        out.append({"name": "допуск трудоёмкости",
+                    "value": "0" if v.startswith("н") else v.replace(",", ".")})
+    if "дефицит" in t:
+        if _DEFICIT_NO.search(t):
+            out.append({"name": "разрешить дефицит", "value": "нет"})
+        elif _DEFICIT_YES.search(t):
+            out.append({"name": "разрешить дефицит", "value": "да"})
+    m = (re.search(r"\b" + _LIMIT + r"\s+(?:чем\s+)?" + _NUMBER + r"[а-я]*\s+договор[а-я]*\s+оклад", t)
+         or re.search(r"договор[а-я]*\s+оклад[а-я]*(?:\s+в\s+год)?\s+(?:" + _LIMIT + r"\s+)?" + _NUMBER, t))
+    if m:
+        v = _WORD_NUMBERS.get(m.group(1), m.group(1))
+        # Больше двенадцати договоров оклада в году не бывает: это номер
+        # договора или год, а не предел.
+        if int(v) <= 12:
+            out.append({"name": "макс договоров оклада в год", "value": v})
+    return out
+
+
+def setting_name(name):
+    """Имя настройки от модели → имя из закрытого списка, либо None.
+
+    Модель пишет «допуск трудоемкости» через «е» или с заглавной — такая
+    настройка молча терялась (12.10.2026). Сопоставление по основе слов.
+    """
+    t = _plain(name)
+    if not t:
+        return None
+    for known in SETTING_NAMES:
+        if _plain(known) == t:
+            return known
+    if "допуск" in t or "трудо" in t:
+        return "допуск трудоёмкости"
+    if "дефицит" in t:
+        return "разрешить дефицит"
+    if "договор" in t and "оклад" in t:
+        return "макс договоров оклада в год"
+    return None
+
+
+#: Слова о цели → цель решателя. Модель называет цель своими словами
+#: («Переводы», «переводов», «смена договора оклада»), экономист — явлением
+#: («суммы скачут»). Сопоставление по основе, а не по точному совпадению.
+GOAL_STEMS = (
+    (("перевод", "смен", "дерга", "переброс"), "переводы"),
+    (("админ", "связк", "связок", "связей", "сложност", "дроблен", "дроби"),
+     "административная сложность"),
+    (("равномерн", "освоен", "рван", "первые месяц", "потрачен"), "равномерность"),
+    (("стабильн", "скач", "прыга", "одинаков", "гуля", "плава"), "стабильность сумм"),
+)
+#: Явления, которыми ведает правило или стадия-правило, а не вес взвешенной
+#: стадии (ПРАВИЛА_РЕШАТЕЛЯ, «Стремится, по порядку стадий»). Претензия к
+#: ним весом не лечится, и агент называет правило вместо веса.
+GOAL_RULES = (
+    (("приказ", "стимулир"), "сумма приказов минимизируется стадией-правилом раньше весов: "
+                             "надбавка всегда идёт раньше приказа, весом это не сдвинуть"),
+    (("трудо", "чел.-мес", "ркм"), "отклонение трудоёмкости — стадия-правило раньше весов; "
+                                   "меняется допуском трудоёмкости (0–5 %), а не весом"),
+    (("зарплат", "недоплат", "целиком"), "зарплата целиком — жёсткое правило; недоплату "
+                                         "разрешает только настройка «разрешить дефицит»"),
+    (("2556", "п4", "бэп", "предел", "лимит"), "пределы 2556, П4 и БЭП — жёсткие правила, "
+                                               "весом не ослабляются"),
+    (("срок", "касс", "поступлен"), "сроки и касса договора — жёсткие правила"),
+)
+
+
+def goal_of(words):
+    """(цель решателя, None) | (None, почему это правило) | (None, None)."""
+    t = _plain(words)
+    if not t:
+        return None, None
+    if t in GOALS:
+        return t, None
+    for stems, goal in GOAL_STEMS:
+        if any(s in t for s in stems):
+            return goal, None
+    for stems, why in GOAL_RULES:
+        if any(s in t for s in stems):
+            return None, why
+    return None, None
+
+
+_FACTOR_WORDS = (("вдвое", 2), ("в два раза", 2), ("втрое", 3), ("в три раза", 3),
+                 ("вчетверо", 4), ("в четыре раза", 4), ("впятеро", 5), ("в пять раз", 5),
+                 ("в десять раз", 10), ("намного", 3), ("гораздо", 3), ("сильно", 3))
+#: «Хорошая» цель названа плохим явлением: равномерности и стабильности
+#: экономист хочет больше, когда говорит, что их нет.
+_WANT_LESS_GOOD = re.compile(r"не важн|неважн|не нужн|не требу|забудь|меньше (равномерн|стабильн)")
+_WANT_MORE_BAD = re.compile(r"больше|побольше|разреш|можно|не страшн|пусть")
+
+
+def parse_claims(text):
+    """Претензия словами → цели, направление и множитель, как от модели.
+
+    Нужен, когда модель слов экономиста в цель не перевела: «слишком много
+    переводов» и «суммы скачут от месяца к месяцу» читаются кодом. Вопрос
+    претензией не считается — на него отвечает модель.
+    """
+    t = _plain(text)
+    if not t or is_question(t):
+        return []
+    factor = 2.0
+    for words, k in _FACTOR_WORDS:
+        if words in t:
+            factor = float(k)
+            break
+    m = re.search(r"в (\d+(?:[.,]\d+)?) раз", t)
+    if m:
+        factor = float(m.group(1).replace(",", "."))
+    out = []
+    for stems, goal in GOAL_STEMS:
+        if not any(s in t for s in stems):
+            continue
+        if goal in GOALS_BAD:
+            direction = "больше" if _WANT_MORE_BAD.search(t) and "много" not in t else "меньше"
+        else:
+            direction = "меньше" if _WANT_LESS_GOOD.search(t) else "больше"
+        out.append({"goal": goal, "direction": direction, "factor": factor})
     return out
 
 
@@ -1137,18 +1940,36 @@ def apply_fixes(db, case, fixes, text=""):
     d = plan_settings(case)
     lines, questions = [], []
     for f in fixes or []:
-        emp = _find_employee(db, case.id, f.get("employee"))
+        if not isinstance(f, dict):
+            continue
+        people = _employee_matches(db, case.id, f.get("employee"))
+        emp = people[0] if len(people) == 1 else None
         if emp is None:
-            lines.append("Не нашел сотрудника «%s» в реестре." % f.get("employee"))
+            lines.append(_ambiguous(people, "Сотрудников «%s»" % f.get("employee")) if people
+                         else "Не нашел сотрудника «%s» в реестре." % f.get("employee"))
             continue
-        mode = f.get("mode") or "назначить"
-        ctr = _find_contract(db, case.id, f.get("contract")) if f.get("contract") else None
+        mode = fix_mode(f.get("mode"))
+        if mode is None:
+            # Неизвестное слово режима раньше молча становилось запретом.
+            lines.append("Не понял, что сделать для %s: закрепить, запретить или снять — «%s»."
+                         % (emp.fio or emp.code, f.get("mode")))
+            continue
+        contracts = _contract_matches(db, case.id, f.get("contract")) if f.get("contract") else []
+        ctr = contracts[0] if len(contracts) == 1 else None
         if f.get("contract") and ctr is None:
-            lines.append("Не нашел договор «%s» в реестре." % f.get("contract"))
+            lines.append(_ambiguous(contracts, "Договоров «%s»" % f.get("contract")) if contracts
+                         else "Не нашел договор «%s» в реестре." % f.get("contract"))
             continue
-        kind = (str(f.get("kind") or "оклад")).strip().lower()
-        if kind not in KINDS:
-            kind = "оклад"
+        # Вид не назван — «любой» (решение пользователя 19.09.2026: экономист
+        # «просто хочет, чтоб сотруднику с этого договора платили, но неважно
+        # какие виды надбавок»). Раньше молча подставлялся оклад. Названный,
+        # но неизвестный вид («надбавка 122» читается как 122, «премия» — нет)
+        # не расширяется до любого молча.
+        kind = fix_kind(f.get("kind"))
+        if kind is None:
+            lines.append("Вид выплаты «%s» не знаю: оклад, 120, 122, 124, 152 или приказ."
+                         % f.get("kind"))
+            continue
         if mode == "снять":
             before = len(d["назначения"]) + len(d["запреты"])
             for key in ("назначения", "запреты"):
@@ -1161,7 +1982,9 @@ def apply_fixes(db, case, fixes, text=""):
         if ctr is None:
             lines.append("Для %s не назван договор — уточните, на каком договоре." % (emp.fio or emp.code))
             continue
-        a, b = f.get("month_from"), f.get("month_to")
+        # Месяцы от модели бывают словами («июнь») — тогда они читаются как
+        # из реплики, а не роняют реплику целиком (12.10.2026).
+        a, b = fix_month(f.get("month_from")), fix_month(f.get("month_to"))
         note = ""
         if not a and not b:
             said = parse_months(text)
@@ -1177,8 +2000,10 @@ def apply_fixes(db, case, fixes, text=""):
         a, b = max(1, min(a, 12)), max(1, min(b, 12))
         if a > b:
             a, b = b, a
+        # Сумма бывает только у вида: «любой вид на 50 000» решатель не
+        # разложит, какой выплатой платить.
         rec = {"сотрудник": emp.code, "фио": emp.fio, "договор": ctr.code, "с": a, "по": b,
-               "вид": kind, "сумма": f.get("amount")}
+               "вид": kind, "сумма": f.get("amount") if kind != "любой" else None}
         key = "назначения" if mode == "назначить" else "запреты"
         other = "запреты" if key == "назначения" else "назначения"
         d[other] = [x for x in d[other] if not (x["сотрудник"] == emp.code and x["договор"] == ctr.code
@@ -1187,10 +2012,65 @@ def apply_fixes(db, case, fixes, text=""):
                                             and x["вид"] == kind)] + [rec]
         lines.append("%s: %s на %s, %s%s, %s%s." % (
             "Закрепил" if key == "назначения" else "Запретил", emp.fio or emp.code, ctr.code,
-            _months_text(a, b), note, kind,
-            (", %s ₽ в месяц" % _shown(rec["сумма"])) if rec["сумма"] else ""))
+            _months_text(a, b), note, "любой вид выплаты" if kind == "любой" else kind,
+            (", %s ₽ в месяц" % _shown(rec["сумма"])) if rec["сумма"] and kind != "любой" else ""))
     _save_plan_settings(db, case, d, text)
     return lines, questions
+
+
+#: Режим закрепления словами модели: «закрепить», «оставь», «не сажать»,
+#: «сними». Порядок проверки важен: «снять закрепление» — снять, а не
+#: закрепить. Неизвестное слово — None, и сервис переспрашивает.
+_MODE_WORDS = (
+    (("снять", "сними", "снял", "отмен", "убери закреп", "убрать закреп", "удали"), "снять"),
+    (("запрет", "не сажа", "не ставь", "не назнач", "исключ", "нельзя", "убери с", "убрать с",
+      "снять с", "забан"), "запретить"),
+    (("назнач", "закреп", "остав", "посад", "постав", "держ", "фикс", "перевед", "перевести"),
+     "назначить"),
+)
+
+
+def fix_mode(raw):
+    """«назначить» | «запретить» | «снять» | None; пусто — назначить."""
+    t = _plain(raw)
+    if not t:
+        return "назначить"
+    if t in ("назначить", "запретить", "снять"):
+        return t
+    for stems, mode in _MODE_WORDS:
+        if any(s in t for s in stems):
+            return mode
+    return None
+
+
+def fix_kind(raw):
+    """Вид выплаты словами модели → вид из KINDS, «любой», либо None."""
+    t = _plain(raw)
+    if not t or t in ("любой", "любая", "любые", "все", "всё", "any", "none", "null", "не назван"):
+        return "любой"
+    if t in KINDS:
+        return t
+    m = re.search(r"(?<!\d)(120|122|124|152)(?!\d)", t)
+    if m:
+        return m.group(1)
+    if "оклад" in t or "ставк" in t:
+        return "оклад"
+    if "приказ" in t or "стимул" in t:
+        return "приказ"
+    return None
+
+
+def fix_month(v):
+    """Месяц от модели: число 1–12 или слово («июнь»); иначе None."""
+    if v in (None, ""):
+        return None
+    try:
+        n = int(float(str(v).replace(",", ".")))
+        return n if 1 <= n <= 12 else None
+    except (TypeError, ValueError):
+        pass
+    got = parse_months(str(v))
+    return got[0] if got else None
 
 
 def _month_of(date_text, default):
@@ -1205,10 +2085,12 @@ def apply_settings(db, case, settings, text=""):
     """Настройки расчёта словами: допуск, дефицит, число договоров оклада."""
     d = plan_settings(case)
     lines = []
-    seen = {s.get("name") for s in (settings or [])}
-    settings = list(settings or []) + [s for s in parse_settings(text) if s["name"] not in seen]
-    for s in settings or []:
-        name = (s.get("name") or "").strip()
+    settings = [{**s, "name": setting_name(s.get("name"))} for s in (settings or [])
+                if isinstance(s, dict)]
+    seen = {s["name"] for s in settings}
+    settings += [s for s in parse_settings(text) if s["name"] not in seen]
+    for s in settings:
+        name = s.get("name")
         if name not in SETTING_NAMES:
             continue
         v = s.get("value")
@@ -1226,7 +2108,8 @@ def apply_settings(db, case, settings, text=""):
             d["настройки"][name] = round(v, 4)
             lines.append("Допуск трудоёмкости — %s %%." % _shown(round(v * 100, 2)))
         elif name == "разрешить дефицит":
-            yes = str(v).strip().lower() in ("да", "true", "1", "yes", "разрешить")
+            said = _plain(v)
+            yes = said in ("да", "true", "1", "yes") or said.startswith(("разреш", "допус"))
             d["настройки"][name] = "да" if yes else "нет"
             lines.append("Дефицит выплат %s." % ("разрешен" if yes else "запрещен"))
         else:
@@ -1241,8 +2124,34 @@ def apply_settings(db, case, settings, text=""):
     return lines
 
 
-def apply_edits(db, case, edits):
-    """Записать продиктованное. Возвращает строки отчета для ленты."""
+def _salary_edit(db, case, row, field, val):
+    """Зарплата сотрудника из реплики — в таблицу по месяцам года плана.
+    Возвращает строку для ленты; записано — строка начинается с «Зарплата »."""
+    import salary
+    if case is None or not case.year:
+        return "Зарплату по месяцам записываю в год плана — откройте план."
+    try:
+        amount = round(float(val), 2)
+    except (TypeError, ValueError):
+        amount = 0.0
+    if amount <= 0:
+        return "Зарплата должна быть больше нуля: ноль в месяце пока не допускается."
+    months = salary.fill_term(db, row, case.year, amount,
+                              "реплика в чате: %s %s — %s" % (field, row.code, _shown(val)))
+    if not months:
+        return ("У %s нет месяцев работы в %d году — зарплату не записала."
+                % (row.fio or row.code, case.year))
+    return ("Зарплата %s: %s ₽ в месяц, %s %d года — по срокам работы. Записала в таблицу "
+            "«Заработная плата по месяцам»." % (row.fio or row.code, _shown(amount),
+                                                _months_text(months[0], months[-1]), case.year))
+
+
+def apply_edits(db, case, edits, create=True):
+    """Записать продиктованное. Возвращает строки отчета для ленты.
+
+    ``create=False`` — не заводить договор, которого нет в реестре: из
+    разговора о документе строка реестра в обход подтверждения не рождается.
+    """
     import datetime as dt
     import json as _json
 
@@ -1267,21 +2176,32 @@ def apply_edits(db, case, edits):
             out.append("Поле «%s» через чат не заполняется. У %s можно: %s."
                        % (field, entity, ", ".join(table)))
             continue
-        val = _value(field, ed.get("value"))
-        if val is None:
+        clear = str(ed.get("value") or "").strip().lower() in ("пусто", "очистить")
+        val = None if clear else _value(field, ed.get("value"))
+        if val is None and not clear:
             out.append("Не разобрал значение «%s» для поля «%s»."
                        % (ed.get("value"), field))
+            continue
+        if clear and field in ("оклад", "зарплата"):
+            out.append("Зарплату через чат не очищаю: назовите сумму.")
             continue
 
         column, pkey = table[field]
         if entity == "договор":
             row = _find_contract(db, case_id, key)
+            if row is None and not create:
+                out.append("Договора %s нет ни в реестре, ни среди строк этого "
+                           "документа — править нечего." % key)
+                continue
             if row is None:
                 # Договора нет ни в одном документе: заводим строку реестра —
                 # именно этого и не хватало, когда форма пришла не по шаблону.
                 from db import Contract
                 row = Contract(code=key, case_id=None)
                 db.add(row)
+                # Без flush следующая графа того же договора его не находит и
+                # заводит ещё одну строку: три графы — три пустых договора.
+                db.flush()
                 out.append("Договора %s в реестре не было — завела строку. "
                            "В расчет он войдет, только когда появится в шаблоне "
                            "расчета: вход решателя собирается по нему." % key)
@@ -1296,6 +2216,18 @@ def apply_edits(db, case, edits):
                 continue
             bag = (passport or {}).get("employees") or []
             ident = ("code", row.code)
+            if field in ("оклад", "зарплата"):
+                # Зарплаты в штатном расписании нет (решение пользователя
+                # 19.09.2026): «у Петрова оклад 90 000» — сумма в таблицу
+                # «Заработная плата по месяцам», во все месяцы, когда строка
+                # работает в году плана («заполни даты согласно датам его
+                # работы»). В штатку она больше не пишется: расчёт её не видит.
+                line = _salary_edit(db, case, row, field, val)
+                out.append(line)
+                if line.startswith("Зарплата "):
+                    touched = True
+                    changes.append((entity, key, field, None, val))
+                continue
 
         was = getattr(row, column)
         setattr(row, column, val)
@@ -1311,7 +2243,8 @@ def apply_edits(db, case, edits):
                 break
 
         out.append("%s %s: %s — %s%s."
-                   % (entity.capitalize(), row.code, field, _shown(val),
+                   % (entity.capitalize(), row.code, field,
+                      "пусто" if val is None else _shown(val),
                       "" if was in (None, "") else " (было %s)" % _shown(was)))
 
     if touched:
@@ -1322,3 +2255,128 @@ def apply_edits(db, case, edits):
         db.commit()
     apply_edits.last_changes = changes
     return out
+
+
+def _proposal_value(pkey, raw):
+    """Значение к виду строки предложения. None — не разобрали."""
+    if pkey in PROPOSAL_NUMERIC:
+        v = _num(raw)
+        return int(v) if v is not None and pkey in ("year", "month") else v
+    if pkey == "goz":
+        return _goz(raw)
+    if pkey == "employment":
+        # Список закрытый: «основное» или «совместительство». «Совмещение» —
+        # другое кадровое понятие, а модель писала его и «совместитель» как
+        # есть (прогон 50 документов, 12.10.2026).
+        s = str(raw or "").strip().lower()
+        if s.startswith("совместит"):
+            return "совместительство"
+        if s.startswith("основ"):
+            return "основное"
+        return None
+    if pkey in PROPOSAL_FLAGS:
+        s = str(raw or "").strip().lower()
+        if s in ("да", "можно", "разрешено", "допускается", "true", "1"):
+            return "да"
+        if s in ("нет", "нельзя", "запрещено", "не допускается", "false", "0"):
+            return "нет"
+        return None
+    s = str(raw or "").strip()
+    return s or None
+
+
+def apply_proposal_edits(db, doc, edits):
+    """Правки строк, ждущих подтверждения. Возвращает (строки ленты, остаток).
+
+    Ключ «п12» — номер предложения из состояния документа. Строка меняется на
+    месте и заново оценивается; в реестр и в расчёт она по-прежнему уйдёт
+    только подтверждением. Правки без такого ключа возвращаются остатком —
+    это строки реестра, их пишет apply_edits.
+    """
+    import intake
+    from db import Proposal
+
+    pending = (db.query(Proposal).filter_by(document_id=doc.id, state="предложено")
+               .order_by(Proposal.id).all())
+
+    def by_key(entity, key):
+        # Модель часто называет строку шифром или табельным, а не номером.
+        k = str(key or "").strip().lower()
+        for p in pending:
+            if p.entity != entity:
+                continue
+            f = json.loads(p.payload)
+            if k and k in {str(f.get(x) or "").strip().lower()
+                           for x in ("code", "num", "fio", "employee")}:
+                return p
+        return None
+
+    out, rest, changes, touched = [], [], [], {}
+    for ed in edits or []:
+        m = re.fullmatch(r"\s*[пp№#]?\s*(\d+)\s*", str(ed.get("key") or ""), re.I)
+        pr = db.get(Proposal, int(m.group(1))) if m else None
+        if pr is None or pr.document_id != doc.id:
+            pr = by_key((ed.get("entity") or "").strip(), ed.get("key")) or pr
+        if pr is None or pr.document_id != doc.id or pr.state != "предложено":
+            if m and str(ed.get("key") or "").strip()[:1].lower() in ("п", "p", "№", "#"):
+                out.append("Строки %s среди ждущих подтверждения нет." % ed.get("key"))
+            else:
+                rest.append(ed)
+            continue
+        field = (ed.get("field") or "").strip()
+        table = PROPOSAL_FIELDS.get(pr.entity) or {}
+        pkey = next((v for k, v in table.items() if k.lower() == field.lower()), None)
+        if pkey is None:
+            out.append("Поле «%s» у строки п%d (%s) не правится. Можно: %s."
+                       % (field, pr.id, pr.entity, ", ".join(table) or "ничего"))
+            continue
+        f = touched.get(pr.id) or json.loads(pr.payload)
+        if pkey == "kinds":
+            named = str(ed.get("value") or "").lower()
+            was = ", ".join(w for w, k in PROPOSAL_KINDS
+                            if str(f.get(k) or "").lower() == "да") or "не указано"
+            for word, k in PROPOSAL_KINDS:
+                f[k] = "да" if re.search(r"(?<!\d)%s(?!\d)" % word, named) else "нет"
+            val = ", ".join(w for w, k in PROPOSAL_KINDS if f[k] == "да") or "никаких"
+        elif str(ed.get("value") or "").strip().lower() in ("пусто", "нет данных", "очистить", ""):
+            # Очистить поле: срок этапа, записанный как срок договора, должен
+            # уйти, а не замениться догадкой.
+            was = f.get(pkey)
+            if was in (None, ""):
+                out.append("п%d (%s): %s уже пусто." % (pr.id, pr.entity, field))
+                continue
+            f[pkey] = None
+            val = "пусто"
+        else:
+            val = _proposal_value(pkey, ed.get("value"))
+            if val is None:
+                out.append("Не разобрал значение «%s» для поля «%s»." % (ed.get("value"), field))
+                continue
+            was = f.get(pkey)
+            if was == val or (pkey in PROPOSAL_NUMERIC and _num(was) == val):
+                out.append("п%d (%s): %s уже %s." % (pr.id, pr.entity, field, _shown(val)))
+                continue
+            f[pkey] = val
+        touched[pr.id] = f
+        changes.append((pr, field, was, val))
+        out.append("п%d (%s): %s — %s%s." % (
+            pr.id, pr.entity, field, _shown(val),
+            "" if was in (None, "") else " (было %s)" % _shown(was)))
+
+    if touched:
+        # Договоры и люди из соседних строк того же документа — известные,
+        # как и при первом разборе.
+        same = {"contracts": [], "employees": []}
+        for p in db.query(Proposal).filter_by(document_id=doc.id, state="предложено"):
+            bucket = {"договор": "contracts", "сотрудник": "employees"}.get(p.entity)
+            if bucket:
+                same[bucket].append(touched.get(p.id) or json.loads(p.payload))
+        ctx = intake._grade_context(db, same)
+        for pid, f in touched.items():
+            pr = db.get(Proposal, pid)
+            pr.payload = json.dumps(f, ensure_ascii=False)
+            pr.grade, why = intake.grade(pr.entity, dict(f), pr.evidence, ctx)
+            pr.reason = why or None
+        db.commit()
+    apply_proposal_edits.last_changes = changes
+    return out, rest

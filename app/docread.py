@@ -98,9 +98,28 @@ def scan_text(path):
 
 
 # ── Word ────────────────────────────────────────────────────────
+def _docx_table(xml):
+    """Таблица .docx — строками через табуляцию, как у .doc.
+
+    Раньше абзац каждой ячейки становился отдельной строкой, и строка таблицы
+    рассыпалась: «1», «ФИО», «табельный номер» — по строке на ячейку. Разбор
+    табличных документов (состав рабочей группы, 28.09.2026) читает строку
+    таблицы целиком, поэтому ячейки склеиваются табуляцией, а абзацы внутри
+    ячейки — пробелом."""
+    rows = []
+    for tr in re.findall(r"<w:tr[ >].*?</w:tr>", xml, re.S):
+        cells = []
+        for tc in re.findall(r"<w:tc[ >].*?</w:tc>", tr, re.S):
+            text = re.sub(r"</w:p>", " ", tc)
+            cells.append(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", text)).strip())
+        rows.append("\t".join(cells))
+    return "\n".join(rows) + "\n"
+
+
 def from_docx(path):
     with zipfile.ZipFile(path) as z:
         xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    xml = re.sub(r"<w:tbl[ >].*?</w:tbl>", lambda m: _docx_table(m.group(0)), xml, flags=re.S)
     xml = re.sub(r"</w:p>", "\n", xml)
     return re.sub(r"<[^>]+>", "", xml)
 

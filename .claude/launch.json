@@ -5,18 +5,31 @@
       "name": "app",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": [
-        "-m",
-        "uvicorn",
-        "main:app",
-        "--app-dir",
-        "app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8770"
+        "-c",
+        "import os, sys; sys.path.insert(0, 'app'); import uvicorn; uvicorn.run('main:app', host='127.0.0.1', port=int(os.environ.get('PORT', '8770')))"
       ],
       "port": 8770,
-      "url": "http://127.0.0.1:8770"
+      "autoPort": true
+    },
+    {
+      "name": "app-sandbox",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-c",
+        "import os, shutil, sys, tempfile; d = tempfile.mkdtemp(prefix='fot-sandbox-'); shutil.copytree('app/data', d, dirs_exist_ok=True); shutil.copy('docs/ui/demo_input.xlsx', os.path.join(d, 'reference.xlsx')); os.environ['FOT_DATA_DIR'] = d; os.environ['FOT_REFERENCE_TEMPLATE'] = os.path.join(d, 'reference.xlsx'); print('FOT_DATA_DIR', d, flush=True); sys.path.insert(0, 'app'); import uvicorn; uvicorn.run('main:app', host='127.0.0.1', port=int(os.environ.get('PORT', '8771')))"
+      ],
+      "port": 8771,
+      "autoPort": true
+    },
+    {
+      "name": "app-sandbox-qwen",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": [
+        "-c",
+        "import os, shutil, sys, tempfile; import faulthandler; faulthandler.enable(); os.environ['FOT_LLM_PROVIDER'] = 'local'; os.environ.setdefault('FOT_LLM_RCVBUF', '1200'); os.environ.setdefault('FOT_LLM_MODEL_LOCAL', 'qwen38'); os.environ['FOT_LLM_MODEL'] = os.environ['FOT_LLM_MODEL_LOCAL']; d = tempfile.mkdtemp(prefix='fot-sandbox-'); shutil.copytree('app/data', d, dirs_exist_ok=True); shutil.copy('docs/ui/demo_input.xlsx', os.path.join(d, 'reference.xlsx')); os.environ['FOT_DATA_DIR'] = d; os.environ['FOT_REFERENCE_TEMPLATE'] = os.path.join(d, 'reference.xlsx'); print('FOT_DATA_DIR', d, flush=True); sys.path.insert(0, 'app'); import uvicorn; uvicorn.run('main:app', host='127.0.0.1', port=int(os.environ.get('PORT', '8772')))"
+      ],
+      "port": 8772,
+      "autoPort": true
     }
   ]
 }

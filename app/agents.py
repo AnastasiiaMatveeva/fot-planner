@@ -13,10 +13,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from contextlib import contextmanager
 
 from db import Activity, Message, now
+
+#: Разбор без плана (начальная загрузка из папки, SOURCE-015): ленты нет,
+#: реплики и работы агентов уходят в лог сервера.
+LOG = logging.getLogger("fot.agents")
 
 from fot_planner.harness_local.catalogue import default_catalogue
 
@@ -98,6 +103,9 @@ def say(db, case_id, text, who="агент", agent=None, payload=None, to_agent=
     ленту плана, и в переписку по документу: разговор о документе идет там,
     где документ открыт, а не в общей ленте, где он теряется среди чужих.
     """
+    if case_id is None:
+        LOG.info("%s: %s", agent or who, text)
+        return None
     m = Message(case_id=case_id, document_id=document_id,
                 who=who, agent=agent, to_agent=to_agent, text=text,
                 payload=json.dumps(payload, ensure_ascii=False) if payload else None)
@@ -124,11 +132,22 @@ def working(db, case_id, agent, title):
     Строка появляется до начала работы, а не после: пока агент думает над
     документом, экономист уже видит, что тот занят и чем именно.
     """
+    holder = {"detail": None, "artifact": None}
+    if case_id is None:
+        t0 = time.time()
+        LOG.info("%s: %s", agent, title)
+        try:
+            yield holder
+        except Exception:
+            LOG.exception("%s: %s — ошибка", agent, title)
+            raise
+        LOG.info("%s: %s — %s, %.1f с", agent, title, holder.get("detail") or "готово",
+                 time.time() - t0)
+        return
     act = Activity(case_id=case_id, agent=agent, title=title, state="идет")
     db.add(act)
     db.commit()
     t0 = time.time()
-    holder = {"detail": None, "artifact": None}
     try:
         yield holder
     except Exception as exc:  # noqa: BLE001 — след об ошибке важнее падения

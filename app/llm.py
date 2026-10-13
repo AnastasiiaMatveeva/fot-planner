@@ -27,11 +27,15 @@
     FOT_LLM_INSECURE_TLS  1 для https с самоподписанным сертификатом
     FOT_LLM_NO_SCHEMA     1, если сервер не умеет json_schema
     FOT_LLM_THINKING      1, чтобы вернуть режим рассуждения моделям Qwen3
+    FOT_LLM_RCVBUF        окно приёма в байтах (1200), если длинные ответы
+                          не доходят из-за MTU на маршруте до сервера
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import socket
 import ssl
 import urllib.error
 import urllib.request
@@ -357,10 +361,7 @@ def _call_openai_compatible(text, filename, model, url, api_key=None,
     ctx = None
     if url.lower().startswith("https"):
         ctx = ssl._create_unverified_context() if insecure else _ssl_context()
-    with urllib.request.urlopen(req, timeout=600, context=ctx) as resp:
-        answer = json.loads(resp.read().decode("utf-8"))
-    choice = answer["choices"][0]
-    content = choice["message"]["content"]
+    content, finish = _post_chat(req, payload, ctx)
     try:
         return json.loads(content)
     except ValueError as e:
@@ -370,7 +371,92 @@ def _call_openai_compatible(text, filename, model, url, api_key=None,
         saved = _salvage(content)
         if saved is None:
             raise
-        raise Truncated(saved, "%s: %s" % (choice.get("finish_reason") or "обрыв", e))
+        raise Truncated(saved, "%s: %s" % (finish or "обрыв", e))
+
+
+def _small_socket(host, port, timeout, rcvbuf):
+    """Сокет с маленьким окном приёма: сервер не пришлёт сегмент больше него."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, rcvbuf)
+    sock.settimeout(timeout)
+    sock.connect((socket.gethostbyname(host), port))
+    return sock
+
+
+def _open(req, ctx):
+    """urlopen, а при FOT_LLM_RCVBUF — с окном приёма заданного размера.
+
+    Поток не спасает целиком: когда сервер шлёт быстро, куски склеиваются в
+    полноразмерный сегмент, и он теряется так же (12.10.2026, разбор письма
+    висел на середине ответа). Окно приёма в ~1200 байт не даёт серверу
+    собрать сегмент крупнее — ответ идёт медленнее, но доходит. Это обход
+    сетевой неисправности, а не настройка модели: правильное лечение — MTU
+    на маршруте до сервера; пока его нет, FOT_LLM_RCVBUF=1200 в .env.
+    """
+    rcvbuf = os.environ.get("FOT_LLM_RCVBUF", "").strip()
+    if not rcvbuf.isdigit():
+        return urllib.request.urlopen(req, timeout=STREAM_IDLE_TIMEOUT, context=ctx)
+    size = int(rcvbuf)
+
+    class _HTTP(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = _small_socket(self.host, self.port, self.timeout, size)
+
+    class _HTTPS(http.client.HTTPSConnection):
+        def connect(self):
+            raw = _small_socket(self.host, self.port, self.timeout, size)
+            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
+
+    class _HTTPHandler(urllib.request.HTTPHandler):
+        def http_open(self, r):
+            return self.do_open(_HTTP, r)
+
+    class _HTTPSHandler(urllib.request.HTTPSHandler):
+        def https_open(self, r):
+            return self.do_open(_HTTPS, r, context=self._context)
+
+    opener = urllib.request.build_opener(_HTTPHandler(), _HTTPSHandler(context=ctx))
+    return opener.open(req, timeout=STREAM_IDLE_TIMEOUT)
+
+
+#: Сколько ждать следующего куска потока. Это не время всего ответа: длинный
+#: разбор идёт минутами, но молчание дольше этого — обрыв связи, а не работа.
+STREAM_IDLE_TIMEOUT = 180
+
+
+def _post_chat(req, payload, ctx):
+    """Запрос к /chat/completions потоком. Возвращает (текст, finish_reason).
+
+    Ответ просим кусками (SSE), а не одним телом. Случай 12.10.2026: сервер
+    Qwen в сети организации отдавал ответы до ~1,3 КБ за секунду, а длинные не
+    доходили никогда — разбор документа висел до таймаута 600 с, хотя модель
+    отвечала за две. Это потеря полноразмерных пакетов по дороге (MTU), её
+    лечат в сети; поток же идёт мелкими кусками и проходит и так. Заодно
+    молчание связи видно через STREAM_IDLE_TIMEOUT, а не через десять минут.
+    """
+    payload = dict(payload, stream=True)
+    req.data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    parts, finish = [], None
+    with _open(req, ctx) as resp:
+        kind = resp.headers.get("Content-Type", "") if getattr(resp, "headers", None) else ""
+        if "event-stream" not in kind:
+            # Сервер поток не поддержал и ответил целиком — берём как есть.
+            choice = json.loads(resp.read().decode("utf-8"))["choices"][0]
+            return choice["message"].get("content") or "", choice.get("finish_reason")
+        for raw in resp:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            chunk = json.loads(data)
+            for choice in chunk.get("choices") or []:
+                piece = (choice.get("delta") or {}).get("content")
+                if piece:
+                    parts.append(piece)
+                finish = choice.get("finish_reason") or finish
+    return "".join(parts), finish
 
 
 #: Сколько текста уходит в один запрос и насколько части перекрываются.
@@ -650,9 +736,8 @@ def read_image(png_b64, prompt, max_tokens=3000):
         ctx = ssl._create_unverified_context() if _truthy(
             os.environ.get("FOT_LLM_INSECURE_TLS")) else _ssl_context()
     try:
-        with urllib.request.urlopen(req, timeout=600, context=ctx) as resp:
-            answer = json.loads(resp.read().decode("utf-8"))
-        return (answer["choices"][0]["message"].get("content") or "").strip()
+        content, _finish = _post_chat(req, payload, ctx)
+        return content.strip()
     except Exception:  # noqa: BLE001 — модель не прочитала: скажем об этом выше
         return ""
 
@@ -701,7 +786,10 @@ FREEFORM_SYSTEM = """Ты читаешь документ планово-эко�
 признак гособоронзаказа, срок действия, фонд оплаты труда. Разрешенные виды
 выплат — оклад, 120, 122, 124, 152, стимулирующая приказом: по каждому «да»
 или «нет», если в документе сказано. Разрешено ли основное место и
-совместительство, приоритет, конечные даты выплат оклада и надбавок.
+совместительство, конечные даты выплат оклада и надбавок. priority — только
+участие договора в программе «Приоритет 2030» («да»/«нет»); очерёдность
+финансирования («в первую очередь», «очередь 3 из 5») — не priority, её не
+выписывай.
 
 Трудоемкость (labor) — плановые позиции договора: шифр договора, год,
 должность или окладная группа (страница, номер группы, номер уровня), план в
@@ -714,7 +802,8 @@ FREEFORM_SYSTEM = """Ты читаешь документ планово-эко�
 («Этап 1, 01.06.2026–30.09.2026, 4 чел.-мес.»), заводи строку на каждый этап
 и укажи его даты в from и to; этапы одной должности не складывай. Если
 человеко-месяцы расписаны по месяцам года, дай их в months — двенадцать
-чисел с января по декабрь, пустые месяцы нулем.
+чисел с января по декабрь, пустые месяцы нулем. Если по месяцам они не
+расписаны, months — null, а не двенадцать нулей.
 
 Поступления (inflows) — деньги по договору помесячно: шифр договора, год,
 номер месяца от 1 до 12, сумма поступления. Строку заводи на каждый месяц,
@@ -732,8 +821,30 @@ FREEFORM_SYSTEM = """Ты читаешь документ планово-эко�
 ему можно дать дополнительно к собственной.
 
 Правила:
-- бери только то, что в документе действительно написано; ничего не выводи
-  по смыслу и не достраивай по образцу;
+- бери только то, что в документе действительно написано, и не достраивай
+  по образцу. Но написанное бывает сказано другими словами — его переводи в
+  поле, а признак, по которому решил, процитируй в «месте»:
+  - «тыс. руб.», «т.р.», «тыс.₽» в шапке графы или рядом с числом — умножь
+    на 1000; «млн» — на 1 000 000; сумму прописью переведи в число;
+  - кварталы: I — 01.01–31.03, II — 01.04–30.06, III — 01.07–30.09,
+    IV — 01.10–31.12; «II–III кварталы 2026» — from 01.04.2026, to
+    30.09.2026; «весь год» — с 01.01 по 31.12; «с первого апреля текущего
+    (2026) года» — 01.04.2026; «с 02.02.26» — 02.02.2026;
+  - goz «да»: гособоронзаказ, идентификатор государственного контракта
+    (ИГК), отдельный счёт по 275-ФЗ, заказчик Минобороны, приёмка военным
+    представительством (ВП МО), «головной исполнитель ГОЗ», «соисполнитель
+    ГОЗ». goz «нет»: внебюджет, коммерческий
+    заказчик, инициативная работа, грант, собственные средства, субсидия на
+    выполнение госзадания. Нет ни
+    того, ни другого — null;
+  - «только оклад, надбавки нельзя» — allow_salary «да», остальные виды
+    «нет»; «совместителей не привлекать» — allow_part «нет»;
+  - ставка словами: «полставки» — 0.5, «ставка», «1 ст.» — 1;
+  - salary сотрудника — месячная сумма при его ставке. Если графа названа
+    «оклад за ставку» («за 1 ст.», «на полную ставку»), а ставка неполная,
+    salary = оклад × ставка, и скажи об этом в «месте»;
+  - «внутр. совместитель», «совм.» — тип занятости «совместительство»;
+    «аспирант», «студент» в примечании — категория занятости;
 - у сотрудника обязательно заполни position и salary, если они в документе
   есть: должность и месячная зарплата — главное в строке штатного расписания,
   без них строка бесполезна;
@@ -797,7 +908,7 @@ _FF_EMP = {
     # расписания бесполезна, а необязательное поле модель молча пропускает,
     # даже когда значение стоит прямо перед ней. Пустым его вернуть можно —
     # тип допускает null, — но соврать умолчанием уже не выйдет.
-    "required": ["code", "position", "rate", "salary"],
+    "required": ["code", "position", "rate", "salary", "from", "to"],
     "additionalProperties": False,
 }
 
@@ -844,7 +955,12 @@ _FF_CTR = {
         "salary_deadline": _TXT, "allowance_deadline": _TXT,
         "from": _TXT, "to": _TXT, "место": _TXT,
     },
-    "required": ["code", "fot", "goz"],
+    # Сроки и разрешения обязательны по той же причине, что должность и
+    # зарплата у сотрудника: необязательное поле Qwen пропускал, даже когда
+    # в карточке стояло «только оклад» и «II–III кварталы» (12.10.2026).
+    "required": ["code", "fot", "goz", "from", "to", "allow_salary", "allow_120",
+                 "allow_122", "allow_124", "allow_152", "allow_order",
+                 "allow_main", "allow_part"],
     "additionalProperties": False,
 }
 _FF_SUB = {
@@ -942,6 +1058,11 @@ def freeform(path, filename="", max_chunks=8, hints=None):
                              for f in _FF_KEY[key])
                 if not any(mark) or mark in seen[key]:
                     continue
+                # Двенадцать нулей — это «по месяцам не расписано», а не план
+                # в ноль: так отвечал Qwen на письмо с этапом без разбивки.
+                if key == "labor" and isinstance(item.get("months"), list) \
+                        and not any(item["months"]):
+                    item["months"] = None
                 seen[key].add(mark)
                 found[key].append(item)
 

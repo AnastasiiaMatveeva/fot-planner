@@ -28,8 +28,11 @@ import extract          # noqa: E402
 import llm              # noqa: E402
 from agents import handoff, say, working  # noqa: E402
 from db import (  # noqa: E402
-    Contract, Correction, Document, Employee, Inflow, LaborRow, Proposal,
-    Question, SecretAllowance, Substitution, now)
+    Case, Contract, ContractValue, Correction, Document, Employee, Inflow, LaborRow, Proposal,
+    Question, SalaryMonth, SalaryRow, SecretAllowance, Substitution, WorkOrder, WorkOrderMember,
+    now)
+import workgroup  # noqa: E402
+import facts  # noqa: E402
 
 # Слова, по которым книга опознается как нормативный документ, а не как
 # расчетно-калькуляционные материалы по договору.
@@ -56,7 +59,9 @@ def _peek(path, limit=4000):
 
 #: Обработчик -> агент, который его выполняет. Правила замещения читает тот же
 #: агент ввода данных, поэтому передачи между агентами там не возникает.
-AGENT_OF = {"intake": "intake", "substitutions": "intake", "norms": "norms"}
+AGENT_OF = {"intake": "intake", "substitutions": "intake", "norms": "norms",
+            "positions": "norms", "salary": "intake", "workgroup": "intake",
+            "facts": "intake"}
 AGENT_TITLE = {"intake": "Извлечение данных", "norms": "Нормативная база"}
 
 #: Вид документа -> кто его обрабатывает. «штатное расписание» и документы по
@@ -66,7 +71,103 @@ OWNER = {
     "штатное расписание": "intake",
     "нормативный документ": "norms",
     "правила замещения должностей": "substitutions",
+    "перечень должностей": "positions",
+    "зарплата по месяцам": "salary",
+    workgroup.KIND: "workgroup",
+    facts.KIND: "facts",
 }
+
+SALARY_KIND = "зарплата по месяцам"
+POSITIONS_KIND = "перечень должностей"
+#: Коды категорий персонала, как они стоят в справочнике должностей.
+CATEGORY_CODES = ("НТП", "НР", "АУП", "ППС", "ПП")
+MONTH_WORDS = ("январь", "февраль", "март", "апрель", "май", "июнь", "июль", "август",
+               "сентябрь", "октябрь", "ноябрь", "декабрь")
+#: Начала названий месяцев в шапке: «январь», «янв», «янв.», «Январь 2026».
+_MONTH_STEMS = ("янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт",
+                "ноя", "дек")
+
+
+def _month_of_header(text):
+    t = str(text or "").strip().lower()
+    if t.startswith("мая"):
+        return 5
+    for i, stem in enumerate(_MONTH_STEMS):
+        if t.startswith(stem):
+            return i + 1
+    return None
+
+
+def salary_layout(path):
+    """Где в книге таблица зарплаты по месяцам: лист, строка шапки, графы
+    сотрудника и месяцев. None — книга не такая.
+
+    Опознаётся по шапке, а не моделью: графа сотрудника (код строки,
+    табельный номер или ФИО) и не меньше шести граф с названиями месяцев.
+    Штатное расписание с одной графой «Зарплата» сюда не попадает."""
+    if os.path.splitext(path)[1].lower() not in (".xlsx", ".xlsm"):
+        return None
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    except Exception:  # noqa: BLE001 — не книга: пусть решает общий разбор
+        return None
+    try:
+        for ws in wb.worksheets:
+            for r, values in enumerate(ws.iter_rows(max_row=12, values_only=True), start=1):
+                months, code, fio, dept = {}, None, None, None
+                for c, v in enumerate(values or ()):
+                    head = str(v or "").strip().lower()
+                    month = _month_of_header(head)
+                    if month and month not in months.values():
+                        months[c] = month
+                    elif "управленческ" in head or "подразделение управ" in head:
+                        # Управленческое подразделение строки (01.10.2026).
+                        dept = c if dept is None else dept
+                    elif "код строки" in head or "табельн" in head:
+                        code = c if code is None else code
+                    elif "фио" in head or "ф.и.о" in head or head == "сотрудник":
+                        fio = c if fio is None else fio
+                if len(months) >= 6 and (code is not None or fio is not None):
+                    return {"sheet": ws.title, "row": r, "code": code, "fio": fio,
+                            "months": months, "dept": dept}
+        return None
+    finally:
+        wb.close()
+
+
+def positions_layout(path):
+    """Строки перечня должностей [(должность, категория)]; None — книга не такая.
+
+    Узнаётся по форме, а не моделью (SOURCE-013): первый лист, в графе A
+    должность, в графе B код категории персонала. Шапка необязательна — в
+    файле организации её нет. Читается только первый лист, как у правил
+    замещения: книга с обоими листами не должна молча стать перечнем."""
+    if os.path.splitext(path)[1].lower() not in (".xlsx", ".xlsm"):
+        return None
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    except Exception:  # noqa: BLE001 — не книга: пусть решает общий разбор
+        return None
+    try:
+        rows, other = [], 0
+        for values in wb.worksheets[0].iter_rows(values_only=True):
+            values = tuple(values or ())
+            name = str(values[0]).strip() if values and values[0] is not None else ""
+            cat = (str(values[1]).strip().upper()
+                   if len(values) > 1 and values[1] is not None else "")
+            if not name and not cat:
+                continue
+            if name and cat in CATEGORY_CODES:
+                rows.append((name, cat))
+            else:
+                other += 1
+        # Одна строка не по форме — шапка. Больше — это другая таблица, где
+        # категория во второй графе встретилась случайно.
+        return rows if len(rows) >= 3 and other <= 1 else None
+    finally:
+        wb.close()
 
 
 def classify_by_words(path):
@@ -117,6 +218,29 @@ def classify(path, filename=""):
     by_template = template_kind(path)
     if by_template is not None:
         return by_template, OWNER[by_template], "разбор по листам шаблона", None
+    # Факт начислений (форма 6.3 «ШР на дату, детализация назначений» или
+    # плоская «факт_выплат», 30.09.2026) — по шапке и раньше зарплаты по
+    # месяцам: полная выгрузка отчёта сервиса содержит и лист 6.1 с графами
+    # месяцев, и лист 6.3 — это факт, а не зарплата.
+    if facts.layout(path) is not None:
+        return facts.KIND, OWNER[facts.KIND], "разбор по графам факта", None
+    # Таблица зарплаты по месяцам узнаётся по шапке: модель её вида не знает
+    # и отдала бы штатному расписанию, где сумма у строки одна.
+    if salary_layout(path) is not None:
+        return SALARY_KIND, OWNER[SALARY_KIND], "разбор по графам месяцев", None
+    if positions_layout(path) is not None:
+        return POSITIONS_KIND, OWNER[POSITIONS_KIND], "разбор по графам перечня", None
+    # Приказ о рабочей группе узнаётся по форме: заголовок и таблица состава с
+    # табельными номерами. Модель такого вида не знает (28.09.2026).
+    if docread.kind_of(path) in (".doc", ".docx", ".pdf"):
+        try:
+            text = docread.to_text(path)
+        except Exception:  # noqa: BLE001 — не прочитался: решит модель
+            text = ""
+        if isinstance(text, tuple):
+            text = text[0]
+        if workgroup.looks_like(text):
+            return workgroup.KIND, OWNER[workgroup.KIND], "разбор по форме приказа", None
     res = llm.classify(path, filename)
     # Каша в текстовом слое — не приговор: у PDF есть сами страницы. Читаем
     # их картинками и определяем вид заново по распознанному тексту.
@@ -144,6 +268,52 @@ def classify(path, filename=""):
     return res.get("error") or "не прочитан", None, None, None
 
 
+# ── перечень должностей ─────────────────────────────────────────
+def run_positions(db, case, doc):
+    """Перечень должностей с категориями — основа справочника (SOURCE-013).
+
+    Приказы и справки правят величины только у должностей, которые в
+    справочнике уже есть. Перечень заводит недостающие и ставит категорию.
+    Должности, которых в перечне нет, не удаляются, а называются: молча
+    удалить строку справочника — потерять её величины.
+    """
+    import reference
+    from fot_planner.position_reference import normalize_position
+
+    with working(db, case.id, "norms", "читает перечень должностей «%s»" % doc.name) as w:
+        rows = positions_layout(doc.path) or []
+        added, changed = [], []
+        for name, cat in rows:
+            what, diff = reference.upsert_position(name, cat=cat)
+            if what == "заведена":
+                added.append(name)
+            elif diff:
+                changed.append("%s: %s → %s" % (name, diff[0][1] or "—", cat))
+        listed = {normalize_position(name) for name, _ in rows}
+        extra = []
+        for r in reference.read_rows():
+            if normalize_position(r["pos"]) not in listed and r["pos"] not in extra:
+                extra.append(r["pos"])
+        doc.state = "разобран"
+        doc.kind = POSITIONS_KIND
+        doc.parsed_by = "разбор по графам перечня"
+        doc.summary = "должностей %d: заведено %d, категория изменена у %d" % (
+            len(rows), len(added), len(changed))
+        doc.gave = json.dumps({"сверен": True}, ensure_ascii=False)
+        w["detail"] = doc.summary
+        w["artifact"] = {"файл": doc.name, "должностей в перечне": len(rows),
+                         "заведено": added or None, "категория изменена": changed or None,
+                         "в справочнике, но не в перечне": extra or None,
+                         "куда записано": "справочник должностей"}
+        db.commit()
+    parts = ["Перечень должностей «%s»: %s." % (doc.name, doc.summary)]
+    if extra:
+        parts.append("В справочнике есть должности, которых нет в перечне: %s. "
+                     "Я их не удалял." % ", ".join(extra))
+    say(db, case.id, " ".join(parts), agent="norms", document_id=doc.id)
+    db.commit()
+
+
 # ── правила замещения должностей ────────────────────────────────
 def run_substitutions(db, case, doc):
     """Прочитать таблицу «кого кем можно заместить» и положить в дело.
@@ -165,7 +335,13 @@ def run_substitutions(db, case, doc):
         # «внесено в реестр» и выглядит как неудавшийся разбор.
         sources = {s.document_id for s in db.query(Substitution).all()
                    if s.document_id and s.document_id != doc.id}
-        db.query(Substitution).delete()
+        # Заменяются только правила из документов. Правила, введённые или
+        # исправленные на вкладке реестра, остаются, и для их должностей
+        # правило из файла не пишется: ручное важнее (SOURCE-010). До
+        # 18.09.2026 новый файл стирал все правила целиком.
+        db.query(Substitution).filter(Substitution.document_id.isnot(None)).delete(
+            synchronize_session=False)
+        manual = {s.position for s in db.query(Substitution).all()}
         replaced = []
         for old_id in sources:
             prev = db.get(Document, old_id)
@@ -178,7 +354,7 @@ def run_substitutions(db, case, doc):
         for r in range(2, ws.max_row + 1):
             src = ws.cell(r, 1).value
             dst = ws.cell(r, 2).value
-            if not src:
+            if not src or str(src).strip() in manual:
                 continue
             db.add(Substitution(position=str(src).strip(),
                                 replaced_by=str(dst).strip() if dst else "",
@@ -224,6 +400,351 @@ def run_substitutions(db, case, doc):
            % ", ".join("«%s»" % n for n in replaced) if replaced else ""),
         document_id=doc.id,
         agent="intake")
+    db.commit()
+
+
+# ── зарплата по месяцам ─────────────────────────────────────────
+def _key(text):
+    return re.sub(r"\s+", " ", str(text or "").replace("ё", "е").replace("Ё", "Е")).strip().lower()
+
+
+def run_salary_months(db, case, doc):
+    """Прочитать таблицу зарплаты по месяцам (решение пользователя 19.09.2026).
+
+    Строка файла — сотрудник штатного расписания: по коду строки или
+    табельному номеру, иначе по ФИО; графы месяцев — суммы. Год — год плана,
+    в который загружен файл. Новый файл заменяет строки и суммы прежних
+    файлов этого года; суммы, исправленные на вкладке, остаются — ручное
+    важнее, как у правил замещения (SOURCE-010)."""
+    import openpyxl
+    import actuality
+
+    year = case.year
+    layout = salary_layout(doc.path)
+    if layout is None:
+        raise ValueError("в книге нет графы сотрудника и граф месяцев")
+    with working(db, case.id, "intake", "читает зарплату по месяцам «%s»" % doc.name) as w:
+        by_code, by_person, by_fio = {}, {}, {}
+        for e in db.query(Employee).all():
+            by_code[_key(e.code)] = e
+            if e.person_code:
+                by_person.setdefault(_key(e.person_code), []).append(e)
+            if e.fio:
+                by_fio.setdefault(_key(e.fio), []).append(e)
+        # Прежний файл мог дать только суммы: строку до него завела правка в
+        # ячейке. Поэтому источники — и у строк, и у сумм.
+        earlier = {r.document_id for model in (SalaryRow, SalaryMonth)
+                   for r in db.query(model).filter_by(year=year).all()
+                   if r.document_id and r.document_id != doc.id}
+        db.query(SalaryMonth).filter(SalaryMonth.year == year,
+                                     SalaryMonth.document_id.isnot(None)).delete(
+            synchronize_session=False)
+        db.query(SalaryRow).filter(SalaryRow.year == year,
+                                   SalaryRow.document_id.isnot(None)).delete(
+            synchronize_session=False)
+        # Управленческие подразделения (01.10.2026): графа файла называет
+        # подразделение строки; у человека строк столько, сколько подразделений.
+        from db import MgmtDepartment
+        depts = {d.name.lower(): d for d in db.query(MgmtDepartment).all()}
+
+        def dept_of(raw):
+            name = " ".join(str(raw or "").split())[:200]
+            if not name:
+                return None
+            d = depts.get(name.lower())
+            if d is None:
+                d = MgmtDepartment(name=name)
+                db.add(d)
+                db.flush()
+                depts[name.lower()] = d
+            return d.id
+
+        rows_by = {(r.employee_code, r.mgmt_department_id): r
+                   for r in db.query(SalaryRow).filter_by(year=year).order_by(SalaryRow.id).all()}
+        manual = {(m.salary_row_id, m.month)
+                  for m in db.query(SalaryMonth).filter_by(year=year).all()}
+        replaced = []
+        for old_id in earlier:
+            prev = db.get(Document, old_id)
+            if prev is not None and prev.state != "заменен":
+                prev.state = "заменен"
+                replaced.append(prev.name)
+                if doc.supersedes_id is None:
+                    doc.supersedes_id = prev.id
+
+        wb = openpyxl.load_workbook(doc.path, data_only=True, read_only=True)
+        try:
+            ws = wb[layout["sheet"]]
+            rows, sums, unknown, seen, zeros, twice = 0, 0, [], set(), [], []
+            for values in ws.iter_rows(min_row=layout["row"] + 1, values_only=True):
+                cell = lambda c: values[c] if c is not None and c < len(values) else None  # noqa: E731
+                code, fio = cell(layout["code"]), cell(layout["fio"])
+                if code in (None, "") and fio in (None, ""):
+                    continue
+                e = by_code.get(_key(code)) if code not in (None, "") else None
+                if e is None and code not in (None, ""):
+                    same = by_person.get(_key(code)) or []
+                    e = same[0] if len(same) == 1 else None
+                if e is None and fio not in (None, ""):
+                    same = by_fio.get(_key(fio)) or []
+                    e = same[0] if len(same) == 1 else None
+                if e is None:
+                    unknown.append(str(fio or code).strip())
+                    continue
+                dept = dept_of(cell(layout.get("dept"))) if layout.get("dept") is not None else None
+                if (e.code, dept) in seen:
+                    # Одно и то же подразделение у человека дважды — вторая
+                    # строка файла не читается, об этом скажет лента.
+                    twice.append("%s — %s" % (e.fio or e.code, cell(layout.get("dept")) or "без подразделения"))
+                    continue
+                seen.add((e.code, dept))
+                rows += 1
+                srow = rows_by.get((e.code, dept))
+                if srow is None and dept is None:
+                    # Без графы подразделения — первая строка человека.
+                    srow = next((r for (c, _d), r in rows_by.items() if c == e.code), None)
+                if srow is None:
+                    srow = SalaryRow(employee_code=e.code, year=year, source=doc.name,
+                                     document_id=doc.id, mgmt_department_id=dept)
+                    db.add(srow)
+                    db.flush()
+                    rows_by[(e.code, dept)] = srow
+                for c, month in layout["months"].items():
+                    amount = _num(cell(c))
+                    if amount is None or amount < 0 or (srow.id, month) in manual:
+                        continue
+                    if amount == 0:
+                        # Ноль пока запрещён (решение пользователя 19.09.2026):
+                        # месяц без оклада среди оплачиваемых делает план
+                        # нерешаемым. Такой месяц остаётся пустым.
+                        zeros.append("%s — %s" % (e.fio or e.code, MONTH_WORDS[month - 1]))
+                        continue
+                    db.add(SalaryMonth(employee_code=e.code, year=year, month=month,
+                                       amount=amount, source=doc.name, document_id=doc.id,
+                                       salary_row_id=srow.id))
+                    sums += 1
+        finally:
+            wb.close()
+        doc.state = "разобран"
+        doc.kind = SALARY_KIND
+        doc.parsed_by = "разбор по графам месяцев"
+        doc.summary = "строк %d, сумм %d" % (rows, sums)
+        w["detail"] = doc.summary
+        w["artifact"] = {"файл": doc.name, "год": year, "строк": rows, "сумм по месяцам": sums,
+                         "не найдено в штатном расписании": unknown or None,
+                         "заменил прежнюю редакцию": ", ".join(replaced) or None,
+                         "куда записано": "вкладка «Заработная плата по месяцам»",
+                         "применяется в расчете": "лист «зарплата_по_месяцам» входного файла"}
+        # Зарплата года уходит в расчёт каждого плана этого года.
+        years = {c.id: c.year for c in db.query(Case).all()}
+        actuality.mark_review(db, [r for r in actuality.results(db)
+                                   if years.get(r.case_id) == year],
+                              "загружена зарплата по месяцам «%s»" % doc.name)
+        db.commit()
+
+    say(db, case.id,
+        "Прочитал «%s»: зарплата по месяцам %d года для %d %s, %d %s. Суммы, "
+        "исправленные на вкладке «Заработная плата по месяцам», остались как были."
+        % (doc.name, year, rows, _plural(rows, "строки", "строк", "строк"), sums,
+           _plural(sums, "сумма", "суммы", "сумм"))
+        + (" Прежняя редакция (%s) помечена замененной."
+           % ", ".join("«%s»" % n for n in replaced) if replaced else ""),
+        document_id=doc.id, agent="intake")
+    if unknown:
+        say(db, case.id,
+            "В штатном расписании не нашёл: %s. Их суммы в расчёт не ушли — "
+            "проверьте табельный номер или ФИО в файле."
+            % ", ".join("«%s»" % u for u in unknown[:8]), document_id=doc.id, agent="intake")
+    if twice:
+        say(db, case.id,
+            "Подразделение у человека повторяется — вторую строку не взял: %s."
+            % ", ".join(twice[:8]), document_id=doc.id, agent="intake")
+    if zeros:
+        say(db, case.id,
+            "Нулевые суммы не принял: %s. Ноль в месяце пока не допускается — "
+            "эти месяцы остались пустыми, задайте сумму на вкладке."
+            % ", ".join(zeros[:8]), document_id=doc.id, agent="intake")
+    db.commit()
+
+
+# ── факт начислений ─────────────────────────────────────────────
+def run_facts(db, case, doc):
+    """Прочитать факт начислений (решение пользователя 30.09.2026).
+
+    Год — год плана, в который загружен файл. Факт общий для всех планов
+    года и уходит в расчёт каждого из них за те месяцы, что в нём есть,
+    поэтому к пересмотру помечаются расчёты всех планов года."""
+    import actuality
+
+    year = case.year
+    with working(db, case.id, "intake", "читает факт начислений «%s»" % doc.name) as w:
+        rows, skipped = facts.parse(doc.path, year, uploaded=doc.uploaded, name=doc.name)
+        got = facts.store(db, case, doc, rows)
+        doc.state = "разобран"
+        doc.kind = facts.KIND
+        doc.parsed_by = "разбор по графам факта"
+        doc.summary = "%s: строк %d" % (facts.months_text(got["месяцы"]) or "месяцев нет",
+                                         got["строк"])
+        w["detail"] = doc.summary
+        w["artifact"] = {"файл": doc.name, "год": year,
+                         "месяцы": facts.months_text(got["месяцы"]) or None,
+                         "строк": got["строк"], "сотрудников": got["сотрудников"],
+                         "договоров": got["договоров"],
+                         "не найдено в штатном расписании":
+                             got["не найдено в штатном расписании"] or None,
+                         "не найдены договоры": got["не найдены договоры"] or None,
+                         "не прочитано": skipped[:20] or None,
+                         "заменил прежнюю редакцию": ", ".join(got["заменены"]) or None,
+                         "куда записано": "вкладка реестра «Факт начислений»",
+                         "применяется в расчете": "лист «факт_выплат» входного файла: "
+                                                  "эти месяцы расчёт не пересчитывает"}
+        runs = []
+        for c in db.query(Case).filter_by(year=year).all():
+            runs += actuality.runs_of_case(db, c.id)
+        actuality.mark_review(db, runs, "загружен факт начислений «%s»" % doc.name)
+        db.commit()
+
+    say(db, case.id,
+        "Прочитал «%s»: факт начислений %d года за %s — %d %s, %d %s, %d %s."
+        % (doc.name, year, facts.months_text(got["месяцы"]) or "—", got["строк"],
+           _plural(got["строк"], "строка", "строки", "строк"), got["сотрудников"],
+           _plural(got["сотрудников"], "сотрудник", "сотрудника", "сотрудников"),
+           got["договоров"], _plural(got["договоров"], "договор", "договора", "договоров"))
+        + (" Прежняя редакция (%s) помечена замененной."
+           % ", ".join("«%s»" % n for n in got["заменены"]) if got["заменены"] else ""),
+        document_id=doc.id, agent="intake")
+    if got["не найдены договоры"]:
+        say(db, case.id,
+            "Не нашёл договоры: %s. Строки с ними в расчёт не пойдут — проверьте шифр "
+            "или лицевой счёт в файле." % ", ".join("«%s»" % u for u in got["не найдены договоры"][:8]),
+            document_id=doc.id, agent="intake")
+    if got["не найдено в штатном расписании"]:
+        say(db, case.id,
+            "В штатном расписании не нашёл: %s. Их деньги с договоров в расчёте учтены, "
+            "а сами они в плане не участвуют."
+            % ", ".join("«%s»" % u for u in got["не найдено в штатном расписании"][:8]),
+            document_id=doc.id, agent="intake")
+    if skipped:
+        say(db, case.id, "Не прочитал строк: %d (%s)." % (len(skipped), "; ".join(skipped[:5])),
+            document_id=doc.id, agent="intake")
+    db.commit()
+
+
+# ── приказ о рабочей группе ────────────────────────────────────────────
+def _find_contract(db, p):
+    """Договор приказа: по лицевому счёту, иначе по номеру соглашения.
+
+    Оба ключа написаны людьми, поэтому сравниваются без пробелов и регистра.
+    Не нашлось или нашлось больше одного — None: выбирает экономист."""
+    ctrs = db.query(Contract).all()
+    for key, get in ((p.get("счёт"), lambda c: c.account),
+                     (p.get("соглашение"), lambda c: c.number)):
+        k = workgroup.norm_account(key)
+        if not k:
+            continue
+        hit = {c.code for c in ctrs if workgroup.norm_account(get(c)) == k}
+        if len(hit) == 1:
+            return hit.pop()
+    return None
+
+
+def _find_row(db, member):
+    """Строка штатного расписания члена группы: табельный номер и должность.
+
+    Рабочая группа — связка «человек + должность», а не человек: у одного
+    табельного номера бывают две строки (основное место и совместительство).
+    Однозначно не нашлось — None, строку выбирает экономист."""
+    rows = [e for e in db.query(Employee).all()
+            if (e.person_code or e.code) == member.get("табельный")]
+    if len(rows) == 1:
+        return rows[0].code
+    pos = workgroup.norm_position(member.get("должность"))
+    same = [e for e in rows if workgroup.norm_position(e.position) == pos]
+    return same[0].code if len(same) == 1 else None
+
+
+def rebind_workorders(db):
+    """Приказы без договора — к договору, который появился в реестре позже.
+
+    Приказ, загруженный раньше договора, иначе так и висел бы без договора:
+    договор ищется по л/с и номеру соглашения только при разборе. Поэтому
+    после каждой загрузки и правки договора непривязанные приказы
+    перепроверяются — как лицевой счёт в штатке становится ссылкой, когда
+    появляется договор (решение пользователя 28.09.2026). Договор, выбранный
+    экономистом, не трогается: перепроверяются только пустые."""
+    n = 0
+    for o in db.query(WorkOrder).filter(WorkOrder.contract_code.is_(None)).all():
+        code = _find_contract(db, {"счёт": o.account, "соглашение": o.agreement})
+        if not code:
+            continue
+        o.contract_code = code
+        d = db.get(Document, o.document_id) if o.document_id else None
+        if d is not None and not d.contract_code:
+            d.contract_code = code
+        n += 1
+    if n:
+        db.commit()
+    return n
+
+
+def run_workgroup(db, case, doc):
+    """Приказ о рабочей группе — в реестр: приказ, договор, состав по строкам."""
+    from docread import to_text
+    text = to_text(doc.path)
+    if isinstance(text, tuple):
+        text = text[0]
+    p = workgroup.parse(text)
+    for old in db.query(WorkOrder).filter_by(document_id=doc.id).all():
+        db.query(WorkOrderMember).filter_by(order_id=old.id).delete()
+        db.delete(old)
+    base = p.get("основание") or {}
+    # Приказ, загруженный внутрь договора (или привязанный из очереди), держит
+    # этот договор: экономист выбрал его сам. По лицевому счёту и номеру
+    # соглашения договор ищется, только когда приказ пришёл без него.
+    chosen = doc.contract_code or None
+    order = WorkOrder(kind=p["вид"], number=p.get("номер"), date=p.get("дата"),
+                      base_number=base.get("номер"), base_date=base.get("дата"),
+                      contract_code=chosen or _find_contract(db, p),
+                      agreement=p.get("соглашение"),
+                      agreement_date=p.get("соглашение от"), topic=p.get("тема"),
+                      account=p.get("счёт"), kfo=p.get("кфо"), date_from=p.get("с"),
+                      date_to=p.get("по"), leader=p.get("руководитель"),
+                      source=doc.name, document_id=doc.id)
+    db.add(order)
+    db.flush()
+    lost = 0
+    for m in p.get("состав") or []:
+        code = _find_row(db, m)
+        lost += code is None
+        db.add(WorkOrderMember(order_id=order.id, n=m.get("n"), action=m.get("действие"),
+                               fio=m.get("фио"), person_code=m.get("табельный"),
+                               position=m.get("должность"), department=m.get("подразделение"),
+                               work=m.get("работы"),
+                               leader="да" if m.get("фио") == p.get("руководитель") else None,
+                               employee_code=code))
+    # «разобран» — общее состояние разобранного документа (на экране —
+    # «Обработан»); своё слово показывалось бы сырым и строчной буквой.
+    doc.state = "разобран"
+    doc.kind = workgroup.KIND
+    doc.contract_code = order.contract_code
+    doc.summary = workgroup.summary(p)
+    db.commit()
+    # Чего не нашлось — сказано прямо и где это выбрать; молча не угадываем.
+    # Пересказа приказа в ленте нет (29.09.2026): каждое пересказанное поле —
+    # лишнее место для ошибки, а прочитанное видно в самом документе.
+    n = len(p.get("состав") or [])
+    people = "%d %s" % (n, _px(n, "человек", "человека", "человек"))
+    todo = []
+    if order.contract_code is None:
+        todo.append("договор не найден — укажите его в меню строки приказа во «Документах»")
+    if lost:
+        todo.append("%d %s в штатном расписании — выберите во вкладке «Рабочая группа» договора"
+                    % (lost, _px(lost, "не найден", "не найдены", "не найдены")))
+    say(db, case.id,
+        "Прочитал «%s»: %s%s." % (
+            doc.name, people,
+            "; " + "; ".join(todo) if todo else " в группе договора %s" % order.contract_code),
+        agent="intake", document_id=doc.id)
     db.commit()
 
 
@@ -332,6 +853,41 @@ def _labor_rows_monthly(rows, default_year):
     return out
 
 
+def _adopt_contract(db, passport, doc):
+    """Договор из шапки документа, если файл брошен в реестр без договора.
+
+    SOURCE-005: экономист не вводит шифр руками. Пока ввод был обязателен,
+    пачка файлов ложилась в «Документы без договора» и ждала, когда человек
+    перепечатает шифр, который в этих же файлах и написан.
+
+    Наименование ставится только пустому договору. Уже заданное имя следующий
+    документ не переписывает: у пачки одного договора темы формулируются
+    по-разному, и последний загруженный молча переименовывал бы договор.
+    """
+    hint = passport.get("contract_hint") or {}
+    code = str(hint.get("code") or "").strip()[:60]
+    if not code or getattr(doc, "contract_code", None):
+        return None
+    subject = (hint.get("subject") or "").strip()[:300] or None
+    found = db.query(Contract).filter_by(code=code).first()
+    if found is None:
+        db.add(Contract(code=code, name=subject,
+                        source="шифр из документа «%s»" % doc.name, document_id=doc.id))
+    elif subject and not found.name:
+        found.name = subject
+    # Документ уезжает в каталог этого договора: иначе он остаётся «без
+    # договора» и заведённый договор выглядит пустым.
+    doc.contract_code = code
+    from db import record_decision
+    from fot_planner.harness_local import decisions as D
+    record_decision(db, kind="данные", subject_kind="договор", subject_id=code,
+                    subject_digest=D.digest(code, subject), scope="реестр",
+                    action={"договор из документа": code, "наименование": subject,
+                            "документ": doc.name},
+                    grounds="шифр и тема из шапки документа (SOURCE-005)")
+    return code
+
+
 def _store_passport(db, case, passport, doc):
     """Разложить разобранное по реестрам организации.
 
@@ -343,7 +899,8 @@ def _store_passport(db, case, passport, doc):
     Строки заменяются в пределах одного документа: повторная загрузка того же
     файла обновляет только то, что из него пришло, и не трогает остальное.
     """
-    for model in (Employee, Contract, LaborRow, Inflow, SecretAllowance, Substitution):
+    for model in (Employee, Contract, LaborRow, Inflow, SecretAllowance, Substitution,
+                  ContractValue):
         db.query(model).filter_by(document_id=doc.id).delete()
     # Файл по шаблону читаем загрузчиком решателя — тем же кодом, что читает
     # входной файл расчета. Тогда в реестр попадают все графы контракта по
@@ -355,6 +912,7 @@ def _store_passport(db, case, passport, doc):
     ctx = _solver_context(doc.path)
     if ctx is not None:
         return _store_context(db, ctx, doc)
+    _adopt_contract(db, passport, doc)
     for e in passport.get("employees") or []:
         db.add(Employee(code=str(e.get("code") or ""),
                         person_code=str(e.get("person_code") or e.get("code") or ""),
@@ -365,6 +923,10 @@ def _store_passport(db, case, passport, doc):
                         rate=e.get("rate"), salary=e.get("sal"),
                         allowed_contracts=e.get("allowed") or None,
                         forbidden_contracts=e.get("forbidden") or None,
+                        # Лицевой счёт сотрудника: графа есть не во всяком
+                        # штатном расписании, поэтому берём как есть и не
+                        # требуем (28.09.2026).
+                        account=e.get("account") or e.get("лицевой счет") or None,
                         date_from=_excel_date(e.get("from")),
                         date_to=_excel_date(e.get("to")),
                         source=doc.name, document_id=doc.id))
@@ -403,6 +965,13 @@ def _store_passport(db, case, passport, doc):
                         details=(json.dumps(lp["details"], ensure_ascii=False)
                                  if lp.get("details") else None),
                         source=doc.name, document_id=doc.id))
+    # Величины пакета договора: ФОТ периодов, нормативы года, срок (SOURCE-004).
+    # Договор документа — тот, в который его загрузили; иначе шифр из шапки.
+    for v in passport.get("values") or []:
+        db.add(ContractValue(contract_code=str(v.get("contract") or ""), field=v["field"],
+                             year=v.get("year"), stage=v.get("stage"), value=v.get("value"),
+                             text=v.get("text"), unit=v.get("unit"), label=v.get("label"),
+                             place=v.get("place"), source=doc.name, document_id=doc.id))
     # Надбавка 120 из листа «120_надбавка» штатки: без неё решатель не знает,
     # кому гостайна обязательна, и план по такому человеку выйдет неверным.
     for s in passport.get("secret") or []:
@@ -412,12 +981,17 @@ def _store_passport(db, case, passport, doc):
                                secret_contract_code=str(s["contract"]),
                                rate=float(s.get("rate") or 0.05),
                                source=doc.name, document_id=doc.id))
+    # Строки договоров созданы заново — ручной ввод экономиста возвращается
+    # поверх них (SOURCE-007): документ его не отменяет.
+    import basis as B
+    B.reapply_manual(db)
     db.commit()
     counts = {"сотрудников": len(passport.get("employees") or []),
               "договоров": len(passport.get("contracts") or []),
               "поступлений": inflows,
               "строк трудоемкости": len(labor_rows),
-              "надбавок 120": len(passport.get("secret") or [])}
+              "надбавок 120": len(passport.get("secret") or []),
+              "величин пакета": len(passport.get("values") or [])}
     source_labor = sum(len(row.get("details") or []) or 1 for row in labor_rows)
     if source_labor > len(labor_rows):
         counts["исходных строк трудоемкости"] = source_labor
@@ -458,6 +1032,7 @@ def _store_context(db, ctx, doc):
                         salary=e.monthly_wage,
                         employment_type=_EMPLOYMENT_RU.get(e.employment_type),
                         employment_category=_CATEGORY_RU.get(e.employment_category),
+                        account=getattr(e, "account", None),
                         allowed_contracts=", ".join(e.allowed_contracts) or None,
                         forbidden_contracts=", ".join(e.forbidden_contracts) or None,
                         date_from=d(e.start_date), date_to=d(e.end_date),
@@ -503,11 +1078,16 @@ def _store_context(db, ctx, doc):
         db.add(SecretAllowance(employee_code=s.employee_id, secret_contract_code=s.secret_contract_id,
                                rate=s.rate, source=doc.name, document_id=doc.id))
     counts["надбавок 120"] = len(ctx.secret_allowances or [])
+    # Ручное правило важнее правила из файла (SOURCE-010).
+    manual_subst = {s.position for s in db.query(Substitution)
+                    .filter(Substitution.document_id.is_(None)).all()}
     for position, extra in (ctx.substitution_rules or {}).items():
-        if extra:
+        if extra and position not in manual_subst:
             db.add(Substitution(position=position, replaced_by=", ".join(sorted(extra)),
                                 source=doc.name, document_id=doc.id))
     counts["правил замещения"] = sum(1 for v in (ctx.substitution_rules or {}).values() if v)
+    import basis as B
+    B.reapply_manual(db)
     db.commit()
     return counts
 
@@ -518,6 +1098,8 @@ FORMATS = {
     "intake": (".xlsx", ".xlsm", ".xls"),
     "substitutions": (".xlsx", ".xlsm", ".xls"),
     "norms": (".xlsx", ".xlsm", ".xls", ".pdf", ".doc", ".docx"),
+    "salary": (".xlsx", ".xlsm"),
+    "facts": (".xlsx", ".xlsm"),
 }
 
 
@@ -532,6 +1114,22 @@ def _wrong_format(doc, owner):
 
 
 # ── документ незнакомой формы ───────────────────────────────────
+def _bind_to_contract(doc, entity, item):
+    """Строка модели из документа пакета договора — строка этого договора.
+
+    Разборщик по смыслу граф пишет данные в договор, в который загружен
+    документ (SOURCE-004). Модель берёт шифр из шапки или не находит его, и
+    та же трудоёмкость предлагалась экономисту второй раз под чужим шифром.
+    Договор секретности у надбавки 120 — свой, его не трогаем.
+    """
+    code = getattr(doc, "contract_code", None)
+    if code and entity in ("трудоемкость", "поступление"):
+        item["contract"] = code
+    elif code and entity == "договор":
+        item["code"] = code
+    return item
+
+
 def _known(db, entity, f):
     """Уже есть такая строка в реестре? Тогда предлагать ее незачем."""
     if entity == "сотрудник":
@@ -854,6 +1452,7 @@ def propose_entities(db, case, doc):
             counts[entity] = 0
             for item in res.get(key) or []:
                 where = item.pop("место", None)
+                item = _bind_to_contract(doc, entity, item)
                 if _known(db, entity, item):
                     # Знакомый обработчик уже записал эту строку — предлагать
                     # ее второй раз значит просить подтвердить проверенное.
@@ -1055,13 +1654,15 @@ def grade(entity, f, evidence, ctx):
 
 def _ask_kind(db, case, doc):
     """Спросить вид документа — когда прочитать содержимое не удалось."""
-    db.add(Question(
-        case_id=case.id, agent="intake",
-        text="Что за документ «%s»? Прочитал его, но по содержанию это не "
-             "похоже ни на один вид, с которым я работаю." % doc.name,
-        options=json.dumps(["документ по договору", "нормативный документ",
-                            "правила замещения должностей",
-                            "не нужен, удалить"], ensure_ascii=False)))
+    # Без плана (начальная загрузка) спросить некого: вопрос — в лог.
+    if case.id is not None:
+        db.add(Question(
+            case_id=case.id, agent="intake",
+            text="Что за документ «%s»? Прочитал его, но по содержанию это не "
+                 "похоже ни на один вид, с которым я работаю." % doc.name,
+            options=json.dumps(["документ по договору", "нормативный документ",
+                                "правила замещения должностей",
+                                "не нужен, удалить"], ensure_ascii=False)))
     say(db, case.id,
         "Прочитал «%s», но не понял, что это за документ, и строк из него не "
         "достал. Подскажите вид — разберу заново." % doc.name, agent="intake",
@@ -1098,7 +1699,8 @@ def _unknown_positions(db, document_id):
 def run_intake(db, case, doc):
     """Разобрать документ по договору и доложить в ленту."""
     with working(db, case.id, "intake", "разбирает «%s»" % doc.name) as w:
-        out = extract.extract(doc.path)
+        # Документ из пакета договора пишет данные этого договора (SOURCE-004).
+        out = extract.extract(doc.path, contract=doc.contract_code)
         passport = out["passport"]
         case.passport = json.dumps(passport, ensure_ascii=False)
         doc.state = "разобран"
@@ -1131,19 +1733,21 @@ def run_intake(db, case, doc):
         missing.append("сотрудники")
     if not db.query(Contract).count():
         missing.append("договоры")
-    if not db.query(Inflow).count():
-        missing.append("поступления по месяцам")
+    # Поступления в расчёт не подаются (ПРАВИЛА_РЕШАТЕЛЯ, правило 21): ФОТ
+    # договора задан одной суммой, и их отсутствие — не повод не считать.
     ready = {"ok": not missing, "missing": missing,
              "hint": "Загрузите документ с этими данными." if missing else ""}
+    # Без приписки «Настройки расчета — из этого файла»: лист настроек есть в
+    # каждой карточке договора, из него берётся только год поступлений, и
+    # приписка повторялась после каждого файла, ничего не сообщая.
     say(db, case.id,
-        "Разобрал «%s»: %s.%s" % (doc.name, doc.summary or "строк реестра нет",
-                                  (" Настройки расчета — из этого файла."
-                                   if passport.get("settings") else "")),
+        "Разобрал «%s»: %s." % (doc.name, doc.summary or "строк реестра нет"),
         agent="intake", document_id=doc.id,
         payload={"kind": "passport", "employees": emp, "contracts": ctr,
                  "log": out.get("log") or []})
 
-    for q in (out.get("questions") or [])[:5]:
+    # Без плана (начальная загрузка) вопросы задавать некому.
+    for q in (out.get("questions") or [])[:5] if case.id is not None else ():
         text, opts = _question_text(q)
         db.add(Question(case_id=case.id, agent="intake", text=text,
                         options=json.dumps(opts, ensure_ascii=False) if opts else None))
@@ -1193,7 +1797,9 @@ def run_norms(db, case, doc):
                              % (res.get("error"), MODEL_ACTION))
         else:
             raise ValueError(res.get("error") or "документ не разобран")
-        changes, unknown, seen, given = reference.compare(rows)
+        # Сравнение — с величинами на дату документа (01.10.2026): новая
+        # редакция приказа сверяется с той, что действовала тогда.
+        changes, unknown, seen, given = reference.compare(rows, res.get("effective_from"))
         doc.state = "разобран"
         doc.parsed_by = by
         # Что документ дал реестру: величин извлечено, сколько сошлось со
@@ -1374,6 +1980,25 @@ def handle_document(db, case, doc):
             run_norms(db, case, doc)
         elif owner == "substitutions":
             run_substitutions(db, case, doc)
+        elif owner == "positions":
+            # Перечень — таблица должностей целиком: искать в нём сотрудников
+            # и договоры незачем, а предложения «должность» повторили бы его.
+            run_positions(db, case, doc)
+            return
+        elif owner == "workgroup":
+            # Кадровый приказ читается по форме целиком; искать в нём
+            # договоры и сотрудников заново без шаблона незачем.
+            run_workgroup(db, case, doc)
+            return
+        elif owner == "salary":
+            # Таблица зарплаты читается по графам целиком: повторное чтение
+            # без шаблона искало бы в ней сотрудников и договоры заново.
+            run_salary_months(db, case, doc)
+            return
+        elif owner == "facts":
+            # Факт начислений — тоже по графам целиком.
+            run_facts(db, case, doc)
+            return
         else:
             run_intake(db, case, doc)
         # Вид документа не обещает, что в нем нет ничего сверх этого вида.
@@ -1381,6 +2006,9 @@ def handle_document(db, case, doc):
         # трое сотрудников и договор, и знакомый обработчик их не заметит.
         # Поэтому после него документ читается еще раз, уже без шаблона.
         propose_entities(db, case, doc)
+        # Документ мог принести договоры: приказы, ждавшие своего договора,
+        # прикрепляются к нему сами.
+        rebind_workorders(db)
     except Exception as exc:  # noqa: BLE001 — сообщение вместо падения фона
         # Текст исключения — для ленты и карточки, но не для графы реестра:
         # там нужно состояние, а не английская диагностика библиотеки.
