@@ -85,6 +85,17 @@ def main():
         if p.get("settings"):
             passport_all["settings"] = p["settings"]
 
+    # Зарплаты в штатном расписании нет (решение пользователя 19.09.2026): она
+    # приходит таблицей по месяцам. Без неё расчёт отказывается — «не задана
+    # зарплата по месяцам». Берём таблицу демо-комплекта тем же разборщиком,
+    # что и сервис; строки людей, которых нет в штатном, пары не находят.
+    salary = os.path.join(ROOT, "data", "demo_pack", "3 Заработная плата",
+                          "Заработная плата по месяцам 2026.xlsx")
+    intake.run_salary_months(mem, types.SimpleNamespace(year=2026, id=0),
+                             types.SimpleNamespace(id=len(FILES) + 1, name=os.path.basename(salary),
+                                                   path=salary))
+    mem.commit()
+
     fake_case = types.SimpleNamespace(year=2026, passport=json.dumps(passport_all, ensure_ascii=False),
                                       plan_settings=None)
     data = app_main._registry_data(mem, fake_case)
@@ -102,8 +113,11 @@ def main():
     print("вход:", src)
 
     t0 = time.time()
+    # Решатель пишет UTF-8; без явной кодировки Windows читает вывод как
+    # cp1251, поток чтения падает на первом незнакомом знаке и stdout — None.
     p = subprocess.run([app_main.EXE, "solve", "-i", src, "-o", res, "--time-limit", str(args.limit)],
-                       capture_output=True, text=True, cwd=ROOT, timeout=3600)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       cwd=ROOT, timeout=3600)
     sec = time.time() - t0
     print(p.stdout.strip())
     for line in (p.stderr or "").splitlines():
