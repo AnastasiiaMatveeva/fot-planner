@@ -94,9 +94,15 @@ def load_snapshot(store, digest: str) -> dict:
     return json.loads(store.read(digest).decode("utf-8"))
 
 
-def snapshot_hints(store, digest):
-    """Подсказки, которые видела модель; None — снимка нет или он повреждён."""
-    if not digest:
+def snapshot_hints(store, digest, *, document_sha256, document_id, document_name):
+    """Подсказки только своего приговора; None — нет надёжной привязки.
+
+    Целый артефакт может принадлежать другому документу. Хеш снимка сам по
+    себе не разрешает использовать его подсказки при проверке этого Verdict.
+    """
+    if (not isinstance(digest, str) or not digest
+            or not isinstance(document_sha256, str) or not document_sha256
+            or document_id is None or not document_name):
         return None
     try:
         if not store.has(digest) or not store.verify(digest):
@@ -104,9 +110,27 @@ def snapshot_hints(store, digest):
         snap = load_snapshot(store, digest)
     except (OSError, ValueError):
         return None
-    if snap.get("purpose") != PURPOSE:
+    if (not isinstance(snap, dict) or type(snap.get("schema")) is not int
+            or snap["schema"] != SNAPSHOT_SCHEMA or snap.get("purpose") != PURPOSE):
         return None
-    return list((snap.get("hints") or {}).get("texts") or [])
+    document, hints = snap.get("document"), snap.get("hints")
+    if not isinstance(document, dict) or not isinstance(hints, dict):
+        return None
+    texts = hints.get("texts")
+    if not isinstance(texts, list) or not all(isinstance(text, str) for text in texts):
+        return None
+    if (document.get("id") != document_id
+            or type(document.get("id")) is not type(document_id)
+            or document.get("name") != document_name
+            or document.get("sha256") != document_sha256
+            or document.get("artifact_sha256") != document_sha256):
+        return None
+    try:
+        if not store.verify(document_sha256):
+            return None
+    except (OSError, ValueError):
+        return None
+    return list(texts)
 
 
 def source_status(document_sha256, path, sha256_of):

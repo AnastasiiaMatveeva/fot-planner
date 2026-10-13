@@ -54,6 +54,28 @@ class GuardTests(unittest.TestCase):
         result = self.inspect()
         self.assertEqual(result["status"], "passed")
 
+    def committed_fix(self):
+        self.valid_change()
+        self.git('add', '.')
+        self.git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'previous fix')
+        self.base = self.git('rev-parse', 'HEAD').strip()
+
+    def test_new_fix_same_file_keeps_historical_record(self):
+        self.committed_fix()
+        self.write('app/calc.py', 'value = 3\n')
+        self.write('docs/ТЕСТИРОВАНИЕ.md', 'DEV-GUARD-001\nновая правка: 3\n')
+        self.write('scripts/test_new.py', 'import unittest\nclass NewTests(unittest.TestCase):\n    def test_value(self):\n        assert 3 == 3\n')
+        fresh = {**self.entry(), 'id': 'BUG-002', 'expected': '3'}
+        self.write('harness/changes.json', json.dumps({'schema_version': 1, 'changes': [self.entry(), fresh]}))
+        result = self.inspect()
+        self.assertEqual(result['errors'], [])
+        self.assertEqual(result['status'], 'review_required')
+
+    def test_old_record_does_not_cover_new_unregistered_change(self):
+        self.committed_fix()
+        self.write('app/calc.py', 'value = 3\n')
+        self.assertTrue(any('нет завершённой записи' in e for e in self.inspect()['errors']))
+
     def test_runtime_change_without_record(self):
         self.write("app/calc.py", "value = 2\n")
         self.assertTrue(self.inspect()["errors"])

@@ -69,8 +69,18 @@ def _has_row(rows, want):
 
 
 def _check_counts(case, res, out):
+    # «distinct»: считать не строки, а разные значения поля. Правила замещения
+    # модель отдаёт то строкой на должность со списком замен, то строкой на
+    # каждую пару — 26 или 78 строк на одном и том же файле (12–13.10.2026);
+    # устойчиво только число исходных должностей.
+    distinct = case.get("distinct") or {}
     for key, expected in (case.get("counts") or {}).items():
-        got = len(res.get(key) or [])
+        rows = res.get(key) or []
+        if key in distinct:
+            got = len({str(r.get(distinct[key]) or "").strip().lower() for r in rows
+                       if isinstance(r, dict) and r.get(distinct[key])})
+        else:
+            got = len(rows)
         tol = (case.get("tol") or {}).get(key, 0)
         allowed = expected * tol if isinstance(tol, float) and tol < 1 else tol
         ok = abs(got - expected) <= allowed
@@ -235,16 +245,18 @@ def check_verdicts(db, by_name, only, cache):
                 print("   %-10s предложение без снимка контекста: подсказки не "
                       "воспроизвести, приговор неполный" % SKIP)
                 continue
-            hints = X.snapshot_hints(store, v.context_sha256)
+            hints = X.snapshot_hints(store, v.context_sha256,
+                                     document_sha256=sha, document_id=v.document_id,
+                                     document_name=v.document_name)
             total += 1
             if hints is None:
                 failed += 1
-                print("   %-10s снимок контекста %s… недоступен: подсказки не воспроизвести"
+                print("   %-10s снимок контекста %s… недоступен или не соответствует приговору"
                       % (FAIL, v.context_sha256[:12]))
                 continue
-            ck = (sha, v.context_sha256)
+            ck = (sha, v.context_sha256, name)
             if ck not in cache:
-                cache[ck] = llm.freeform(doc.path, doc.name, hints=hints)
+                cache[ck] = llm.freeform(doc.path, name, hints=hints)
             res = cache[ck]
             if not res.get("ok"):
                 failed += 1

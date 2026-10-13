@@ -6,6 +6,13 @@ PowerShell. Смысл не в стиле, а в том, чтобы сломан
 задачи: агент правит текстом, и опечатка в скобке обнаруживалась только при
 следующем запуске приложения — иногда через полчаса и десяток правок.
 
+Той же мгновенной проверкой идут правила интерфейса: инвентарь примитивов
+(UI-007) и механически проверяемая часть правил разметки (UI-008). Правка
+`app/static` незаметно заводит ещё один класс кнопки или кнопку без имени для
+диктора; каждая по отдельности выглядит безобидно, а к концу сборки их
+набирается несколько десятков. Ждать приёмки здесь поздно — к тому времени
+нарушение уже разошлось по коду и его ловит человек.
+
 Для Edit/Write проверяется путь из события. Команда оболочки пути изменённых
 файлов не сообщает, поэтому после неё проверяются все изменения из Git. Это
 ловит и случай, когда Python-скрипт успел записать файл, а затем завершился с
@@ -23,6 +30,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import parts as P  # noqa: E402
+import check_ui_inventory as U  # noqa: E402
+import check_ui_rules as R  # noqa: E402
 
 
 def check_python(path):
@@ -73,6 +82,35 @@ def _problem(path):
     return None
 
 
+def _ui_checks(paths):
+    """Правила интерфейса среди правок — сразу, а не на приёмке.
+
+    Два разных вопроса. Инвентарь (UI-007): объявлен ли этот примитив.
+    Правила (UI-008): выполнима ли разметка с клавиатуры и диктором. Ответ на
+    оба нужен агенту до показа результата — иначе работа человека сводится к
+    «убери, исправь, удали», и правило проверяет он, а не автомат.
+    """
+    static = os.path.normcase(os.path.join(P.ROOT, "app", "static"))
+    lists = {os.path.normcase(os.path.join(P.ROOT, "docs", name))
+             for name in ("ui-inventory.json", "ui-debt.json")}
+    if not any(os.path.normcase(path).startswith(static)
+               or os.path.normcase(path) in lists for path in paths):
+        return []
+    out = []
+    try:
+        out += U.compare(U.load(), U.collect())
+    except (OSError, ValueError) as exc:
+        # Молчать нельзя: непрочитанный список — это непроверенное правило.
+        out.append("инвентарь интерфейса не проверен: %s" % str(exc)[:200])
+    try:
+        fresh = R.split(R.collect(), R.load()["долг"])[0]
+        out += ["%s:%d — %s" % (path, line, R.RULES.get(rule, rule))
+                for rule, path, line, _ in fresh]
+    except (OSError, ValueError, KeyError) as exc:
+        out.append("правила интерфейса не проверены: %s" % str(exc)[:200])
+    return out
+
+
 def _changed_paths():
     """Получить абсолютные пути изменённых файлов после команды оболочки."""
     try:
@@ -121,6 +159,7 @@ def main():
         problem = _problem(current)
         if problem:
             problems.append("%s — %s" % (os.path.basename(current), problem))
+    problems += _ui_checks(paths)
     if problems:
         _say("\n".join(problems) + "\n")
         return 2

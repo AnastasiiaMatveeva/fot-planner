@@ -56,7 +56,29 @@ def main():
         if os.path.exists(broken):
             os.unlink(broken)
 
-    print("Хук правок: Edit, Bash и PostToolUseFailure проверены.")
+    # UI-007: правка интерфейса сверяется с инвентарём в тот же момент.
+    static = os.path.join(H.P.ROOT, "app", "static", "app.js")
+    code, message = invoke({"tool_name": "Edit", "tool_input": {"file_path": static}})
+    assert code == 0 and not message, message
+
+    collect = H.U.collect
+    try:
+        H.U.collect = lambda: dict(collect(), кнопки=collect()["кнопки"] + ["sparkle"])
+        code, message = invoke({"tool_name": "Edit", "tool_input": {"file_path": static}})
+        assert code == 2 and "sparkle" in message, (code, message)
+    finally:
+        H.U.collect = collect
+
+    # UI-008: новое нарушение правил разметки возвращается той же правкой.
+    rules = H.R.collect
+    try:
+        H.R.collect = lambda: rules() + [("кнопка-без-имени", "app/static/app.js", 1, "нет")]
+        code, message = invoke({"tool_name": "Edit", "tool_input": {"file_path": static}})
+        assert code == 2 and "app/static/app.js:1" in message, (code, message)
+    finally:
+        H.R.collect = rules
+
+    print("Хук правок: Edit, Bash, PostToolUseFailure, инвентарь и правила UI проверены.")
     return 0
 
 

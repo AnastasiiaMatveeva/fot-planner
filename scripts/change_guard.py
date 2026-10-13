@@ -112,7 +112,9 @@ def inspect(root, base, runnable):
                     errors.append(key + ": затронутая работа содержит конфликт")
                 continue
             if previous.get(key) == item:
-                errors.append(key + ": старая запись не описывает новую правку")
+                # История не запрещает новую задачу, но и не покрывает её:
+                # новая правка обязана иметь свою карточку и регрессию.
+                continue
             for field in ("summary", "expected", "reproduction"):
                 if not isinstance(item.get(field), str) or not item[field].strip():
                     errors.append(key + ": отсутствует " + field)

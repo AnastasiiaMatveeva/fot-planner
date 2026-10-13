@@ -19,6 +19,7 @@ import json
 import os
 import platform
 import sys
+from copy import deepcopy
 
 from fot_planner.harness_local.artifacts import ArtifactStore, sha256_bytes
 
@@ -26,7 +27,8 @@ CANON = "fot-json-v1"
 #: 2 — добавлен раздел «attempt»: повтор чистого вычисления ссылается на
 #: прогон, чей закреплённый вход он взял (RUN-002). Снимки схемы 1 читаются
 #: и сверяются так же: раздел у них просто отсутствует.
-MANIFEST_SCHEMA = 2
+#: 3 — закреплённый состав проверок и отдельная запись их состояний (QA-002).
+MANIFEST_SCHEMA = 3
 
 
 def canonical_json(obj) -> bytes:
@@ -71,7 +73,7 @@ def code_version(src_root: str) -> dict:
 def build_manifest(*, run_id: int, case_id: int, executor: str, input_sha256: str,
                    reference_sha256: str | None, settings: dict, sources: dict,
                    code: dict, command: list[str], time_limit_sec,
-                   attempt_of: int | None = None) -> dict:
+                   attempt_of: int | None = None, required_checks: list[dict] | None = None) -> dict:
     """Черновик снимка до первого действия решателя (VER-002): вход закреплён.
 
     ``attempt_of`` — номер прогона, чей закреплённый вход взят для повтора
@@ -88,17 +90,26 @@ def build_manifest(*, run_id: int, case_id: int, executor: str, input_sha256: st
         "solver": {"command": list(command), "time_limit_sec": time_limit_sec, **code},
         "attempt": {"retry_of": attempt_of, "input": "из снимка прогона"} if attempt_of else None,
         "output": None, "audit": None, "finished_at": None,
+        "evaluation_plan": {"required_checks": deepcopy(required_checks or [])},
+        "evaluation": None,
     }
 
 
 def finalize_manifest(manifest: dict, *, output_sha256: str | None, solver_status: str,
                       audit_status: str | None, audit_lines: list[str] | None,
-                      seconds: float | None) -> dict:
+                      seconds: float | None, audit_checks: list[dict] | None = None,
+                      execution_status: str | None = None) -> dict:
     """Итог после всех преобразований результата: хеш берётся с конечного файла."""
-    done = dict(manifest)
+    from fot_planner.harness_local.evaluation import record_checks
+    done = deepcopy(manifest)
+    done["schema"] = MANIFEST_SCHEMA
     done["output"] = {"sha256": output_sha256, "kind": "xlsx-result"} if output_sha256 else None
     done["solver"] = {**manifest["solver"], "status": solver_status, "seconds": seconds}
     done["audit"] = {"status": audit_status or "NOT_RUN", "lines": list(audit_lines or [])}
+    done["execution"] = {"status": execution_status or solver_status}
+    done["evaluation"] = record_checks(manifest, output_sha256=output_sha256,
+                                        solver_status=solver_status, audit_status=audit_status,
+                                        checks=audit_checks)
     done["finished_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     return done
 
@@ -108,16 +119,47 @@ def store_manifest(store: ArtifactStore, manifest: dict) -> str:
 
 
 def load_manifest(store: ArtifactStore, digest: str) -> dict:
-    return json.loads(store.read(digest).decode("utf-8"))
+    raw = store.read(digest)
+    # Проверяем именно прочитанные байты, не отдельное чтение до JSON.
+    if sha256_bytes(raw) != digest:
+        raise ValueError("байты снимка не совпадают с SHA-256")
+    manifest = json.loads(raw.decode("utf-8"))
+    if (not isinstance(manifest, dict) or type(manifest.get("schema")) is not int
+            or manifest['schema'] not in (1, 2, 3)):
+        raise ValueError("неизвестная схема снимка")
+    return manifest
 
 
 def verify_manifest(store: ArtifactStore, manifest: dict) -> list[str]:
     """Что из снимка нельзя воспроизвести: отсутствующий или подменённый артефакт.
 
-    Пустой список — все материальные части на месте и байты те же. Это и
-    есть проверка воспроизводимости: путь к живому файлу снимком не является.
+    Пустой список — материальные части целы, привязка заключения согласована.
+    Это проверка целостности, не повторный расчёт и не числовая приёмка.
     """
     problems = []
+    independent = manifest.get('independent_audit')
+    if independent is not None:
+        try:
+            digest = independent['report_sha256']
+            raw = store.read(digest)
+            if sha256_bytes(raw) != digest or json.loads(raw) != {
+                    k: v for k, v in independent.items() if k != 'report_sha256'}:
+                problems.append('independent_audit: отчёт повреждён или не соответствует снимку')
+            if independent.get('verdict') == 'passed' and (
+                    independent.get('input_sha256') != (manifest.get('input') or {}).get('sha256')
+                    or independent.get('output_sha256') != (manifest.get('output') or {}).get('sha256')):
+                problems.append('independent_audit: отчёт относится к другому входу или выходу')
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            problems.append('independent_audit: отчёт недоступен или некорректен')
+    evaluation = manifest.get("evaluation")
+    if evaluation is not None:
+        expected = {"run_id": manifest.get("run_id"),
+                    "input_sha256": (manifest.get("input") or {}).get("sha256"),
+                    "output_sha256": (manifest.get("output") or {}).get("sha256")}
+        if not isinstance(evaluation, dict) or evaluation.get("subject") != expected:
+            problems.append("evaluation: заключение относится к другому прогону, входу или выходу")
+    elif manifest.get("schema") == 3 and manifest.get("finished_at"):
+        problems.append("evaluation: у завершённого снимка нет записи проверок")
     for name in ("input", "output", "reference"):
         part = manifest.get(name)
         digest = part.get("sha256") if isinstance(part, dict) else None

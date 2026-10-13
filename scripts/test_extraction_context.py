@@ -258,6 +258,77 @@ class ExtractionContextTests(unittest.TestCase):
         self.assertEqual((total, failed), (1, 1), text)
         self.assertEqual(self.calls, [])
 
+    # ── привязка и целостность снимка ─────────────────────────────
+    def test_foreign_snapshot_cannot_supply_hints_for_verdict(self):
+        doc = self.document('свой.txt', 'свои байты')
+        (p,) = self.propose(doc, [self.row('C-own')])
+        self.main._decide_do(self.db, doc.id, {p.id}, set(), doc.sha256)
+        other = self.document('чужой.txt', 'другие байты', suffix='other')
+        (foreign,) = self.propose(other, [self.row('C-foreign')])
+        verdict = self.db.query(self.d.Verdict).one()
+        verdict.context_sha256 = foreign.context_sha256
+        self.db.commit()
+        self.calls.clear()
+        total, failed, text = self.check()
+        self.assertEqual((total, failed), (1, 1), text)
+        self.assertEqual(self.calls, [], 'чужой контекст ушёл модели')
+
+    def test_snapshot_with_equal_bytes_but_other_document_is_rejected(self):
+        doc = self.document('свой.txt', 'одинаковые байты')
+        (p,) = self.propose(doc, [self.row('C-own')])
+        self.main._decide_do(self.db, doc.id, {p.id}, set(), doc.sha256)
+        other = self.document('чужой.txt', 'одинаковые байты', suffix='other')
+        (foreign,) = self.propose(other, [self.row('C-foreign')])
+        self.db.query(self.d.Verdict).one().context_sha256 = foreign.context_sha256
+        self.db.commit()
+        self.calls.clear()
+        total, failed, text = self.check()
+        self.assertEqual((total, failed), (1, 1), text)
+        self.assertEqual(self.calls, [])
+
+    def test_invalid_snapshot_shape_is_rejected_without_call(self):
+        from fot_planner.harness_local import extraction as X
+        doc = self.document('данные.txt', 'байты')
+        (p,) = self.propose(doc, [self.row('C-own')])
+        self.main._decide_do(self.db, doc.id, {p.id}, set(), doc.sha256)
+        original = self.snapshot(p.context_sha256)
+        v = self.db.query(self.d.Verdict).one()
+        broken_snapshots = [[], {**original, 'schema': 999}, {**original, 'schema': True},
+                            {**original, 'purpose': 'other'}, {**original, 'document': []},
+                            {**original, 'hints': {}}, {**original, 'hints': {'texts': [1]}},
+                            {**original, 'hints': {'texts': 'не список'}}]
+        for field, value in (('id', doc.id + 1), ('name', 'другое имя.txt'),
+                             ('sha256', '0' * 64), ('artifact_sha256', None)):
+            broken_snapshots.append({**original, 'document': {**original['document'], field: value}})
+        for index, broken in enumerate(broken_snapshots):
+            with self.subTest(snapshot=index):
+                v.context_sha256 = X.store_snapshot(self.store(), broken)
+                self.db.commit()
+                self.calls.clear()
+                total, failed, text = self.check()
+                self.assertEqual((total, failed), (1, 1), text)
+                self.assertEqual(self.calls, [])
+
+    def test_corrupt_source_artifact_fails_even_with_intact_live_file(self):
+        doc = self.document('целый источник.txt', 'исходные байты для проверки артефакта')
+        (p,) = self.propose(doc, [self.row('C-own')])
+        self.main._decide_do(self.db, doc.id, {p.id}, set(), doc.sha256)
+        Path(self.store().path(doc.sha256)).write_bytes(b'corrupted artifact')
+        self.calls.clear()
+        total, failed, text = self.check()
+        self.assertEqual((total, failed), (1, 1), text)
+        self.assertEqual(self.calls, [])
+
+    def test_identical_source_copy_preserves_verdict_filename_in_replay(self):
+        copy = self.document('копия.txt', 'общие байты для проверки имени', suffix='copy')
+        doc = self.document('исходное имя.txt', 'общие байты для проверки имени')
+        (p,) = self.propose(doc, [self.row('C-own')])
+        self.main._decide_do(self.db, doc.id, {p.id}, set(), doc.sha256)
+        with patch.object(self.llm, 'freeform', return_value=self.answers[doc.path]) as replay:
+            total, failed, text = self.check()
+        self.assertEqual((total, failed), (1, 0), text)
+        replay.assert_called_once_with(copy.path, doc.name, hints=[])
+
     # ── миграция ─────────────────────────────────────────────────
     def test_migration_step_covers_new_columns(self):
         sys.path.insert(0, str(ROOT))
